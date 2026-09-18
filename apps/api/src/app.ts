@@ -6,6 +6,7 @@ import { restaurantRoutes } from './routes/restaurant.js';
 import { catalogRoutes } from './routes/catalog.js';
 import { intelligenceRoutes } from './routes/intelligence.js';
 import { manageRoutes } from './routes/manage.js';
+import { publicRoutes } from './routes/public.js';
 import { isNeon } from '@afrisupply/db';
 
 export const app = new Hono();
@@ -13,6 +14,7 @@ app.use('*', logger());
 app.use('/api/*', cors({ origin: (o) => o ?? '*', credentials: true }));
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'afrisupply-api', db: isNeon() ? 'neon' : 'pglite-local', time: new Date().toISOString() }));
+app.route('/api', publicRoutes); // public en premier : les routeurs suivants imposent l'auth via use('*')
 app.route('/api/auth', authRoutes);
 app.route('/api', restaurantRoutes);
 app.route('/api', catalogRoutes);

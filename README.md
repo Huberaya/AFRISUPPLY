@@ -77,6 +77,7 @@ Isolation multi-tenant : chaque table métier porte `restaurant_id`, et l'API fi
 | `POST/PUT/DELETE /recipes[/:id]` `PUT/DELETE /stock/:itemId` `POST /stock/inventory` | Recettes, réglages d'article, inventaire groupé |
 | `GET /orders/:id/message` `PUT /orders/:id` `PUT /orders/:id/lines` | Message WhatsApp/e-mail prêt à envoyer, statut, lignes, annulation |
 | `GET /discrepancies` `POST /discrepancies/:id/resolve` `GET /prices/:productId/history` | Écarts de livraison, historique de prix |
+| `GET /public/plans` `POST /public/leads` (publics) · `GET/PUT /admin/leads` (`ADMIN_EMAILS`) | Offre commerciale, demandes d'accès du site |
 | `GET /recipes` | **Coût matière**, marge, prix conseillé, ingrédients qui dérivent |
 | `POST /alerts/refresh` `GET /alerts` `POST /alerts/:id/read` | **Moteur d'alertes** : rupture, stock bas, hausse de prix, opportunité |
 
@@ -122,4 +123,5 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - [x] Chantier 2 : référentiel **324 produits** avec alias, **31 recettes types**, onboarding « Configurer ma carte », **import CSV** fournisseurs/prix avec aperçu, export — voir `docs/CHANTIER_2_DONNEES.md`
 - [x] Chantier 3 : formulaires fournisseur/prix/recette, réglages & inventaire stock, envoi de commande WhatsApp/e-mail, modification/annulation, écarts de livraison, historique de prix — voir `docs/CHANTIER_3_GESTION.md`
 - [x] Chantier 4 : prévision 7 j explicable, panier intelligent multi-fournisseurs, auto-reorder (préparation seule), assistant « Demander à l’IA » (moteur local + LLM optionnel) — voir `docs/CHANTIER_4_INTELLIGENCE.md`
+- [x] Chantier 5 : site vitrine (`/`, `/tarifs`, `/fonctionnalites`, `/faq`, `/demander-un-acces`), offre 39/89/199 + pilote fondateur, leads + admin, script démo & plaquette — voir `docs/CHANTIER_5_MARQUE_OFFRE.md`
 - [ ] Chantier 4 bis : e-mail quotidien / notifications

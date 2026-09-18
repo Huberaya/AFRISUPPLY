@@ -20,9 +20,9 @@ const NAV = [
   { to: '/app/demarrer', icon: Rocket, label: 'Configurer ma carte' },
 ];
 
-export function Logo({ light = false }: { light?: boolean }) {
+export function Logo({ light = false, to = '/app' }: { light?: boolean; to?: string }) {
   return (
-    <Link to="/app" className="flex items-center gap-2">
+    <Link to={to} className="flex items-center gap-2">
       <svg viewBox="0 0 64 64" className="h-8 w-8"><rect width="64" height="64" rx="14" fill="#c2410c" /><path d="M18 44 L32 16 L46 44 Z" fill="none" stroke="#fff7ed" strokeWidth="5" strokeLinejoin="round" /><circle cx="32" cy="38" r="4" fill="#facc15" /></svg>
       <span className={`font-extrabold tracking-tight text-lg ${light ? 'text-white' : 'text-stone-900'}`}>AFRI<span className="text-brand-600">SUPPLY</span></span>
     </Link>

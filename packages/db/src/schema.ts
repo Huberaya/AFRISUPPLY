@@ -298,6 +298,29 @@ export const forecasts = pgTable('forecasts', {
   computedAt: timestamp('computed_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('forecasts_restaurant_idx').on(t.restaurantId, t.computedAt)]);
 
+
+// -------------------------------------------------------------
+// Leads (site vitrine « Demander un accès ») — chantier 5
+// -------------------------------------------------------------
+export const leadStatus = pgEnum('lead_status', ['nouveau', 'contacte', 'demo', 'pilote', 'client', 'perdu']);
+export const leads = pgTable('leads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  restaurantName: text('restaurant_name').notNull(),
+  contactName: text('contact_name').notNull(),
+  email: text('email').notNull(),
+  phone: text('phone'),
+  city: text('city'),
+  cuisine: text('cuisine'),
+  coversPerDay: integer('covers_per_day'),
+  message: text('message'),
+  planInterest: text('plan_interest'),          // starter | pro | business | pilote
+  source: text('source').default('site').notNull(), // site | salon | bouche_a_oreille | partenaire
+  utm: jsonb('utm').$type<Record<string, string>>(),
+  status: leadStatus('status').default('nouveau').notNull(),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('leads_created_idx').on(t.createdAt)]);
+
 // -------------------------------------------------------------
 // Relations (pour db.query.*)
 // -------------------------------------------------------------

@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
 import AppLayout from './components/AppLayout';
+import SiteLayout from './components/site/SiteLayout';
 import { Loader } from './components/ui';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -22,6 +23,12 @@ const Forecast = lazy(() => import('./pages/Forecast'));
 const SmartCart = lazy(() => import('./pages/SmartCart'));
 const Sales = lazy(() => import('./pages/Sales'));
 const Discrepancies = lazy(() => import('./pages/Discrepancies'));
+const Home = lazy(() => import('./pages/site/Home'));
+const Pricing = lazy(() => import('./pages/site/Pricing'));
+const Features = lazy(() => import('./pages/site/Features'));
+const Faq = lazy(() => import('./pages/site/Faq'));
+const RequestAccess = lazy(() => import('./pages/site/RequestAccess'));
+const Legal = lazy(() => import('./pages/site/Legal'));
 
 // Port de ethimarket/src/components/ProtectedRoute.tsx
 function Protected() {
@@ -36,7 +43,14 @@ export default function App() {
       <BrowserRouter>
         <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader /></div>}>
           <Routes>
-            <Route path="/" element={<Navigate to="/app" replace />} />
+            <Route element={<SiteLayout />}>
+              <Route path="/" element={<Home />} />
+              <Route path="/tarifs" element={<Pricing />} />
+              <Route path="/fonctionnalites" element={<Features />} />
+              <Route path="/faq" element={<Faq />} />
+              <Route path="/demander-un-acces" element={<RequestAccess />} />
+              <Route path="/mentions-legales" element={<Legal />} />
+            </Route>
             <Route path="/connexion" element={<Login />} />
             <Route path="/inscription" element={<Register />} />
             <Route element={<Protected />}>

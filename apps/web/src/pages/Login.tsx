@@ -27,7 +27,7 @@ export default function Login() {
           <label className="block text-sm font-medium">E-mail<input className="input mt-1" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
           <label className="block text-sm font-medium">Mot de passe<input className="input mt-1" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
           <button className="btn-primary w-full justify-center" disabled={busy}>{busy ? 'Connexion…' : 'Se connecter'}</button>
-          <p className="text-center text-sm text-stone-500">Pas encore de compte ? <Link to="/inscription" className="font-semibold text-brand-700">Créer mon restaurant</Link></p>
+          <p className="text-center text-sm text-stone-500">Pas encore de compte ? <Link to="/inscription" className="font-semibold text-brand-700">Créer mon restaurant</Link> · <Link to="/" className="text-stone-500 underline">Retour au site</Link></p>
         </form>
       </div>
     </div>
