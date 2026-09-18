@@ -20,7 +20,7 @@ const n = (v: string | number | null | undefined) => (v === null || v === undefi
 // -------------------------------------------------------------
 // Chargeurs
 // -------------------------------------------------------------
-async function loadContext(rid: string) {
+export async function loadContext(rid: string) {
   const db = await getDb();
   const [restaurant] = await db.select().from(restaurants).where(eq(restaurants.id, rid));
   const [inv, salesRows, ingRows, recs, offerRows, statRows] = await Promise.all([
@@ -120,30 +120,8 @@ intelligenceRoutes.delete('/reorder-rules/:inventoryItemId', async (c) => {
 
 /** Exécute les règles : pour chaque article sous seuil, prépare une commande + alerte « à valider ». Idempotent (pas de doublon si une commande préparée existe déjà). */
 intelligenceRoutes.post('/reorder-rules/run', async (c) => {
-  const rid = c.get('restaurantId'); const db = await getDb(); const user = c.get('user'); const ctx = await loadContext(rid);
-  const rules = await db.select().from(reorderRules).where(and(eq(reorderRules.restaurantId, rid), eq(reorderRules.enabled, true)));
-  const pending = await db.select({ productId: orderLines.productId }).from(orderLines).innerJoin(orders, eq(orders.id, orderLines.orderId)).where(and(eq(orders.restaurantId, rid), inArray(orders.status, ['preparee', 'envoyee', 'confirmee'])));
-  const pendingSet = new Set(pending.map((p) => p.productId));
-  const prepared: { productName: string; supplierName: string; packs: number; packLabel: string; total: number; reference: string }[] = []; const skipped: string[] = [];
-  for (const rule of rules) {
-    const s = ctx.stocks.find((x) => x.inventoryItemId === rule.inventoryItemId); if (!s) continue;
-    if (s.quantity > n(rule.threshold)) continue;
-    if (pendingSet.has(s.productId)) { skipped.push(`${s.productName} : une commande est déjà en cours`); continue; }
-    const cands = ctx.offers.filter((o) => o.productId === s.productId && o.inStock && (rule.supplierStrategy !== 'preferred' || !s.preferredSupplierId || o.supplierId === s.preferredSupplierId));
-    if (!cands.length) { skipped.push(`${s.productName} : aucune offre disponible`); continue; }
-    const f = ctx.productForecasts.find((x) => x.productId === s.productId);
-    const cmp = compareOffers(cands, { daysOfStockLeft: f?.daysOfStockLeft ?? null, neededQty: n(rule.reorderQty), unit: s.unit });
-    const best = cmp.recommended!; const packs = Math.max(1, Math.ceil(n(rule.reorderQty) / best.packQty));
-    const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(orders).where(eq(orders.restaurantId, rid));
-    const reference = `AFS-${new Date().getFullYear()}-${String(n(count) + 1).padStart(6, '0')}`;
-    const total = packs * best.packPrice;
-    const sup = await db.select().from(suppliers).where(eq(suppliers.id, best.supplierId)).then((r) => r[0]);
-    const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: best.supplierId, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + best.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: best.deliveryFee.toFixed(2), source: 'auto_reorder', createdBy: user.id, notes: cmp.justification.join(' ') }).returning();
-    await db.insert(orderLines).values({ orderId: order.id, productId: s.productId, offerId: best.offerId, packLabel: best.packLabel, packs, quantity: (packs * best.packQty).toFixed(3), unitPriceEur: best.unitPrice.toFixed(4), lineTotalEur: total.toFixed(2) });
-    await db.insert(alerts).values({ restaurantId: rid, dedupeKey: `auto_reorder:${order.id}`, kind: 'stock_bas', severity: 'blue', title: `🤖 Auto-Reorder — ${s.productName}`, message: `Stock à ${qty(s.quantity, s.unit)} (seuil ${qty(n(rule.threshold), s.unit)}). Commande de ${qty(packs * best.packQty, s.unit)} préparée chez ${best.supplierName} pour ${eur(total)}. ${cmp.justification[1] ?? ''}`.trim(), productId: s.productId, supplierId: best.supplierId, actionUrl: '/app/achats' }).onConflictDoNothing();
-    prepared.push({ productName: s.productName, supplierName: best.supplierName, packs, packLabel: best.packLabel, total, reference });
-  }
-  return c.json({ prepared, skipped });
+  const r = await runAutoReorder(c.get('restaurantId'), c.get('user').id);
+  return c.json(r);
 });
 
 // -------------------------------------------------------------
@@ -282,4 +260,33 @@ intelligenceRoutes.post('/assistant/ask', async (c) => {
 });
 
 // utilitaires exposés pour d'autres routes/tests
+/** Exécute les règles d'auto-reorder : prépare des commandes (jamais d'envoi). Idempotent. */
+export async function runAutoReorder(rid: string, userId: string | null = null) {
+  const db = await getDb(); const ctx = await loadContext(rid);
+  const rules = await db.select().from(reorderRules).where(and(eq(reorderRules.restaurantId, rid), eq(reorderRules.enabled, true)));
+  const pending = await db.select({ productId: orderLines.productId }).from(orderLines).innerJoin(orders, eq(orders.id, orderLines.orderId)).where(and(eq(orders.restaurantId, rid), inArray(orders.status, ['preparee', 'envoyee', 'confirmee'])));
+  const pendingSet = new Set(pending.map((p) => p.productId));
+  const prepared: { productName: string; supplierName: string; packs: number; packLabel: string; total: number; reference: string }[] = []; const skipped: string[] = [];
+  for (const rule of rules) {
+    const s = ctx.stocks.find((x) => x.inventoryItemId === rule.inventoryItemId); if (!s) continue;
+    if (s.quantity > n(rule.threshold)) continue;
+    if (pendingSet.has(s.productId)) { skipped.push(`${s.productName} : une commande est déjà en cours`); continue; }
+    const cands = ctx.offers.filter((o) => o.productId === s.productId && o.inStock && (rule.supplierStrategy !== 'preferred' || !s.preferredSupplierId || o.supplierId === s.preferredSupplierId));
+    if (!cands.length) { skipped.push(`${s.productName} : aucune offre disponible`); continue; }
+    const f = ctx.productForecasts.find((x) => x.productId === s.productId);
+    const cmp = compareOffers(cands, { daysOfStockLeft: f?.daysOfStockLeft ?? null, neededQty: n(rule.reorderQty), unit: s.unit });
+    const best = cmp.recommended!; const packs = Math.max(1, Math.ceil(n(rule.reorderQty) / best.packQty));
+    const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(orders).where(eq(orders.restaurantId, rid));
+    const reference = `AFS-${new Date().getFullYear()}-${String(n(count) + 1).padStart(6, '0')}`;
+    const total = packs * best.packPrice;
+    const sup = await db.select().from(suppliers).where(eq(suppliers.id, best.supplierId)).then((r) => r[0]);
+    const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: best.supplierId, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + best.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: best.deliveryFee.toFixed(2), source: 'auto_reorder', createdBy: userId, notes: cmp.justification.join(' ') }).returning();
+    await db.insert(orderLines).values({ orderId: order.id, productId: s.productId, offerId: best.offerId, packLabel: best.packLabel, packs, quantity: (packs * best.packQty).toFixed(3), unitPriceEur: best.unitPrice.toFixed(4), lineTotalEur: total.toFixed(2) });
+    await db.insert(alerts).values({ restaurantId: rid, dedupeKey: `auto_reorder:${order.id}`, kind: 'stock_bas', severity: 'blue', title: `🤖 Auto-Reorder — ${s.productName}`, message: `Stock à ${qty(s.quantity, s.unit)} (seuil ${qty(n(rule.threshold), s.unit)}). Commande de ${qty(packs * best.packQty, s.unit)} préparée chez ${best.supplierName} pour ${eur(total)}. ${cmp.justification[1] ?? ''}`.trim(), productId: s.productId, supplierId: best.supplierId, actionUrl: '/app/achats' }).onConflictDoNothing();
+    prepared.push({ productName: s.productName, supplierName: best.supplierName, packs, packLabel: best.packLabel, total, reference });
+  }
+  return { prepared, skipped };
+}
+
+
 export const _ctx = { loadContext, stockStatus, daysOfStock };

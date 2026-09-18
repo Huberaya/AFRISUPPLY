@@ -23,6 +23,7 @@ const Forecast = lazy(() => import('./pages/Forecast'));
 const SmartCart = lazy(() => import('./pages/SmartCart'));
 const Sales = lazy(() => import('./pages/Sales'));
 const Discrepancies = lazy(() => import('./pages/Discrepancies'));
+const Settings = lazy(() => import('./pages/Settings'));
 const Home = lazy(() => import('./pages/site/Home'));
 const Pricing = lazy(() => import('./pages/site/Pricing'));
 const Features = lazy(() => import('./pages/site/Features'));
@@ -71,6 +72,7 @@ export default function App() {
                 <Route path="catalogue" element={<Catalog />} />
                 <Route path="demarrer" element={<Onboarding />} />
                 <Route path="import" element={<Import />} />
+                <Route path="parametres" element={<Settings />} />
               </Route>
             </Route>
             <Route path="*" element={<Navigate to="/app" replace />} />

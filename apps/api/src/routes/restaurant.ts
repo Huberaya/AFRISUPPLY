@@ -19,7 +19,7 @@ const n = (v: string | number | null | undefined) => (v === null || v === undefi
 // -------------------------------------------------------------
 // Helpers de chargement (partagés entre plusieurs routes)
 // -------------------------------------------------------------
-async function loadStockSnapshots(rid: string): Promise<StockSnapshot[]> {
+export async function loadStockSnapshots(rid: string): Promise<StockSnapshot[]> {
   const db = await getDb();
   const [items, salesRows, ingRows] = await Promise.all([
     db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId)).where(eq(inventoryItems.restaurantId, rid)),
@@ -35,7 +35,7 @@ async function loadStockSnapshots(rid: string): Promise<StockSnapshot[]> {
   }));
 }
 
-async function loadOffers(rid: string, productId?: string) {
+export async function loadOffers(rid: string, productId?: string) {
   const db = await getDb();
   const where = productId ? and(eq(supplierOffers.restaurantId, rid), eq(supplierOffers.productId, productId)) : eq(supplierOffers.restaurantId, rid);
   const rows = await db.select({ offer: supplierOffers, supplier: suppliers }).from(supplierOffers).innerJoin(suppliers, eq(suppliers.id, supplierOffers.supplierId)).where(where);
@@ -47,7 +47,7 @@ async function loadOffers(rid: string, productId?: string) {
   }));
 }
 
-async function loadSupplierStats(rid: string) {
+export async function loadSupplierStats(rid: string) {
   const db = await getDb();
   const rows = await db.select({
     supplierId: orders.supplierId,
@@ -64,6 +64,40 @@ async function loadSupplierStats(rid: string) {
   }
   return map;
 }
+
+/** Recalcule et persiste (dédupliqué) les alertes stock / prix / opportunités. Utilisé par la route et par le job quotidien. */
+export async function refreshAlerts(rid: string) {
+  const db = await getDb();
+  const [restaurant] = await db.select().from(restaurants).where(eq(restaurants.id, rid));
+  const threshold = restaurant.settings?.priceIncreaseAlertPct ?? 8;
+  const [stocks, offers, invRows, ph] = await Promise.all([
+    loadStockSnapshots(rid), loadOffers(rid),
+    db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId)).where(eq(inventoryItems.restaurantId, rid)),
+    db.select({ p: priceHistory, offer: supplierOffers, supplier: suppliers, product: products }).from(priceHistory)
+      .innerJoin(supplierOffers, eq(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq(products.id, supplierOffers.productId))
+      .where(and(eq(priceHistory.restaurantId, rid), gte(priceHistory.recordedAt, new Date(Date.now() - 90 * 86_400_000)))),
+  ]);
+  const points: PricePoint[] = ph.map((r) => ({ offerId: r.offer.id, supplierId: r.supplier.id, supplierName: r.supplier.name, productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, unitPrice: n(r.p.unitPriceEur), recordedAt: r.p.recordedAt.toISOString() }));
+  const alternatives = new Map<string, PricePoint[]>();
+  for (const o of offers) {
+    if (!o.inStock) continue;
+    const pp: PricePoint = { offerId: o.offerId, supplierId: o.supplierId, supplierName: o.supplierName, productId: o.productId, productName: '', unit: '', unitPrice: o.unitPrice, recordedAt: '' };
+    const prod = ph.find((r) => r.product.id === o.productId)?.product; if (prod) { pp.productName = prod.name; pp.unit = prod.baseUnit; }
+    if (!alternatives.has(o.productId)) alternatives.set(o.productId, []); alternatives.get(o.productId)!.push(pp);
+  }
+  const computed = [
+    ...alertsFromStock(stocks),
+    ...alertsFromPrices(points, threshold, alternatives),
+    ...alertsFromOpportunities(invRows.map((r) => ({ productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, preferredSupplierId: r.item.preferredSupplierId })), offers),
+  ];
+  let inserted = 0;
+  for (const a of computed) {
+    const res = await db.insert(alerts).values({ restaurantId: rid, ...a }).onConflictDoNothing().returning({ id: alerts.id });
+    inserted += res.length;
+  }
+  return { computed: computed.length, inserted };
+}
+
 
 // -------------------------------------------------------------
 // Dashboard
@@ -339,35 +373,9 @@ restaurantRoutes.get('/recipes', async (c) => {
 // -------------------------------------------------------------
 restaurantRoutes.post('/alerts/refresh', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
-  const [restaurant] = await db.select().from(restaurants).where(eq(restaurants.id, rid));
-  const threshold = restaurant.settings?.priceIncreaseAlertPct ?? 8;
-  const [stocks, offers, invRows, ph] = await Promise.all([
-    loadStockSnapshots(rid), loadOffers(rid),
-    db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId)).where(eq(inventoryItems.restaurantId, rid)),
-    db.select({ p: priceHistory, offer: supplierOffers, supplier: suppliers, product: products }).from(priceHistory)
-      .innerJoin(supplierOffers, eq(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq(products.id, supplierOffers.productId))
-      .where(and(eq(priceHistory.restaurantId, rid), gte(priceHistory.recordedAt, new Date(Date.now() - 90 * 86_400_000)))),
-  ]);
-  const points: PricePoint[] = ph.map((r) => ({ offerId: r.offer.id, supplierId: r.supplier.id, supplierName: r.supplier.name, productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, unitPrice: n(r.p.unitPriceEur), recordedAt: r.p.recordedAt.toISOString() }));
-  const alternatives = new Map<string, PricePoint[]>();
-  for (const o of offers) {
-    if (!o.inStock) continue;
-    const pp: PricePoint = { offerId: o.offerId, supplierId: o.supplierId, supplierName: o.supplierName, productId: o.productId, productName: '', unit: '', unitPrice: o.unitPrice, recordedAt: '' };
-    const prod = ph.find((r) => r.product.id === o.productId)?.product; if (prod) { pp.productName = prod.name; pp.unit = prod.baseUnit; }
-    if (!alternatives.has(o.productId)) alternatives.set(o.productId, []); alternatives.get(o.productId)!.push(pp);
-  }
-  const computed = [
-    ...alertsFromStock(stocks),
-    ...alertsFromPrices(points, threshold, alternatives),
-    ...alertsFromOpportunities(invRows.map((r) => ({ productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, preferredSupplierId: r.item.preferredSupplierId })), offers),
-  ];
-  let inserted = 0;
-  for (const a of computed) {
-    const res = await db.insert(alerts).values({ restaurantId: rid, ...a }).onConflictDoNothing().returning({ id: alerts.id });
-    inserted += res.length;
-  }
+  const { computed, inserted } = await refreshAlerts(rid);
   const all = await db.select().from(alerts).where(and(eq(alerts.restaurantId, rid), eq(alerts.isRead, false))).orderBy(desc(alerts.createdAt));
-  return c.json({ computed: computed.length, inserted, alerts: all });
+  return c.json({ computed, inserted, alerts: all });
 });
 
 restaurantRoutes.get('/alerts', async (c) => {

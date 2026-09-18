@@ -7,6 +7,7 @@ import { catalogRoutes } from './routes/catalog.js';
 import { intelligenceRoutes } from './routes/intelligence.js';
 import { manageRoutes } from './routes/manage.js';
 import { publicRoutes } from './routes/public.js';
+import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
 
 export const app = new Hono();
@@ -14,12 +15,14 @@ app.use('*', logger());
 app.use('/api/*', cors({ origin: (o) => o ?? '*', credentials: true }));
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'afrisupply-api', db: isNeon() ? 'neon' : 'pglite-local', time: new Date().toISOString() }));
+app.route('/api', jobsRoutes); // cron (secret propre)
 app.route('/api', publicRoutes); // public en premier : les routeurs suivants imposent l'auth via use('*')
 app.route('/api/auth', authRoutes);
 app.route('/api', restaurantRoutes);
 app.route('/api', catalogRoutes);
 app.route('/api', intelligenceRoutes);
 app.route('/api', manageRoutes);
+app.route('/api', settingsRoutes);
 
 app.notFound((c) => c.json({ error: 'Route inconnue' }, 404));
 app.onError((err, c) => { console.error(err); return c.json({ error: 'Erreur serveur', detail: process.env.NODE_ENV === 'production' ? undefined : String(err) }, 500); });

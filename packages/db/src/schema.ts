@@ -62,7 +62,10 @@ export type RestaurantSettings = {
   currency?: 'EUR';
   priceIncreaseAlertPct?: number;   // défaut 8 %
   forecastHorizonDays?: number;     // défaut 7
-  autoReorderEnabled?: boolean;
+  autoReorderEnabled?: boolean;     // le job quotidien exécute les règles (défaut true)
+  dailyDigestEnabled?: boolean;     // e-mail « Votre matin AFRISUPPLY » (défaut true)
+  digestRecipients?: string[];      // e-mails ; défaut : membres owner/manager
+  closedWeekdays?: number[];        // 0=dimanche… pas de mail ces jours-là
 };
 
 export const restaurantMembers = pgTable('restaurant_members', {

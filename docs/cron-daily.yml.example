@@ -1,0 +1,17 @@
+# À placer dans .github/workflows/cron-daily.yml — déclenche le job « Votre matin AFRISUPPLY » chaque jour à 6h30 Paris.
+# Secrets à créer dans le dépôt : API_URL (ex. https://api.afrisupply.fr) et CRON_SECRET (identique à la variable d'env de l'API).
+name: Daily digest
+on:
+  schedule:
+    - cron: '30 4 * * *'   # 04:30 UTC = 06:30 Paris (été) / 05:30 (hiver) — ajuster si besoin
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Déclencher le job quotidien
+        run: |
+          curl -sS -f -X POST "${{ secrets.API_URL }}/api/jobs/daily" \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" | tee result.json
+      - name: Résumé
+        run: node -e "const r=require('./result.json');console.log(`${r.sent}/${r.count} digests envoyés`);for(const x of r.results)console.log('-',x.name,x.digest,x.error??'')"

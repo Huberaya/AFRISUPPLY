@@ -7,3 +7,4 @@ dist
 .pglite
 .DS_Store
 docs_*.png
+.outbox/
