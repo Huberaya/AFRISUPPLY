@@ -1614,7 +1614,7 @@ var init_src = __esm({
 });
 
 // api/_src/index.ts
-import { handle } from "hono/vercel";
+import { getRequestListener } from "@hono/node-server";
 
 // apps/api/src/app.ts
 import { Hono as Hono8 } from "hono";
@@ -3927,22 +3927,7 @@ app.onError((err, c) => {
 });
 
 // api/_src/index.ts
-var config = { runtime: "nodejs", maxDuration: 60 };
-var handler = handle(app);
-var index_default = handler;
-var GET = handler;
-var POST = handler;
-var PUT = handler;
-var PATCH = handler;
-var DELETE = handler;
-var OPTIONS = handler;
+var index_default = getRequestListener(app.fetch);
 export {
-  DELETE,
-  GET,
-  OPTIONS,
-  PATCH,
-  POST,
-  PUT,
-  config,
   index_default as default
 };
