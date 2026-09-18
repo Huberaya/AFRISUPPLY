@@ -18,7 +18,8 @@
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
-    "build:vercel": "npm run build -w apps/web && node api/build.mjs"
+    "build:vercel": "npm run build -w apps/web && node api/build.mjs",
+    "build:api": "node api/build.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

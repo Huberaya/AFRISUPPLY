@@ -10,3 +10,11 @@ await build({
   define: { 'process.env.PGLITE_DISABLED': '"1"' },
 });
 console.log('[api] bundle → api/index.js');
+
+// Garde-fou : le bundle est versionné (Vercel détecte les fonctions depuis le dépôt).
+// Si le fichier généré diffère de celui commité, on prévient : lancer `npm run build:api` puis commiter.
+import { execSync } from 'node:child_process';
+try {
+  const diff = execSync('git status --porcelain -- api/index.js', { encoding: 'utf8' }).trim();
+  if (diff) console.warn('[api] ⚠️  api/index.js a changé : exécutez `npm run build:api` puis commitez le fichier.');
+} catch { /* hors dépôt git (Vercel) : rien à faire */ }
