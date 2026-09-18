@@ -28,7 +28,7 @@
     "globals": "^15.12.0"
   },
   "engines": {
-    "node": ">=20 <23"
+    "node": ">=20"
   },
   "dependencies": {
     "hono": "^4.6.14",
