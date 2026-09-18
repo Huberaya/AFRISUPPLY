@@ -15,6 +15,13 @@
       "when": 1789736365004,
       "tag": "0001_leads",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789747199683,
+      "tag": "0002_ops",
+      "breakpoints": true
     }
   ]
 }

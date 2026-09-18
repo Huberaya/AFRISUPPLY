@@ -16,6 +16,7 @@ __export(schema_exports, {
   alertSeverity: () => alertSeverity,
   alerts: () => alerts,
   alertsRelations: () => alertsRelations,
+  auditLog: () => auditLog,
   deliveries: () => deliveries,
   deliveriesRelations: () => deliveriesRelations,
   deliveryDiscrepancies: () => deliveryDiscrepancies,
@@ -23,6 +24,7 @@ __export(schema_exports, {
   forecasts: () => forecasts,
   inventoryItems: () => inventoryItems,
   inventoryItemsRelations: () => inventoryItemsRelations,
+  jobRuns: () => jobRuns,
   leadStatus: () => leadStatus,
   leads: () => leads,
   memberRole: () => memberRole,
@@ -72,7 +74,7 @@ import {
   uniqueIndex
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
-var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations;
+var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog;
 var init_schema = __esm({
   "packages/db/src/schema.ts"() {
     "use strict";
@@ -424,6 +426,27 @@ var init_schema = __esm({
       product: one(products, { fields: [alerts.productId], references: [products.id] }),
       supplier: one(suppliers, { fields: [alerts.supplierId], references: [suppliers.id] })
     }));
+    jobRuns = pgTable("job_runs", {
+      id: uuid("id").primaryKey().defaultRandom(),
+      job: text("job").notNull(),
+      // daily
+      status: text("status").notNull(),
+      // ok | partial | error
+      startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+      finishedAt: timestamp("finished_at", { withTimezone: true }).notNull(),
+      durationMs: integer("duration_ms").notNull(),
+      summary: jsonb("summary").$type(),
+      error: text("error")
+    }, (t) => [index("job_runs_job_idx").on(t.job, t.startedAt)]);
+    auditLog = pgTable("audit_log", {
+      id: uuid("id").primaryKey().defaultRandom(),
+      at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+      actorEmail: text("actor_email"),
+      action: text("action").notNull(),
+      // account.export | account.delete | restaurant.delete | login.failed…
+      target: text("target"),
+      meta: jsonb("meta").$type()
+    }, (t) => [index("audit_at_idx").on(t.at)]);
   }
 });
 
@@ -1553,6 +1576,7 @@ __export(src_exports, {
   alertSeverity: () => alertSeverity,
   alerts: () => alerts,
   alertsRelations: () => alertsRelations,
+  auditLog: () => auditLog,
   deliveries: () => deliveries,
   deliveriesRelations: () => deliveriesRelations,
   deliveryDiscrepancies: () => deliveryDiscrepancies,
@@ -1563,6 +1587,7 @@ __export(src_exports, {
   inventoryItems: () => inventoryItems,
   inventoryItemsRelations: () => inventoryItemsRelations,
   isNeon: () => isNeon,
+  jobRuns: () => jobRuns,
   leadStatus: () => leadStatus,
   leads: () => leads,
   memberRole: () => memberRole,
@@ -1617,7 +1642,7 @@ var init_src = __esm({
 import { getRequestListener } from "@hono/node-server";
 
 // apps/api/src/app.ts
-import { Hono as Hono8 } from "hono";
+import { Hono as Hono10 } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
@@ -1676,6 +1701,86 @@ async function requireRestaurant(c, next) {
   await next();
 }
 
+// apps/api/src/lib/ops.ts
+init_src();
+function parseDsn(dsn) {
+  const u = new URL(dsn);
+  const projectId = u.pathname.replace(/^\//, "");
+  return { key: u.username, host: u.host, projectId, endpoint: `${u.protocol}//${u.host}/api/${projectId}/envelope/` };
+}
+var sentryEnabled = () => !!process.env.SENTRY_DSN;
+async function captureException(err, ctx = {}) {
+  const dsn = process.env.SENTRY_DSN;
+  if (!dsn) return;
+  try {
+    const { key, endpoint } = parseDsn(dsn);
+    const e = err instanceof Error ? err : new Error(String(err));
+    const frames = (e.stack ?? "").split("\n").slice(1).map((l) => l.trim()).filter(Boolean).reverse().map((l) => ({ function: l.replace(/^at\s+/, "") }));
+    const eventId = crypto.randomUUID().replace(/-/g, "");
+    const event = {
+      event_id: eventId,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      platform: "node",
+      level: "error",
+      environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development",
+      release: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7),
+      server_name: process.env.VERCEL_REGION ?? "local",
+      transaction: ctx.route ? `${ctx.method ?? ""} ${ctx.route}`.trim() : void 0,
+      exception: { values: [{ type: e.name, value: e.message, stacktrace: frames.length ? { frames } : void 0 }] },
+      user: ctx.userEmail ? { email: ctx.userEmail } : void 0,
+      tags: { restaurantId: ctx.restaurantId ?? "none" },
+      extra: ctx.extra
+    };
+    const envelope = `${JSON.stringify({ event_id: eventId, sent_at: (/* @__PURE__ */ new Date()).toISOString(), dsn })}
+${JSON.stringify({ type: "event" })}
+${JSON.stringify(event)}
+`;
+    await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/x-sentry-envelope", "X-Sentry-Auth": `Sentry sentry_version=7, sentry_key=${key}, sentry_client=afrisupply/1.0` }, body: envelope, signal: AbortSignal.timeout(3e3) });
+  } catch {
+  }
+}
+var buckets = /* @__PURE__ */ new Map();
+function rateLimit(opts) {
+  return async (c, next) => {
+    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? c.req.header("x-real-ip") ?? "local";
+    const k = `${opts.key ? opts.key(c) : c.req.path}:${ip}`;
+    const now = Date.now();
+    let b = buckets.get(k);
+    if (!b || b.reset < now) {
+      b = { n: 0, reset: now + opts.windowMs };
+      buckets.set(k, b);
+    }
+    b.n += 1;
+    if (buckets.size > 5e3) {
+      for (const [kk, v] of buckets) if (v.reset < now) buckets.delete(kk);
+    }
+    c.header("X-RateLimit-Limit", String(opts.max));
+    c.header("X-RateLimit-Remaining", String(Math.max(0, opts.max - b.n)));
+    if (b.n > opts.max) {
+      c.header("Retry-After", String(Math.ceil((b.reset - now) / 1e3)));
+      return c.json({ error: "Trop de tentatives, r\xE9essayez dans une minute." }, 429);
+    }
+    await next();
+  };
+}
+async function securityHeaders(c, next) {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (process.env.NODE_ENV === "production") c.header("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+}
+async function audit(action, opts = {}) {
+  try {
+    const db = await getDb();
+    await db.insert(auditLog).values({ action, actorEmail: opts.actorEmail ?? null, target: opts.target, meta: opts.meta });
+  } catch (e) {
+    console.error("[audit]", e);
+  }
+}
+var buildInfo = () => ({ version: process.env.npm_package_version ?? "0.1.0", commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local", env: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development", region: process.env.VERCEL_REGION ?? "local" });
+
 // apps/api/src/routes/auth.ts
 var slugify = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 var cookieOpts = { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 60 * 60 * 24 * 30, secure: process.env.NODE_ENV === "production" };
@@ -1708,7 +1813,10 @@ authRoutes.post("/login", async (c) => {
   if (!body.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const [user] = await db.select().from(users).where(eq3(users.email, body.data.email.toLowerCase())).limit(1);
-  if (!user || !await verifyPassword(body.data.password, user.passwordHash)) return c.json({ error: "E-mail ou mot de passe incorrect" }, 401);
+  if (!user || !await verifyPassword(body.data.password, user.passwordHash)) {
+    void audit("login.failed", { actorEmail: body.data.email.toLowerCase(), meta: { ip: c.req.header("x-forwarded-for") } });
+    return c.json({ error: "E-mail ou mot de passe incorrect" }, 401);
+  }
   await db.update(users).set({ lastLoginAt: /* @__PURE__ */ new Date() }).where(eq3(users.id, user.id));
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName });
   setCookie(c, "afs_token", token, cookieOpts);
@@ -3846,11 +3954,23 @@ async function runDailyForAll(opts = {}) {
   const db = await getDb();
   const all = await db.select({ id: restaurants.id }).from(restaurants);
   const results = [];
+  const startedAt = /* @__PURE__ */ new Date();
   for (const r of all) {
     const { preview: _p, ...res } = await runDailyForRestaurant(r.id, opts);
     results.push(res);
   }
-  return { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), count: results.length, sent: results.filter((r) => r.digest === "sent").length, results };
+  const errors = results.filter((r) => r.digest === "error");
+  const summary = { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), dryRun: !!opts.dryRun, count: results.length, sent: results.filter((r) => r.digest === "sent").length, errors: errors.length, results };
+  const finishedAt = /* @__PURE__ */ new Date();
+  if (!opts.dryRun) {
+    try {
+      await db.insert(jobRuns).values({ job: "daily", status: errors.length === 0 ? "ok" : errors.length === results.length ? "error" : "partial", startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors.map((e) => `${e.name}: ${e.error}`).join(" | ") || null });
+    } catch (e) {
+      console.error("[jobs] job_runs", e);
+    }
+  }
+  for (const e of errors) void captureException(new Error(`daily digest failed: ${e.error}`), { route: "/api/jobs/daily", restaurantId: e.restaurantId });
+  return summary;
 }
 
 // apps/api/src/routes/jobs.ts
@@ -3908,10 +4028,126 @@ settingsRoutes.post("/digest/send-test", async (c) => {
 
 // apps/api/src/app.ts
 init_src();
-var app = new Hono8();
-app.use("*", logger());
+
+// apps/api/src/routes/account.ts
+init_src();
+import { Hono as Hono8 } from "hono";
+import { z as z8 } from "zod";
+import { and as and7, eq as eq11, inArray as inArray6 } from "drizzle-orm";
+import { deleteCookie as deleteCookie2 } from "hono/cookie";
+var accountRoutes = new Hono8();
+accountRoutes.use("/account/*", requireAuth);
+accountRoutes.get("/account/export", async (c) => {
+  const db = await getDb();
+  const u = c.get("user");
+  const [me] = await db.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt }).from(users).where(eq11(users.id, u.id));
+  const memberships = await db.select({ restaurant: restaurants, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(restaurants, eq11(restaurants.id, restaurantMembers.restaurantId)).where(eq11(restaurantMembers.userId, u.id));
+  const out = [];
+  for (const m of memberships) {
+    const rid = m.restaurant.id;
+    const [sup, prod, inv, ord, sal, rec, al, rules, del, mov] = await Promise.all([
+      db.select().from(suppliers).where(eq11(suppliers.restaurantId, rid)),
+      db.select().from(products).where(eq11(products.restaurantId, rid)),
+      db.select().from(inventoryItems).where(eq11(inventoryItems.restaurantId, rid)),
+      db.select().from(orders).where(eq11(orders.restaurantId, rid)),
+      db.select().from(sales).where(eq11(sales.restaurantId, rid)),
+      db.select().from(recipes).where(eq11(recipes.restaurantId, rid)),
+      db.select().from(alerts).where(eq11(alerts.restaurantId, rid)),
+      db.select().from(reorderRules).where(eq11(reorderRules.restaurantId, rid)),
+      db.select().from(deliveries).where(eq11(deliveries.restaurantId, rid)),
+      db.select().from(stockMovements).where(eq11(stockMovements.restaurantId, rid))
+    ]);
+    const orderIds = ord.map((o) => o.id);
+    const supIds = sup.map((s) => s.id);
+    const [lines, offers, prices] = await Promise.all([
+      orderIds.length ? db.select().from(orderLines).where(inArray6(orderLines.orderId, orderIds)) : [],
+      supIds.length ? db.select().from(supplierOffers).where(inArray6(supplierOffers.supplierId, supIds)) : [],
+      db.select().from(priceHistory).where(eq11(priceHistory.restaurantId, rid))
+    ]);
+    out.push({ restaurant: m.restaurant, role: m.role, suppliers: sup, supplierOffers: offers, priceHistory: prices, products: prod, inventory: inv, stockMovements: mov, orders: ord, orderLines: lines, deliveries: del, sales: sal, recipes: rec, alerts: al, reorderRules: rules });
+  }
+  void audit("account.export", { actorEmail: u.email, target: u.id });
+  c.header("Content-Disposition", `attachment; filename="afrisupply-export-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.json"`);
+  return c.json({ exportedAt: (/* @__PURE__ */ new Date()).toISOString(), user: me, restaurants: out });
+});
+accountRoutes.delete("/account", async (c) => {
+  const body = z8.object({ password: z8.string(), confirm: z8.literal("SUPPRIMER") }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: "Mot de passe et confirmation \xAB SUPPRIMER \xBB requis" }, 400);
+  const db = await getDb();
+  const u = c.get("user");
+  const [me] = await db.select().from(users).where(eq11(users.id, u.id));
+  if (!me || !await verifyPassword(body.data.password, me.passwordHash)) return c.json({ error: "Mot de passe incorrect" }, 401);
+  const mine = await db.select({ rid: restaurantMembers.restaurantId, role: restaurantMembers.role }).from(restaurantMembers).where(eq11(restaurantMembers.userId, u.id));
+  const deleted = [];
+  const left = [];
+  for (const m of mine) {
+    const others = await db.select({ id: restaurantMembers.userId }).from(restaurantMembers).where(and7(eq11(restaurantMembers.restaurantId, m.rid), eq11(restaurantMembers.role, "owner")));
+    const soleOwner = m.role === "owner" && others.every((o) => o.id === u.id);
+    if (soleOwner) {
+      await db.delete(restaurants).where(eq11(restaurants.id, m.rid));
+      deleted.push(m.rid);
+    } else left.push(m.rid);
+  }
+  await db.delete(users).where(eq11(users.id, u.id));
+  await audit("account.delete", { actorEmail: u.email, target: u.id, meta: { restaurantsDeleted: deleted.length, restaurantsLeft: left.length } });
+  deleteCookie2(c, "afs_token", { path: "/" });
+  return c.json({ ok: true, restaurantsDeleted: deleted.length, restaurantsLeft: left.length });
+});
+
+// apps/api/src/routes/status.ts
+init_src();
+import { Hono as Hono9 } from "hono";
+import { desc as desc6, eq as eq12, sql as sql8 } from "drizzle-orm";
+var statusRoutes = new Hono9();
+statusRoutes.get("/status", async (c) => {
+  const t0 = Date.now();
+  let dbOk = false;
+  let dbMs = 0;
+  let lastJob = null;
+  try {
+    const db = await getDb();
+    await db.execute(sql8`select 1`);
+    dbMs = Date.now() - t0;
+    dbOk = true;
+    const [j] = await db.select().from(jobRuns).where(eq12(jobRuns.job, "daily")).orderBy(desc6(jobRuns.startedAt)).limit(1);
+    if (j) lastJob = { status: j.status, finishedAt: j.finishedAt, durationMs: j.durationMs, sent: j.summary?.sent, count: j.summary?.count };
+  } catch {
+    dbOk = false;
+  }
+  const hoursSinceJob = lastJob ? (Date.now() - new Date(lastJob.finishedAt).getTime()) / 36e5 : null;
+  const jobState = !lastJob ? "never" : lastJob.status !== "ok" ? "degraded" : hoursSinceJob > 30 ? "stale" : "ok";
+  const ok = dbOk && jobState !== "degraded";
+  return c.json({
+    ok,
+    ...buildInfo(),
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    checks: {
+      database: { ok: dbOk, latencyMs: dbMs },
+      dailyJob: { state: jobState, lastRun: lastJob ? { ...lastJob, hoursAgo: Math.round(hoursSinceJob * 10) / 10 } : null },
+      mail: { transport: mailerConfig().transport, configured: mailerConfig().transport === "resend" },
+      errorTracking: { configured: sentryEnabled() },
+      cron: { configured: !!process.env.CRON_SECRET }
+    }
+  }, ok ? 200 : 503);
+});
+statusRoutes.get("/status/jobs", async (c) => {
+  const auth = c.req.header("authorization");
+  const given = c.req.header("x-cron-secret") ?? (auth?.startsWith("Bearer ") ? auth.slice(7) : void 0);
+  if (!process.env.CRON_SECRET || given !== process.env.CRON_SECRET) return c.json({ error: "Non autoris\xE9" }, 401);
+  const db = await getDb();
+  return c.json({ runs: await db.select().from(jobRuns).orderBy(desc6(jobRuns.startedAt)).limit(Math.min(100, Number(c.req.query("limit") ?? 30))) });
+});
+
+// apps/api/src/app.ts
+var app = new Hono10();
+if (process.env.NODE_ENV !== "test") app.use("*", logger());
+app.use("*", securityHeaders);
+app.use("/api/auth/login", rateLimit({ windowMs: 6e4, max: 10 }));
+app.use("/api/auth/register", rateLimit({ windowMs: 6e4, max: 5 }));
+app.use("/api/public/leads", rateLimit({ windowMs: 6e4, max: 5 }));
 app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: true }));
-app.get("/api/health", (c) => c.json({ ok: true, service: "afrisupply-api", db: isNeon() ? "neon" : "pglite-local", time: (/* @__PURE__ */ new Date()).toISOString() }));
+app.get("/api/health", (c) => c.json({ ok: true, service: "afrisupply-api", db: isNeon() ? "neon" : "pglite-local", time: (/* @__PURE__ */ new Date()).toISOString(), ...buildInfo() }));
+app.route("/api", statusRoutes);
 app.route("/api", jobsRoutes);
 app.route("/api", publicRoutes);
 app.route("/api/auth", authRoutes);
@@ -3920,9 +4156,11 @@ app.route("/api", catalogRoutes);
 app.route("/api", intelligenceRoutes);
 app.route("/api", manageRoutes);
 app.route("/api", settingsRoutes);
+app.route("/api", accountRoutes);
 app.notFound((c) => c.json({ error: "Route inconnue" }, 404));
 app.onError((err, c) => {
   console.error(err);
+  void captureException(err, { route: c.req.path, method: c.req.method, userEmail: c.get("user")?.email });
   return c.json({ error: "Erreur serveur", detail: process.env.NODE_ENV === "production" ? void 0 : String(err) }, 500);
 });
 

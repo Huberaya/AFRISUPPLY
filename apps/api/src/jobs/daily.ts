@@ -1,7 +1,8 @@
 // Job quotidien « matin » : alertes → auto-reorder → e-mail digest, pour chaque restaurant.
 // Déclenché par POST /api/jobs/daily (header X-Cron-Secret) — depuis GitHub Actions / Vercel cron / crontab.
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
-import { getDb, restaurants, restaurantMembers, users, alerts, orders, suppliers, deliveries, deliveryDiscrepancies, orderLines, sales } from '@afrisupply/db';
+import { getDb, restaurants, restaurantMembers, users, alerts, orders, suppliers, deliveries, deliveryDiscrepancies, orderLines, sales, jobRuns } from '@afrisupply/db';
+import { captureException } from '../lib/ops.js';
 import { refreshAlerts } from '../routes/restaurant.js';
 import { loadContext, runAutoReorder } from '../routes/intelligence.js';
 import { buildSmartCart } from '../lib/forecast.js';
@@ -97,7 +98,14 @@ export async function runDailyForRestaurant(rid: string, opts: { dryRun?: boolea
 export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}) {
   const db = await getDb();
   const all = await db.select({ id: restaurants.id }).from(restaurants);
-  const results: DailyResult[] = [];
+  const results: DailyResult[] = []; const startedAt = new Date();
   for (const r of all) { const { preview: _p, ...res } = await runDailyForRestaurant(r.id, opts); void _p; results.push(res); }
-  return { ranAt: (opts.now ?? new Date()).toISOString(), count: results.length, sent: results.filter((r) => r.digest === 'sent').length, results };
+  const errors = results.filter((r) => r.digest === 'error');
+  const summary = { ranAt: (opts.now ?? new Date()).toISOString(), dryRun: !!opts.dryRun, count: results.length, sent: results.filter((r) => r.digest === 'sent').length, errors: errors.length, results };
+  const finishedAt = new Date();
+  if (!opts.dryRun) {
+    try { await db.insert(jobRuns).values({ job: 'daily', status: errors.length === 0 ? 'ok' : errors.length === results.length ? 'error' : 'partial', startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors.map((e) => `${e.name}: ${e.error}`).join(' | ') || null }); } catch (e) { console.error('[jobs] job_runs', e); }
+  }
+  for (const e of errors) void captureException(new Error(`daily digest failed: ${e.error}`), { route: '/api/jobs/daily', restaurantId: e.restaurantId });
+  return summary;
 }

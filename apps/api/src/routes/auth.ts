@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { setCookie, deleteCookie } from 'hono/cookie';
 import { getDb, users, restaurants, restaurantMembers } from '@afrisupply/db';
 import { hashPassword, verifyPassword, signToken, requireAuth, type Env } from '../lib/auth.js';
+import { audit } from '../lib/ops.js';
 
 const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const cookieOpts = { httpOnly: true, sameSite: 'Lax' as const, path: '/', maxAge: 60 * 60 * 24 * 30, secure: process.env.NODE_ENV === 'production' };
@@ -37,7 +38,7 @@ authRoutes.post('/login', async (c) => {
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const db = await getDb();
   const [user] = await db.select().from(users).where(eq(users.email, body.data.email.toLowerCase())).limit(1);
-  if (!user || !(await verifyPassword(body.data.password, user.passwordHash))) return c.json({ error: 'E-mail ou mot de passe incorrect' }, 401);
+  if (!user || !(await verifyPassword(body.data.password, user.passwordHash))) { void audit('login.failed', { actorEmail: body.data.email.toLowerCase(), meta: { ip: c.req.header('x-forwarded-for') } }); return c.json({ error: 'E-mail ou mot de passe incorrect' }, 401); }
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName });
   setCookie(c, 'afs_token', token, cookieOpts);

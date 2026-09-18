@@ -394,3 +394,26 @@ export type OrderLine = typeof orderLines.$inferSelect;
 export type Recipe = typeof recipes.$inferSelect;
 export type Alert = typeof alerts.$inferSelect;
 export type Forecast = typeof forecasts.$inferSelect;
+
+// -------------------------------------------------------------
+// Exploitation (chantier 8) : historique des jobs + journal d'audit RGPD
+// -------------------------------------------------------------
+export const jobRuns = pgTable('job_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  job: text('job').notNull(),                       // daily
+  status: text('status').notNull(),                 // ok | partial | error
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }).notNull(),
+  durationMs: integer('duration_ms').notNull(),
+  summary: jsonb('summary').$type<Record<string, unknown>>(),
+  error: text('error'),
+}, (t) => [index('job_runs_job_idx').on(t.job, t.startedAt)]);
+
+export const auditLog = pgTable('audit_log', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
+  actorEmail: text('actor_email'),
+  action: text('action').notNull(),                 // account.export | account.delete | restaurant.delete | login.failed…
+  target: text('target'),
+  meta: jsonb('meta').$type<Record<string, unknown>>(),
+}, (t) => [index('audit_at_idx').on(t.at)]);

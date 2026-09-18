@@ -9,12 +9,20 @@ import { manageRoutes } from './routes/manage.js';
 import { publicRoutes } from './routes/public.js';
 import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
+import { accountRoutes } from './routes/account.js';
+import { statusRoutes } from './routes/status.js';
+import { captureException, securityHeaders, rateLimit, buildInfo } from './lib/ops.js';
 
 export const app = new Hono();
-app.use('*', logger());
+if (process.env.NODE_ENV !== 'test') app.use('*', logger());
+app.use('*', securityHeaders);
+app.use('/api/auth/login', rateLimit({ windowMs: 60_000, max: 10 }));
+app.use('/api/auth/register', rateLimit({ windowMs: 60_000, max: 5 }));
+app.use('/api/public/leads', rateLimit({ windowMs: 60_000, max: 5 }));
 app.use('/api/*', cors({ origin: (o) => o ?? '*', credentials: true }));
 
-app.get('/api/health', (c) => c.json({ ok: true, service: 'afrisupply-api', db: isNeon() ? 'neon' : 'pglite-local', time: new Date().toISOString() }));
+app.get('/api/health', (c) => c.json({ ok: true, service: 'afrisupply-api', db: isNeon() ? 'neon' : 'pglite-local', time: new Date().toISOString(), ...buildInfo() }));
+app.route('/api', statusRoutes);
 app.route('/api', jobsRoutes); // cron (secret propre)
 app.route('/api', publicRoutes); // public en premier : les routeurs suivants imposent l'auth via use('*')
 app.route('/api/auth', authRoutes);
@@ -23,6 +31,11 @@ app.route('/api', catalogRoutes);
 app.route('/api', intelligenceRoutes);
 app.route('/api', manageRoutes);
 app.route('/api', settingsRoutes);
+app.route('/api', accountRoutes);
 
 app.notFound((c) => c.json({ error: 'Route inconnue' }, 404));
-app.onError((err, c) => { console.error(err); return c.json({ error: 'Erreur serveur', detail: process.env.NODE_ENV === 'production' ? undefined : String(err) }, 500); });
+app.onError((err, c) => {
+  console.error(err);
+  void captureException(err, { route: c.req.path, method: c.req.method, userEmail: (c.get as (k: string) => { email?: string } | undefined)('user')?.email });
+  return c.json({ error: 'Erreur serveur', detail: process.env.NODE_ENV === 'production' ? undefined : String(err) }, 500);
+});

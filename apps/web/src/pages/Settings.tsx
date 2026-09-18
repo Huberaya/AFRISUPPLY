@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Mail, Save, Send, Eye } from 'lucide-react';
+import { Mail, Save, Send, Eye, Download, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Stat } from '../components/ui';
@@ -12,6 +12,7 @@ export default function Settings() {
   const { data, loading, error, reload } = useApi<S>('/settings');
   const [f, setF] = useState<S['settings'] & { name: string; city: string; coversPerDay: string; recipientsText: string } | null>(null);
   const [msg, setMsg] = useState<string | null>(null); const [busy, setBusy] = useState(false);
+  const [del, setDel] = useState(false); const [delPw, setDelPw] = useState(''); const [delConfirm, setDelConfirm] = useState('');
   const [preview, setPreview] = useState<{ subject: string; text: string; html: string } | null>(null);
   useEffect(() => { if (data) setF({ ...data.settings, name: data.restaurant.name, city: data.restaurant.city ?? '', coversPerDay: data.restaurant.coversPerDay ? String(data.restaurant.coversPerDay) : '', recipientsText: data.settings.digestRecipients.join(', ') }); }, [data]);
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data || !f) return null;
@@ -24,6 +25,13 @@ export default function Settings() {
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
   };
   const sendTest = async () => { setBusy(true); try { const r = await api<{ digest: string; recipients: string[]; transport?: string; error?: string }>('/digest/send-test', { method: 'POST' }); setMsg(r.digest === 'sent' ? `Mail envoyé à ${r.recipients.join(', ')}${r.transport === 'file' ? ' (mode développement : écrit dans .outbox)' : ''}.` : `Non envoyé : ${r.error ?? r.digest}`); } finally { setBusy(false); } };
+  const exportData = async () => {
+    const token = localStorage.getItem('afs_token'); const res = await fetch('/api/account/export', { headers: token ? { authorization: `Bearer ${token}` } : {}, credentials: 'include' });
+    const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `afrisupply-export-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(a.href);
+  };
+  const deleteAccount = async () => {
+    setBusy(true); try { await api('/account', { method: 'DELETE', json: { password: delPw, confirm: delConfirm } }); localStorage.removeItem('afs_token'); location.href = '/?compte=supprime'; } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
   const showPreview = async () => { setPreview(await api<{ subject: string; text: string; html: string }>('/digest/preview')); };
   return (
     <div className="animate-fade-up max-w-3xl space-y-6">
@@ -56,6 +64,16 @@ export default function Settings() {
         {preview && <div className="rounded-xl border border-stone-200 overflow-hidden"><p className="bg-stone-50 px-3 py-2 text-sm font-semibold">{preview.subject}</p><iframe title="Aperçu du mail" srcDoc={preview.html} sandbox="" className="h-[520px] w-full bg-white" /></div>}
       </section>
       <div className="flex justify-end"><button className="btn-primary" disabled={busy} onClick={() => void save()}><Save size={16} /> Enregistrer</button></div>
+      <section className="card space-y-3">
+        <h2 className="font-bold">Mes données (RGPD)</h2>
+        <p className="text-sm text-stone-600">Vos données vous appartiennent. Exportez tout (fournisseurs, prix, stock, commandes, ventes, recettes) en un fichier JSON, ou supprimez définitivement votre compte.</p>
+        <div className="flex flex-wrap gap-2"><button className="btn-ghost" onClick={() => void exportData()}><Download size={16} /> Exporter toutes mes données</button><button className="btn-ghost !text-red-700" onClick={() => setDel(true)}><Trash2 size={16} /> Supprimer mon compte</button></div>
+        {del && <div className="rounded-xl border border-red-200 bg-red-50 p-4 space-y-2">
+          <p className="text-sm font-semibold text-red-900">Suppression définitive — irréversible. Les restaurants dont vous êtes l’unique propriétaire seront effacés.</p>
+          <div className="grid gap-2 sm:grid-cols-2"><input className="input" type="password" placeholder="Votre mot de passe" value={delPw} onChange={(e) => setDelPw(e.target.value)} /><input className="input" placeholder="Tapez SUPPRIMER" value={delConfirm} onChange={(e) => setDelConfirm(e.target.value)} /></div>
+          <div className="flex gap-2"><button className="btn-primary !bg-red-600" disabled={busy || delConfirm !== 'SUPPRIMER' || !delPw} onClick={() => void deleteAccount()}>Supprimer définitivement</button><button className="btn-ghost" onClick={() => setDel(false)}>Annuler</button></div>
+        </div>}
+      </section>
     </div>
   );
 }

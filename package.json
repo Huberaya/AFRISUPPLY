@@ -19,7 +19,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "build:vercel": "npm run build -w apps/web && node api/build.mjs",
-    "build:api": "node api/build.mjs"
+    "build:api": "node api/build.mjs",
+    "deploy:migrate": "node scripts/deploy-migrate.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

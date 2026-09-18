@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm ci --include=dev",
-  "buildCommand": "npm run build -w apps/web",
+  "buildCommand": "node scripts/deploy-migrate.mjs && npm run build -w apps/web",
   "outputDirectory": "apps/web/dist",
   "framework": null,
   "functions": {
