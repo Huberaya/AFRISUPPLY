@@ -13,6 +13,7 @@ import { accountRoutes } from './routes/account.js';
 import { quickRoutes } from './routes/quick.js';
 import { billingRoutes, billingPublicRoutes, billingAdminRoutes } from './routes/billing.js';
 import { pilotRoutes, pilotPublicRoutes, pilotAdminRoutes } from './routes/pilots.js';
+import { prospectRoutes } from './routes/prospects.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
 import { vendorRoutes, vendorAdminRoutes } from './routes/vendor.js';
 import { statusRoutes } from './routes/status.js';
@@ -37,6 +38,7 @@ app.route('/api', vendorRoutes); // espace fournisseur : comptes sans restaurant
 app.route('/api', vendorAdminRoutes);
 app.route('/api', billingAdminRoutes);
 app.route('/api', pilotAdminRoutes);
+app.route('/api', prospectRoutes);
 app.route('/api', restaurantRoutes);
 app.route('/api', catalogRoutes);
 app.route('/api', intelligenceRoutes);

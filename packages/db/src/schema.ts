@@ -558,3 +558,21 @@ export const usageEvents = pgTable('usage_events', {
   meta: jsonb('meta').$type<Record<string, unknown>>(),
   at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('usage_restaurant_at_idx').on(t.restaurantId, t.at)]);
+
+// ---------- Prospection (admin) : restaurants et fournisseurs à démarcher ----------
+export const prospects = pgTable('prospects', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').notNull(),                     // restaurant | fournisseur
+  name: text('name').notNull(),
+  address: text('address'),
+  city: text('city'),
+  phone: text('phone'),
+  email: text('email'),
+  contactName: text('contact_name'),
+  status: text('status').default('a_contacter').notNull(), // a_contacter | contacte | rdv | interesse | converti | perdu
+  notes: text('notes'),
+  nextActionAt: date('next_action_at'),             // relance prévue
+  leadId: uuid('lead_id'),                          // si invitation pilote envoyée
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('prospects_kind_idx').on(t.kind, t.status)]);
