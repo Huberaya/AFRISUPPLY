@@ -36,9 +36,10 @@ prospectRoutes.post('/admin/prospects', async (c) => {
 
 /** Import en masse : lignes { kind, name, address, city, phone, email, contactName } (collées depuis un tableur). */
 prospectRoutes.post('/admin/prospects/import', async (c) => {
-  const { rows } = z.object({ rows: z.array(body.partial({ kind: true })).max(500) }).parse(await c.req.json());
+  const { rows } = z.object({ rows: z.array(z.record(z.unknown())).max(500) }).parse(await c.req.json());
   const kindDefault = (c.req.query('kind') as 'restaurant' | 'fournisseur' | undefined) ?? 'restaurant'; const db = await getDb();
-  const valid = rows.filter((r) => r.name && r.name.length >= 2).map((r) => ({ ...r, kind: r.kind ?? kindDefault, email: r.email || null }));
+  const rowSchema = body.partial({ kind: true });
+  const valid = rows.map((r) => rowSchema.safeParse({ ...r, email: (r.email as string) || undefined })).filter((p) => p.success).map((p) => ({ ...p.data, kind: p.data.kind ?? kindDefault, email: p.data.email || null }));
   if (!valid.length) return c.json({ imported: 0 });
   const ins = await db.insert(prospects).values(valid).returning({ id: prospects.id });
   return c.json({ imported: ins.length, ignored: rows.length - valid.length });
