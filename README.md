@@ -11,7 +11,7 @@ Voir aussi : [`ROADMAP_MISE_SUR_LE_MARCHE.md`](./ROADMAP_MISE_SUR_LE_MARCHE.md) 
 
 ## Déploiement
 
-Neon + Render (API) + Vercel (web) : voir **`docs/DEPLOIEMENT.md`** (`render.yaml`, `apps/web/vercel.json`).
+Tout sur Vercel (web statique + API en fonction serverless `api/index.ts`) + Neon : voir **`docs/DEPLOIEMENT.md`** (`vercel.json` racine, cron intégré).
 
 ## Démarrage en 2 minutes (sans rien installer d'autre que Node 20)
 

@@ -49,6 +49,7 @@ MAIL_FROM="AFRISUPPLY <bonjour@afrisupply.fr>"
 ```
 
 ## Planification
+- **Vercel Cron (recommandé, déjà dans `vercel.json`)** : `GET /api/jobs/daily` à 04:30 UTC, secret envoyé automatiquement en `Authorization: Bearer $CRON_SECRET`.
 - **GitHub Actions** : copier `docs/cron-daily.yml.example` vers `.github/workflows/cron-daily.yml` et créer les secrets `API_URL` + `CRON_SECRET`.
 - **crontab** : `30 6 * * * curl -sf -X POST https://api.afrisupply.fr/api/jobs/daily -H "X-Cron-Secret: $CRON_SECRET"`
 - **Vercel / Render cron** : même appel HTTP.

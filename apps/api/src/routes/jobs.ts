@@ -1,5 +1,5 @@
 // Déclencheurs de jobs + réglages de notifications.
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { getDb, restaurants } from '@afrisupply/db';
@@ -10,14 +10,19 @@ import { mailerConfig } from '../lib/mailer.js';
 
 export const jobsRoutes = new Hono<Env>();
 
-/** Cron externe : POST /api/jobs/daily avec X-Cron-Secret (ou ?secret=). */
-jobsRoutes.post('/jobs/daily', async (c) => {
+/** Cron externe : POST (GitHub Actions/crontab) ou GET (Vercel Cron) /api/jobs/daily.
+ *  Secret accepté via X-Cron-Secret, Authorization: Bearer <CRON_SECRET> (convention Vercel) ou ?secret=. */
+const runDaily = async (c: Context<Env>) => {
   const secret = process.env.CRON_SECRET;
-  const given = c.req.header('x-cron-secret') ?? c.req.query('secret');
-  if (!secret || given !== secret) return c.json({ error: 'Secret cron invalide' }, 401);
+  const auth = c.req.header('authorization');
+  const given = c.req.header('x-cron-secret') ?? (auth?.startsWith('Bearer ') ? auth.slice(7) : undefined) ?? c.req.query('secret');
+  if (!secret) return c.json({ error: 'CRON_SECRET non configuré' }, 503);
+  if (given !== secret) return c.json({ error: 'Secret cron invalide' }, 401);
   const dryRun = c.req.query('dryRun') === '1';
   return c.json(await runDailyForAll({ dryRun }));
-});
+};
+jobsRoutes.post('/jobs/daily', runDaily);
+jobsRoutes.get('/jobs/daily', runDaily);
 
 // --- réglages & prévisualisation, côté restaurant connecté (monté séparément, après les routeurs protégés)
 export const settingsRoutes = new Hono<Env>();

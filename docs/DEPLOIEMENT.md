@@ -1,41 +1,53 @@
-# Déploiement — Neon + Render (API) + Vercel (web)
+# Déploiement — Tout sur Vercel + Neon
 
 ```
- navigateur ──► Vercel (apps/web, statique)  ──rewrite /api/*──►  Render (apps/api, Hono/Node)  ──►  Neon (Postgres)
-                                                                       ▲
- GitHub Actions cron (06:30) ── POST /api/jobs/daily (X-Cron-Secret) ──┘
+ navigateur ──► Vercel ──┬── /            fichiers statiques (apps/web, Vite)
+                         └── /api/*       fonction serverless Node (api/index.ts → apps/api Hono)  ──► Neon (Postgres)
+ Vercel Cron (06:30 Paris) ── GET /api/jobs/daily (Authorization: Bearer CRON_SECRET) ──┘
 ```
-Le front appelle `/api` en relatif : Vercel réécrit vers Render → même origine, pas de CORS ni de cookie tiers.
+Un seul projet Vercel, un seul `git push`. Même schéma que vos projets Supabase+Vercel, Neon remplaçant la base et `apps/api` remplaçant Auth/PostgREST/RLS.
 
-## 1. Neon (fait le 18/09/2026)
-- Projet Neon eu-central-1, base `neondb`, **migrations Drizzle appliquées** (`0000_init`, `0001_leads`) et **démo « Chez Awa » seedée** (awa@chezawa.fr / demo1234).
-- Utiliser toujours l'URL **pooler** (`…-pooler…neon.tech`) avec `sslmode=require` (`channel_binding=require` accepté).
-- ⚠️ Le mot de passe a transité par le chat : **Neon → Roles → neondb_owner → Reset password**, puis mettre à jour `DATABASE_URL` sur Render.
-- Rejouer localement : `DATABASE_URL=… npm run db:migrate` / `npm run db:seed`. L'API applique aussi les migrations au démarrage (`AUTO_MIGRATE=true`).
+## 1. Neon — fait le 18/09/2026
+Migrations Drizzle appliquées et démo « Chez Awa » seedée (awa@chezawa.fr / demo1234). Toujours utiliser l'URL **pooler** avec `sslmode=require`.
+⚠️ Le mot de passe a transité par le chat : **Neon → Roles → neondb_owner → Reset password**, puis mettre à jour la variable sur Vercel.
 
-## 2. Render — API
-1. Render → **New → Blueprint** → dépôt `Huberaya/AFRISUPPLY` (lit `render.yaml`, région Frankfurt, health `/api/health`).
-2. Renseigner les variables `sync: false` : `DATABASE_URL` (Neon), `APP_URL` (URL Vercel, à compléter après l'étape 3), `ADMIN_EMAILS`, `RESEND_API_KEY` (optionnel), `LLM_API_KEY` (optionnel). `JWT_SECRET` et `CRON_SECRET` sont générés par Render — **copier `CRON_SECRET`** pour l'étape 4.
-3. Vérifier `https://afrisupply-api.onrender.com/api/health` → `{"ok":true,"db":"neon"}`.
-   Si vous nommez le service autrement, adapter la destination dans `apps/web/vercel.json`.
+## 2. Vercel — 5 minutes
+1. **Add New Project** → dépôt `Huberaya/AFRISUPPLY` → Root Directory : **laisser la racine** (le `vercel.json` racine gère build web + fonction API). Framework preset : *Other*.
+2. **Environment Variables** (Production + Preview) :
 
-Plan *free* : le service s'endort après 15 min ; le premier appel du matin (cron) prend ~30 s — acceptable ; pour les démos clients, préférer *starter*.
+| Variable | Valeur |
+|---|---|
+| `DATABASE_URL` | chaîne Neon pooler |
+| `JWT_SECRET` | `openssl rand -hex 32` |
+| `CRON_SECRET` | `openssl rand -hex 24` — Vercel l'envoie automatiquement au cron en `Authorization: Bearer` |
+| `APP_URL` | `https://<votre-projet>.vercel.app` (liens du mail) |
+| `ADMIN_EMAILS` | votre e-mail (liste des leads) |
+| `RESEND_API_KEY`, `MAIL_FROM` | optionnels — sans clé, aucun mail ne part |
+| `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | optionnels (assistant) |
+| `NODE_ENV` | `production` |
 
-## 3. Vercel — site + app web
-1. Vercel → **Add New Project** → même dépôt → **Root Directory : `apps/web`** (le `vercel.json` fait l'install/build depuis la racine du monorepo).
-2. Aucune variable requise. Déployer, puis reporter l'URL obtenue dans `APP_URL` sur Render (liens du mail du matin) et redéployer l'API.
-3. Domaine : `app.afrisupply.fr` → Vercel ; l'API peut rester sur `*.onrender.com` (elle n'est appelée que via le rewrite).
+3. **Deploy**. Vérifier `https://<projet>.vercel.app/api/health` → `{"ok":true,"db":"neon"}`, puis le site `/` et la connexion démo sur `/app`.
+4. Onglet **Cron Jobs** : `/api/jobs/daily` à `30 4 * * *` (UTC) apparaît ; bouton *Run* pour tester. Les logs sont dans *Logs* → fonction `api/index`.
 
-## 4. Cron quotidien (GitHub Actions)
-Copier `docs/cron-daily.yml.example` → `.github/workflows/cron-daily.yml` (depuis l'interface GitHub) et créer les secrets **`API_URL`** = `https://afrisupply-api.onrender.com` et **`CRON_SECRET`** (valeur Render). Test manuel : onglet Actions → *Daily digest* → *Run workflow*.
+## 3. Migrations futures
+La fonction serverless **n'applique pas** les migrations au démarrage (cold start). Après un changement de schéma :
+```bash
+npm run db:generate                      # génère packages/db/drizzle/00xx_*.sql
+DATABASE_URL=… npm run db:migrate        # applique sur Neon, avant/après le push
+```
+(Option : ajouter `npm run db:migrate` au `buildCommand` de `vercel.json` avec `DATABASE_URL` disponible au build.)
+
+## 4. Limites Vercel à connaître
+- Fonction : 60 s max (Hobby) / 300 s (Pro) — le job quotidien prend ~8 s par restaurant : OK jusqu'à ~6 restaurants en Hobby, passer en Pro ou appeler `?restaurantId=` par restaurant au-delà.
+- Cron Hobby : précision « dans l'heure » ; Pro : à la minute.
+- Le mode « mail fichier » (`.outbox/`) n'écrit pas sur Vercel (système en lecture seule) → configurer Resend.
 
 ## 5. Checklist mise en prod
 - [ ] Mot de passe Neon régénéré, PAT GitHub révoqué
-- [ ] `SEED_DEMO=false` en prod (déjà dans le blueprint) — la démo existe déjà en base
-- [ ] `RESEND_API_KEY` + domaine vérifié chez Resend pour `MAIL_FROM` (sinon les mails ne partent pas : mode fichier)
-- [ ] `ADMIN_EMAILS` = votre e-mail pour voir les leads du site (`GET /api/admin/leads`)
-- [ ] Sauvegardes : Neon conserve l'historique (PITR) ; activer 7 j minimum dans Settings → Storage
-- [ ] Changer le mot de passe du compte démo si l'URL est publique
+- [ ] Domaine `app.afrisupply.fr` ajouté au projet Vercel, `APP_URL` mis à jour
+- [ ] Resend : domaine vérifié pour `MAIL_FROM`
+- [ ] Mot de passe du compte démo changé si l'URL est publique
+- [ ] Neon : rétention PITR ≥ 7 jours
 
 ## Vérifié depuis l'environnement de dev
-API lancée avec `DATABASE_URL` Neon : `/api/health` → `db: neon`, login démo, dashboard, `POST /api/jobs/daily?dryRun=1` → 33 alertes calculées, digest « sent » (dry-run) en ~8 s.
+Handler `api/index.ts` appelé comme le ferait Vercel (Request → Response), connecté à Neon : `/api/health` → `db: neon`, login démo, dashboard, cron sans secret → 401, cron `Authorization: Bearer` → 200 en 8 s.
