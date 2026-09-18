@@ -5,6 +5,7 @@ import { authRoutes } from './routes/auth.js';
 import { restaurantRoutes } from './routes/restaurant.js';
 import { catalogRoutes } from './routes/catalog.js';
 import { intelligenceRoutes } from './routes/intelligence.js';
+import { manageRoutes } from './routes/manage.js';
 import { isNeon } from '@afrisupply/db';
 
 export const app = new Hono();
@@ -16,6 +17,7 @@ app.route('/api/auth', authRoutes);
 app.route('/api', restaurantRoutes);
 app.route('/api', catalogRoutes);
 app.route('/api', intelligenceRoutes);
+app.route('/api', manageRoutes);
 
 app.notFound((c) => c.json({ error: 'Route inconnue' }, 404));
 app.onError((err, c) => { console.error(err); return c.json({ error: 'Erreur serveur', detail: process.env.NODE_ENV === 'production' ? undefined : String(err) }, 500); });

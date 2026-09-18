@@ -4,6 +4,7 @@ import { CheckCircle2, AlertTriangle } from 'lucide-react';
 import { api, fmtEur, fmtQty } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, StatusPill } from '../components/ui';
+import { PriceHistory } from '../components/PriceHistory';
 
 type Offer = { offerId: string; supplierId: string; supplierName: string; packLabel: string; packQty: number; packPrice: number; unitPrice: number; inStock: boolean; leadTimeHours: number; deliveryFee: number; reliabilityPct: number; score: number; strengths: string[]; weaknesses: string[] };
 type D = { product: { name: string; baseUnit: string }; stock: { quantity: number; daysLeft: number | null; status: 'ok' | 'bas' | 'critique'; targetLevel: number | null } | null; neededQty: number; ranked: Offer[]; recommended?: Offer; headline: string; justification: string[] };
@@ -59,8 +60,9 @@ export default function Compare() {
             ))}
           </tbody>
         </table>
-        {data.ranked.length === 0 && <p className="p-6 text-sm text-stone-500">Aucun fournisseur ne propose ce produit. Ajoutez une offre depuis la fiche d’un fournisseur.</p>}
+        {data.ranked.length === 0 && <p className="p-6 text-sm text-stone-500">Aucun fournisseur ne propose ce produit. Ajoutez un prix depuis la fiche d’un <Link to="/app/fournisseurs" className="underline">fournisseur</Link>.</p>}
       </div>
+      <PriceHistory productId={productId!} unit={unit} />
     </div>
   );
 }

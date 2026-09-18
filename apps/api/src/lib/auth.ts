@@ -9,7 +9,7 @@ import { getDb, users, restaurantMembers } from '@afrisupply/db';
 const secret = new TextEncoder().encode(process.env.JWT_SECRET ?? 'dev-secret-change-me-in-production');
 const TOKEN_TTL = '30d';
 
-export type AuthUser = { id: string; email: string; fullName: string };
+export type AuthUser = { id: string; email: string; fullName: string; phone?: string | null };
 
 export async function hashPassword(pw: string) { return bcrypt.hash(pw, 10); }
 export async function verifyPassword(pw: string, hash: string) { return bcrypt.compare(pw, hash); }

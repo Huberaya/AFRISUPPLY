@@ -1,20 +1,25 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Star, Clock, Truck } from 'lucide-react';
+import { Star, Clock, Truck, Plus } from 'lucide-react';
+import { Modal } from '../components/Modal';
+import { SupplierForm } from '../components/SupplierForm';
 import { fmtEur, CATEGORY_LABEL } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox } from '../components/ui';
 
-type S = { id: string; name: string; city: string | null; categories: string[]; leadTimeHours: number; minOrderEur: string; deliveryFeeEur: string; rating: string | null; preferredChannel: string; offerCount: number; stats: { delivered: number; late: number; discrepancies: number; spent: number; reliability: number } };
+type S = { id: string; name: string; city: string | null; categories: string[]; leadTimeHours: number; minOrderEur: string; deliveryFeeEur: string; rating: string | null; preferredChannel: string; isActive?: boolean; offerCount: number; stats: { delivered: number; late: number; discrepancies: number; spent: number; reliability: number } };
 
 export default function Suppliers() {
-  const { data, loading, error } = useApi<{ suppliers: S[] }>('/suppliers');
+  const { data, loading, error, reload } = useApi<{ suppliers: S[] }>('/suppliers');
+  const [creating, setCreating] = useState(false);
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />;
   const best = [...(data?.suppliers ?? [])].sort((a, b) => b.stats.reliability - a.stats.reliability)[0];
   return (
     <div className="animate-fade-up">
-      <PageTitle title="🚚 Fournisseurs" subtitle="Fiabilité calculée sur vos livraisons réelles : retards et écarts." />
+      <PageTitle title="🚚 Fournisseurs" subtitle="Fiabilité calculée sur vos livraisons réelles : retards et écarts." action={<button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> Nouveau fournisseur</button>} />
+      {creating && <Modal title="Nouveau fournisseur" subtitle="Vous pourrez ensuite saisir ses prix depuis sa fiche." onClose={() => setCreating(false)}><SupplierForm onDone={() => { setCreating(false); void reload(); }} /></Modal>}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {data?.suppliers.map((s) => (
+        {data?.suppliers.filter((s) => s.isActive !== false).map((s) => (
           <Link key={s.id} to={`/app/fournisseurs/${s.id}`} className="card hover:shadow-card-hover transition block">
             <div className="flex items-start justify-between gap-2">
               <div><h3 className="font-bold text-stone-900">{s.name}</h3><p className="text-xs text-stone-500">{s.city ?? '—'} · {s.offerCount} produits</p></div>

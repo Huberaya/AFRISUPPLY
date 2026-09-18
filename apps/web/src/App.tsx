@@ -21,6 +21,7 @@ const Import = lazy(() => import('./pages/Import'));
 const Forecast = lazy(() => import('./pages/Forecast'));
 const SmartCart = lazy(() => import('./pages/SmartCart'));
 const Sales = lazy(() => import('./pages/Sales'));
+const Discrepancies = lazy(() => import('./pages/Discrepancies'));
 
 // Port de ethimarket/src/components/ProtectedRoute.tsx
 function Protected() {
@@ -46,6 +47,7 @@ export default function App() {
                 <Route path="stock" element={<Stock />} />
                 <Route path="stock/prevision" element={<Forecast />} />
                 <Route path="achats/panier" element={<SmartCart />} />
+                <Route path="achats/ecarts" element={<Discrepancies />} />
                 <Route path="ventes" element={<Sales />} />
                 <Route path="fournisseurs" element={<Suppliers />} />
                 <Route path="fournisseurs/:id" element={<SupplierDetail />} />

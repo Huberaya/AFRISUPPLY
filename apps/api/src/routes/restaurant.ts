@@ -118,7 +118,7 @@ restaurantRoutes.get('/stock', async (c) => {
     return {
       id: item.id, productId: product.id, name: product.name, category: product.category, unit: product.baseUnit,
       quantity: s.quantity, criticalLevel: s.criticalLevel, targetLevel: s.targetLevel, avgDailyUse: s.avgDailyUse,
-      daysLeft: daysOfStock(s), status: stockStatus(s), preferredSupplier: supplierName, lastCountedAt: item.lastCountedAt,
+      daysLeft: daysOfStock(s), status: stockStatus(s), preferredSupplier: supplierName, preferredSupplierId: item.preferredSupplierId, lastCountedAt: item.lastCountedAt,
     };
   }).sort((a, b) => ({ critique: 0, bas: 1, ok: 2 }[a.status] - { critique: 0, bas: 1, ok: 2 }[b.status]) || a.name.localeCompare(b.name));
   return c.json({ items: out });
@@ -288,6 +288,13 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
     const { deliveryDiscrepancies } = await import('@afrisupply/db');
     await db.insert(deliveryDiscrepancies).values(discrepancies.map((d) => ({ deliveryId: delivery.id, orderLineId: d.lineId, orderedQty: d.ordered.toFixed(3), receivedQty: d.received.toFixed(3), reason: d.ordered > d.received ? 'manquant' : 'excédent', claimMessage })));
     await db.update(deliveries).set({ hasDiscrepancy: true }).where(eq(deliveries.id, delivery.id));
+    const missingValue = discrepancies.reduce((a, d) => { const l = lines.find((x) => x.line.id === d.lineId); return a + Math.max(0, d.ordered - d.received) * n(l?.line.unitPriceEur); }, 0);
+    await db.insert(alerts).values({
+      restaurantId: rid, dedupeKey: `ecart:${delivery.id}`, kind: 'ecart_livraison', severity: 'orange', supplierId: order.supplierId,
+      title: `Écart sur la livraison ${order.reference}`,
+      message: `${discrepancies.length} ligne${discrepancies.length > 1 ? 's' : ''} en écart chez ${sup?.name ?? 'le fournisseur'}${missingValue > 0 ? ` (~${missingValue.toFixed(2).replace('.', ',')} € manquants)` : ''}. Réclamation pré-rédigée disponible.`,
+      actionUrl: '/app/achats/ecarts', payload: { discrepancies, missingValue },
+    }).onConflictDoNothing();
   }
   const allReceived = discrepancies.every((d) => d.received >= d.ordered);
   await db.update(orders).set({ status: allReceived ? 'livree' : 'livree_partiel', deliveredAt: new Date() }).where(eq(orders.id, order.id));

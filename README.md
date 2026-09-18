@@ -73,6 +73,10 @@ Isolation multi-tenant : chaque table métier porte `restaurant_id`, et l'API fi
 | `GET/PUT/DELETE /reorder-rules[/:itemId]` `POST /reorder-rules/run` | **Auto-reorder** (règles seuil → commande préparée + alerte, jamais d’envoi) |
 | `GET /sales?day=` `POST /sales` | Ventes du jour par plat (déduction stock optionnelle) |
 | `GET /assistant/examples` `POST /assistant/ask` | **Assistant IA** : intent + chiffres locaux, reformulation LLM si `LLM_API_KEY` |
+| `PUT/DELETE /suppliers/:id` `POST /suppliers/:id/offers` `PUT/DELETE /offers/:id` | **Gestion fournisseurs & prix** (historique alimenté) |
+| `POST/PUT/DELETE /recipes[/:id]` `PUT/DELETE /stock/:itemId` `POST /stock/inventory` | Recettes, réglages d'article, inventaire groupé |
+| `GET /orders/:id/message` `PUT /orders/:id` `PUT /orders/:id/lines` | Message WhatsApp/e-mail prêt à envoyer, statut, lignes, annulation |
+| `GET /discrepancies` `POST /discrepancies/:id/resolve` `GET /prices/:productId/history` | Écarts de livraison, historique de prix |
 | `GET /recipes` | **Coût matière**, marge, prix conseillé, ingrédients qui dérivent |
 | `POST /alerts/refresh` `GET /alerts` `POST /alerts/:id/read` | **Moteur d'alertes** : rupture, stock bas, hausse de prix, opportunité |
 
@@ -116,6 +120,6 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - [x] Dashboard, Stock, Fournisseurs, Comparateur, Commandes + Réception, Recettes, Alertes
 - [x] Tests des moteurs, CI GitHub Actions, build prod
 - [x] Chantier 2 : référentiel **324 produits** avec alias, **31 recettes types**, onboarding « Configurer ma carte », **import CSV** fournisseurs/prix avec aperçu, export — voir `docs/CHANTIER_2_DONNEES.md`
-- [ ] Chantier 3 : formulaires création produit/offre/recette, saisie ventes du jour, inventaire mobile
+- [x] Chantier 3 : formulaires fournisseur/prix/recette, réglages & inventaire stock, envoi de commande WhatsApp/e-mail, modification/annulation, écarts de livraison, historique de prix — voir `docs/CHANTIER_3_GESTION.md`
 - [x] Chantier 4 : prévision 7 j explicable, panier intelligent multi-fournisseurs, auto-reorder (préparation seule), assistant « Demander à l’IA » (moteur local + LLM optionnel) — voir `docs/CHANTIER_4_INTELLIGENCE.md`
 - [ ] Chantier 4 bis : e-mail quotidien / notifications
