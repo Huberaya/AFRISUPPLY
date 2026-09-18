@@ -8,3 +8,4 @@ dist
 .DS_Store
 docs_*.png
 .outbox/
+api/index.js

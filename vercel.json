@@ -1,13 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm ci --include=dev",
-  "buildCommand": "npm run build -w apps/web && npm run typecheck -w apps/api",
+  "buildCommand": "npm run build -w apps/web && node api/build.mjs",
   "outputDirectory": "apps/web/dist",
   "framework": null,
   "functions": {
-    "api/index.ts": {
+    "api/index.js": {
       "maxDuration": 60,
-      "memory": 1024
+      "memory": 1024,
+      "includeFiles": "packages/db/drizzle/**"
     }
   },
   "rewrites": [

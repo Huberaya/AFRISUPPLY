@@ -1,7 +1,7 @@
 // Point d'entrée Vercel (fonction serverless Node) : toute l'API Hono sous /api/*.
 // Les migrations ne sont pas exécutées ici (cold start) : lancer `npm run db:migrate` avant déploiement (voir docs/DEPLOIEMENT.md).
 import { handle } from 'hono/vercel';
-import { app } from '../apps/api/src/app.js';
+import { app } from '../../apps/api/src/app.js';
 
 export const config = { runtime: 'nodejs', maxDuration: 60 };
 
