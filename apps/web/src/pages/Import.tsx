@@ -11,7 +11,7 @@ const SAMPLE = `fournisseur;produit;conditionnement;prix;telephone;ville;delai_h
 export default function Import() {
   const [csv, setCsv] = useState(''); const [defaultSupplier, setDefaultSupplier] = useState('');
   const [preview, setPreview] = useState<Res | null>(null); const [result, setResult] = useState<Res | null>(null); const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const run = async (dryRun: boolean) => { setBusy(true); setErr(null); try { const r = await api<Res>('/import/suppliers', { method: 'POST', json: { csv, dryRun, defaultSupplier: defaultSupplier || undefined } }); dryRun ? setPreview(r) : setResult(r); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); } };
+  const run = async (dryRun: boolean) => { setBusy(true); setErr(null); try { const r = await api<Res>('/import/suppliers', { method: 'POST', json: { csv, dryRun, defaultSupplier: defaultSupplier || undefined } }); if (dryRun) setPreview(r); else setResult(r); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); } };
   const onFile = (f: File | undefined) => { if (!f) return; const r = new FileReader(); r.onload = () => { setCsv(String(r.result)); setPreview(null); setResult(null); }; r.readAsText(f, 'utf-8'); };
   const tone = { ok: 'bg-emerald-100 text-emerald-800', nouveau_produit: 'bg-violet-100 text-violet-800', erreur: 'bg-red-100 text-red-800' };
   return (

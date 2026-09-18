@@ -13,7 +13,7 @@ export default function Onboarding() {
   const { data, loading, error } = useApi<{ templates: T[]; regions: string[] }>('/onboarding/templates');
   const [sel, setSel] = useState<Set<string>>(new Set()); const [prices, setPrices] = useState<Record<string, number>>({});
   const [region, setRegion] = useState(''); const [busy, setBusy] = useState(false); const [done, setDone] = useState<{ createdRecipes: number; trackedProducts: number; totalProducts: number } | null>(null);
-  const toggle = (n: string) => setSel((s) => { const c = new Set(s); c.has(n) ? c.delete(n) : c.add(n); return c; });
+  const toggle = (n: string) => setSel((s) => { const c = new Set(s); if (c.has(n)) c.delete(n); else c.add(n); return c; });
   const list = (data?.templates ?? []).filter((t) => !region || t.region.includes(region));
   const products = useMemo(() => { const m = new Map<string, string>(); for (const t of data?.templates ?? []) if (sel.has(t.name)) for (const i of t.ingredients) m.set(i.product, i.unit); return [...m.keys()]; }, [sel, data]);
   const apply = async () => { setBusy(true); try { setDone(await api('/onboarding/apply', { method: 'POST', json: { templates: [...sel], prices } })); } finally { setBusy(false); } };
