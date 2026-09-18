@@ -11,6 +11,7 @@ import { buildDigest, type DigestInput } from '../lib/digest.js';
 import { sendMail } from '../lib/mailer.js';
 import { sweepTrials, billingEnforced } from '../lib/billing.js';
 import { invoiceCommissions } from '../routes/billing.js';
+import { buildWeeklyPilotReport } from '../routes/pilots.js';
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -117,6 +118,11 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
     if (now.getUTCDate() === 1) { const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)); const inv = await invoiceCommissions(prev.toISOString().slice(0, 7), { dryRun: opts.dryRun }); billing.commissionInvoices = inv.invoices.length; }
   } catch (e) { billing = { error: String(e) }; void captureException(e as Error, { route: '/api/jobs/daily#billing' }); }
   (summary as Record<string, unknown>).billing = billing;
+  // Chantier 7 : rapport pilotes chaque lundi aux admins
+  try {
+    const now = opts.now ?? new Date(); const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (now.getUTCDay() === 1 && admins.length && !opts.dryRun) { const rep = await buildWeeklyPilotReport(now); for (const to of admins) await sendMail({ to, subject: `📊 Pilotes AFRISUPPLY — ${rep.pilots} restaurants, semaine du ${now.toLocaleDateString('fr-FR')}`, text: rep.text, html: rep.html, tags: { type: 'pilot-report' } }); (summary as Record<string, unknown>).pilotReport = rep.pilots; }
+  } catch (e) { void captureException(e as Error, { route: '/api/jobs/daily#pilots' }); }
   const finishedAt = new Date();
   if (!opts.dryRun) {
     try { await db.insert(jobRuns).values({ job: 'daily', status: errors.length === 0 ? 'ok' : errors.length === results.length ? 'error' : 'partial', startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors.map((e) => `${e.name}: ${e.error}`).join(' | ') || null }); } catch (e) { console.error('[jobs] job_runs', e); }

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { RefreshCw, ArrowRight } from 'lucide-react';
 import { api, fmtEur, fmtQty, fmtDate, STATUS_LABEL } from '../lib/api';
 import { useApi } from '../lib/useApi';
+import { OnboardingChecklist } from '../components/Pilot';
 import { PageTitle, Stat, SeverityCard, Loader, ErrorBox, StatusPill, Empty } from '../components/ui';
 
 type Alert = { id: string; kind: string; severity: 'red' | 'orange' | 'green' | 'blue'; title: string; message: string; productId: string | null; actionUrl: string | null; isRead: boolean };
@@ -31,6 +32,8 @@ export default function Dashboard() {
     <div className="space-y-8 animate-fade-up">
       <PageTitle title={`Bonjour 👋 — ${data.restaurant.name}`} subtitle="Votre situation aujourd’hui"
         action={<button onClick={refreshAlerts} className="btn-ghost" disabled={refreshing}><RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} /> Actualiser l’analyse</button>} />
+
+      <OnboardingChecklist />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Stock disponible" value={<>🟢 {stock.ok}</>} hint="produits au niveau" tone="good" />

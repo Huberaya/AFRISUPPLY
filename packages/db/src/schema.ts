@@ -59,6 +59,8 @@ export const restaurants = pgTable('restaurants', {
   subscriptionStatus: text('subscription_status').default('trialing').notNull(), // trialing | active | past_due | canceled | expired
   currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
   founder: boolean('founder').default(false).notNull(),        // offre pilote fondateur (−50 % à vie)
+  inviteCode: text('invite_code'),                            // code d'invitation pilote utilisé à l'inscription
+  onboardingDone: jsonb('onboarding_done').$type<string[]>().default([]).notNull(), // étapes de la checklist « semaine 1 » cochées
   settings: jsonb('settings').$type<RestaurantSettings>().default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -330,6 +332,9 @@ export const leads = pgTable('leads', {
   utm: jsonb('utm').$type<Record<string, string>>(),
   status: leadStatus('status').default('nouveau').notNull(),
   notes: text('notes'),
+  inviteCode: text('invite_code'),                 // chantier 7 : code d'invitation pilote envoyé
+  invitedAt: timestamp('invited_at', { withTimezone: true }),
+  restaurantId: uuid('restaurant_id'),             // rempli quand le lead s'inscrit avec son code
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('leads_created_idx').on(t.createdAt)]);
 
@@ -531,3 +536,25 @@ export const commissionInvoices = pgTable('commission_invoices', {
   status: text('status').default('emise').notNull(), // emise | payee | envoyee_par_mail
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [uniqueIndex('commission_invoices_vendor_period').on(t.vendorId, t.period)]);
+
+// ---------- Chantier 7 : pilotes — retours utilisateurs et usage ----------
+export const feedback = pgTable('feedback', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  kind: text('kind').notNull(),                      // nps | bug | idee | question
+  score: integer('score'),                           // NPS 0–10
+  message: text('message'),
+  page: text('page'),
+  status: text('status').default('nouveau').notNull(), // nouveau | traite
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('feedback_restaurant_idx').on(t.restaurantId, t.createdAt)]);
+
+export const usageEvents = pgTable('usage_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id'),
+  event: text('event').notNull(),                    // page.<route> | action.<nom>
+  meta: jsonb('meta').$type<Record<string, unknown>>(),
+  at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('usage_restaurant_at_idx').on(t.restaurantId, t.at)]);

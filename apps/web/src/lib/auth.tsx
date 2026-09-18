@@ -2,13 +2,13 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, tokenStore } from './api';
 
-export type User = { id: string; email: string; fullName: string };
+export type User = { id: string; email: string; fullName: string; isAdmin?: boolean };
 export type Restaurant = { id: string; name: string; city: string | null; plan: string; trialEndsAt: string | null; coversPerDay: number | null; role: string };
 
 type Ctx = {
   user: User | null; restaurants: Restaurant[]; restaurant: Restaurant | null; loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (p: { email: string; password: string; fullName: string; restaurantName: string; city?: string; coversPerDay?: number }) => Promise<void>;
+  register: (p: { email: string; password: string; fullName: string; restaurantName: string; city?: string; coversPerDay?: number; inviteCode?: string }) => Promise<void>;
   logout: () => Promise<void>; refresh: () => Promise<void>; switchRestaurant: (id: string) => void;
 };
 const AuthContext = createContext<Ctx | undefined>(undefined);

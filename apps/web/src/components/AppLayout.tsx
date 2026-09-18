@@ -1,8 +1,9 @@
 // Port de ethimarket/src/components/DashboardLayout.tsx — navigation à 6 entrées du concept AFRISUPPLY
 import { useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck } from 'lucide-react';
 import { api } from '../lib/api';
+import { FeedbackWidget, UsageBeacon } from './Pilot';
 import { useAuth } from '../lib/auth';
 import { useApi } from '../lib/useApi';
 
@@ -60,6 +61,10 @@ export default function AppLayout() {
             {label === 'Accueil' && unread > 0 && <span className="ml-auto rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">{unread}</span>}
           </NavLink>
         ))}
+        {user?.isAdmin && <>
+          <p className="px-3 pt-4 pb-1 text-[11px] uppercase tracking-wide text-stone-500">Admin AFRISUPPLY</p>
+          {[['/app/admin/pilotes', 'Cockpit pilotes'], ['/app/admin/abonnements', 'Abonnements'], ['/app/admin/fournisseurs', 'Fournisseurs plateforme']].map(([to, label]) => <NavLink key={to} to={to} onClick={() => setOpen(false)} className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${isActive ? 'bg-brand-700 text-white' : 'hover:bg-stone-800 text-stone-300'}`}><ShieldCheck size={18} /> {label}</NavLink>)}
+        </>}
       </nav>
       <div className="border-t border-stone-800 px-4 py-4">
         <p className="text-sm font-semibold text-white truncate">{user?.fullName}</p>
@@ -85,6 +90,7 @@ export default function AppLayout() {
         </header>
         <TrialBanner />
         <main id="main-content" className="px-4 py-6 lg:px-8 lg:py-8 max-w-7xl"><Outlet /></main>
+        <FeedbackWidget /><UsageBeacon />
       </div>
     </div>
   );
