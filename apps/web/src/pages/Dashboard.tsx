@@ -18,7 +18,7 @@ export default function Dashboard() {
   const { data, loading, error, reload } = useApi<Dash>('/dashboard');
   const [refreshing, setRefreshing] = useState(false);
   const refreshAlerts = async () => { setRefreshing(true); try { await api('/alerts/refresh', { method: 'POST' }); await reload(); } finally { setRefreshing(false); } };
-  useEffect(() => { if (data && data.alerts.length === 0) void refreshAlerts(); /* eslint-disable-next-line */ }, [data?.alerts.length === 0]);
+  useEffect(() => { if (data && data.alerts.length === 0) void refreshAlerts();   }, [data?.alerts.length === 0]);
   const markRead = async (id: string) => { await api(`/alerts/${id}/read`, { method: 'POST' }); await reload(); };
 
   if (loading && !data) return <Loader />;

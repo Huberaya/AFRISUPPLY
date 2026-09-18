@@ -29,7 +29,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch { tokenStore.clear(); setUser(null); setRestaurants([]); }
     finally { setLoading(false); }
   };
-  useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { void refresh();   }, []);
 
   const login = async (email: string, password: string) => {
     const r = await api<{ token: string }>('/auth/login', { method: 'POST', json: { email, password } });

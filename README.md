@@ -24,7 +24,7 @@ Sans `DATABASE_URL`, l'API utilise **PGlite** (Postgres WASM embarqué dans `pac
 ## Passer sur Neon
 
 1. Créer un projet Neon → copier la chaîne de connexion **pooler**.
-2. `cp .env.example .env` puis renseigner `DATABASE_URL` et `JWT_SECRET`.
+2. `cp .env.example .env` puis renseigner `DATABASE_URL` et `JWT_SECRET`. Optionnel : `LLM_API_KEY` (+ `LLM_BASE_URL`, `LLM_MODEL`, API compatible OpenAI) pour que l’assistant reformule ses réponses — sans clé, tout fonctionne en local.
 3. `npm run db:migrate && npm run db:seed` (ou laisser `AUTO_MIGRATE=true` / `SEED_DEMO=true`).
 
 Le code métier ne change pas : `getDb()` retourne le même client Drizzle dans les deux cas.
@@ -68,6 +68,11 @@ Isolation multi-tenant : chaque table métier porte `restaurant_id`, et l'API fi
 | `GET /catalog?q=&category=` `POST /catalog/products` `POST /catalog/track` | Catalogue 324 refs (recherche par alias), produit privé, suivi stock |
 | `GET /onboarding/templates` `POST /onboarding/apply` | Recettes types → recettes + stock |
 | `POST /import/suppliers` (dryRun) `GET /export/offers.csv` `GET /import/template.csv` | **Import CSV** fournisseurs + prix, export |
+| `GET /forecast` `POST /forecast/snapshot` | **Prévision** des besoins par produit sur N jours (explication texte par produit) |
+| `GET /smart-cart` `POST /smart-cart/checkout` | **Panier intelligent** réparti par fournisseur → commandes « préparée » |
+| `GET/PUT/DELETE /reorder-rules[/:itemId]` `POST /reorder-rules/run` | **Auto-reorder** (règles seuil → commande préparée + alerte, jamais d’envoi) |
+| `GET /sales?day=` `POST /sales` | Ventes du jour par plat (déduction stock optionnelle) |
+| `GET /assistant/examples` `POST /assistant/ask` | **Assistant IA** : intent + chiffres locaux, reformulation LLM si `LLM_API_KEY` |
 | `GET /recipes` | **Coût matière**, marge, prix conseillé, ingrédients qui dérivent |
 | `POST /alerts/refresh` `GET /alerts` `POST /alerts/:id/read` | **Moteur d'alertes** : rupture, stock bas, hausse de prix, opportunité |
 
@@ -112,4 +117,5 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - [x] Tests des moteurs, CI GitHub Actions, build prod
 - [x] Chantier 2 : référentiel **324 produits** avec alias, **31 recettes types**, onboarding « Configurer ma carte », **import CSV** fournisseurs/prix avec aperçu, export — voir `docs/CHANTIER_2_DONNEES.md`
 - [ ] Chantier 3 : formulaires création produit/offre/recette, saisie ventes du jour, inventaire mobile
-- [ ] Chantier 4 : prévision 7 j, panier intelligent, auto-reorder, assistant IA, e-mail quotidien
+- [x] Chantier 4 : prévision 7 j explicable, panier intelligent multi-fournisseurs, auto-reorder (préparation seule), assistant « Demander à l’IA » (moteur local + LLM optionnel) — voir `docs/CHANTIER_4_INTELLIGENCE.md`
+- [ ] Chantier 4 bis : e-mail quotidien / notifications
