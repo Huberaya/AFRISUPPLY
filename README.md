@@ -39,6 +39,7 @@ apps/
   api/            Hono (Node) — auth JWT, endpoints métier, moteurs
 packages/
   db/             Schéma Drizzle (16 tables), migrations SQL, seed démo, client Neon/PGlite
+                  + data/ : référentiel 324 produits africains, 31 recettes types
 ```
 
 ### Schéma (16 tables)
@@ -64,6 +65,9 @@ Isolation multi-tenant : chaque table métier porte `restaurant_id`, et l'API fi
 | `GET /suppliers` `GET /suppliers/:id` `POST /suppliers` | Fiches, fiabilité calculée (retards, écarts), dépenses |
 | `GET /products` `GET /compare/:productId?qty=` | Catalogue ; **comparateur** multi-critères avec justification en français |
 | `GET /orders` `POST /orders` `POST /orders/:id/send` `POST /orders/:id/receive` | Commandes ; **réception** → stock + prix + écarts + réclamation pré-rédigée |
+| `GET /catalog?q=&category=` `POST /catalog/products` `POST /catalog/track` | Catalogue 324 refs (recherche par alias), produit privé, suivi stock |
+| `GET /onboarding/templates` `POST /onboarding/apply` | Recettes types → recettes + stock |
+| `POST /import/suppliers` (dryRun) `GET /export/offers.csv` `GET /import/template.csv` | **Import CSV** fournisseurs + prix, export |
 | `GET /recipes` | **Coût matière**, marge, prix conseillé, ingrédients qui dérivent |
 | `POST /alerts/refresh` `GET /alerts` `POST /alerts/:id/read` | **Moteur d'alertes** : rupture, stock bas, hausse de prix, opportunité |
 
@@ -106,6 +110,6 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - [x] Auth JWT, multi-restaurants, isolation par tenant
 - [x] Dashboard, Stock, Fournisseurs, Comparateur, Commandes + Réception, Recettes, Alertes
 - [x] Tests des moteurs, CI GitHub Actions, build prod
-- [ ] Chantier 2 : référentiel 300 produits, import CSV fournisseurs, 25 recettes types
+- [x] Chantier 2 : référentiel **324 produits** avec alias, **31 recettes types**, onboarding « Configurer ma carte », **import CSV** fournisseurs/prix avec aperçu, export — voir `docs/CHANTIER_2_DONNEES.md`
 - [ ] Chantier 3 : formulaires création produit/offre/recette, saisie ventes du jour, inventaire mobile
 - [ ] Chantier 4 : prévision 7 j, panier intelligent, auto-reorder, assistant IA, e-mail quotidien

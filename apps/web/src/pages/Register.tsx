@@ -8,7 +8,7 @@ export default function Register() {
   const [f, setF] = useState({ fullName: '', email: '', password: '', restaurantName: '', city: '', coversPerDay: 50 });
   const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: k === 'coversPerDay' ? Number(e.target.value) : e.target.value });
-  const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); setError(null); try { await register(f); nav('/app'); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } };
+  const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); setError(null); try { await register(f); nav('/app/demarrer'); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } };
   return (
     <div className="min-h-screen flex items-center justify-center bg-stone-50 p-6">
       <form onSubmit={submit} className="card w-full max-w-md space-y-4">
