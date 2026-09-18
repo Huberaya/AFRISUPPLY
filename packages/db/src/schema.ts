@@ -55,6 +55,10 @@ export const restaurants = pgTable('restaurants', {
   plan: plan('plan').default('trial').notNull(),
   trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),
   stripeCustomerId: text('stripe_customer_id'),
+  stripeSubscriptionId: text('stripe_subscription_id'),
+  subscriptionStatus: text('subscription_status').default('trialing').notNull(), // trialing | active | past_due | canceled | expired
+  currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+  founder: boolean('founder').default(false).notNull(),        // offre pilote fondateur (−50 % à vie)
   settings: jsonb('settings').$type<RestaurantSettings>().default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -441,6 +445,7 @@ export const vendors = pgTable('vendors', {
   minOrderEur: numeric('min_order_eur', { precision: 10, scale: 2 }).default('0').notNull(),
   deliveryFeeEur: numeric('delivery_fee_eur', { precision: 10, scale: 2 }).default('0').notNull(),
   commissionPct: numeric('commission_pct', { precision: 4, scale: 2 }).default('3.00').notNull(), // 2–5 %
+  stripeCustomerId: text('stripe_customer_id'),           // facturation mensuelle des commissions
   contactEmail: text('contact_email'),
   contactPhone: text('contact_phone'),
   whatsapp: text('whatsapp'),
@@ -505,3 +510,24 @@ export const commissions = pgTable('commissions', {
   invoiced: boolean('invoiced').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('commissions_vendor_period_idx').on(t.vendorId, t.period)]);
+
+// ---------- Chantier 6 : facturation (idempotence des webhooks Stripe + factures de commission) ----------
+export const billingEvents = pgTable('billing_events', {
+  id: text('id').primaryKey(),                       // evt_… Stripe
+  type: text('type').notNull(),
+  restaurantId: uuid('restaurant_id'),
+  payload: jsonb('payload'),
+  processedAt: timestamp('processed_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const commissionInvoices = pgTable('commission_invoices', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  period: text('period').notNull(),                  // AAAA-MM
+  orders: integer('orders').notNull(),
+  baseEur: numeric('base_eur', { precision: 10, scale: 2 }).notNull(),
+  amountEur: numeric('amount_eur', { precision: 10, scale: 2 }).notNull(),
+  stripeInvoiceId: text('stripe_invoice_id'),
+  status: text('status').default('emise').notNull(), // emise | payee | envoyee_par_mail
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex('commission_invoices_vendor_period').on(t.vendorId, t.period)]);

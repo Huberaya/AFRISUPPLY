@@ -11,6 +11,7 @@ import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
 import { accountRoutes } from './routes/account.js';
 import { quickRoutes } from './routes/quick.js';
+import { billingRoutes, billingPublicRoutes, billingAdminRoutes } from './routes/billing.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
 import { vendorRoutes, vendorAdminRoutes } from './routes/vendor.js';
 import { statusRoutes } from './routes/status.js';
@@ -27,10 +28,12 @@ app.use('/api/*', cors({ origin: (o) => o ?? '*', credentials: true }));
 app.get('/api/health', (c) => c.json({ ok: true, service: 'afrisupply-api', db: isNeon() ? 'neon' : 'pglite-local', time: new Date().toISOString(), ...buildInfo() }));
 app.route('/api', statusRoutes);
 app.route('/api', jobsRoutes); // cron (secret propre)
-app.route('/api', publicRoutes); // public en premier : les routeurs suivants imposent l'auth via use('*')
+app.route('/api', publicRoutes);
+app.route('/api', billingPublicRoutes); // webhook Stripe (signature, pas de JWT) // public en premier : les routeurs suivants imposent l'auth via use('*')
 app.route('/api/auth', authRoutes);
 app.route('/api', vendorRoutes); // espace fournisseur : comptes sans restaurant → avant les routeurs qui imposent requireRestaurant
 app.route('/api', vendorAdminRoutes);
+app.route('/api', billingAdminRoutes);
 app.route('/api', restaurantRoutes);
 app.route('/api', catalogRoutes);
 app.route('/api', intelligenceRoutes);
@@ -39,6 +42,7 @@ app.route('/api', settingsRoutes);
 app.route('/api', accountRoutes);
 app.route('/api', quickRoutes);
 app.route('/api', marketplaceRoutes);
+app.route('/api', billingRoutes);
 
 
 app.notFound((c) => c.json({ error: 'Route inconnue' }, 404));

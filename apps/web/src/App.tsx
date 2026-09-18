@@ -24,6 +24,8 @@ const SmartCart = lazy(() => import('./pages/SmartCart'));
 const Marketplace = lazy(() => import('./pages/Marketplace'));
 const VendorSpace = lazy(() => import('./pages/vendor/VendorSpace'));
 const AdminVendors = lazy(() => import('./pages/admin/AdminVendors'));
+const AdminBilling = lazy(() => import('./pages/admin/AdminBilling'));
+const Billing = lazy(() => import('./pages/Billing'));
 const Sales = lazy(() => import('./pages/Sales'));
 const Discrepancies = lazy(() => import('./pages/Discrepancies'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -76,6 +78,8 @@ export default function App() {
                 <Route path="fournisseurs" element={<Suppliers />} />
                 <Route path="marketplace" element={<Marketplace />} />
                 <Route path="admin/fournisseurs" element={<AdminVendors />} />
+                <Route path="admin/abonnements" element={<AdminBilling />} />
+                <Route path="abonnement" element={<Billing />} />
                 <Route path="fournisseurs/:id" element={<SupplierDetail />} />
                 <Route path="recettes" element={<Recipes />} />
                 <Route path="analyse" element={<Analysis />} />

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { Mail, Save, Send, Eye, Download, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
@@ -37,7 +38,7 @@ export default function Settings() {
     <div className="animate-fade-up max-w-3xl space-y-6">
       <PageTitle title="⚙️ Paramètres" subtitle="Restaurant, seuils d’alerte, auto-reorder et e-mail du matin." />
       {msg && <p className="rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-900">{msg}</p>}
-      <div className="grid grid-cols-3 gap-3"><Stat label="Formule" value={data.restaurant.plan} /><Stat label="Essai jusqu’au" value={data.restaurant.trialEndsAt ? new Date(data.restaurant.trialEndsAt).toLocaleDateString('fr-FR') : '—'} /><Stat label="Envoi e-mail" value={data.mail.transport === 'resend' ? 'Actif' : 'Dév.'} hint={data.mail.from} /></div>
+      <div className="grid grid-cols-3 gap-3"><Stat label="Formule" value={<Link to="/app/abonnement" className="underline capitalize">{data.restaurant.plan === 'trial' ? 'Essai' : data.restaurant.plan}</Link>} /><Stat label="Essai jusqu’au" value={data.restaurant.trialEndsAt ? new Date(data.restaurant.trialEndsAt).toLocaleDateString('fr-FR') : '—'} /><Stat label="Envoi e-mail" value={data.mail.transport === 'resend' ? 'Actif' : 'Dév.'} hint={data.mail.from} /></div>
       <section className="card space-y-3">
         <h2 className="font-bold">Restaurant</h2>
         <div className="grid gap-3 sm:grid-cols-3">

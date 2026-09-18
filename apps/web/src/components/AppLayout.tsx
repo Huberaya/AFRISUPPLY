@@ -1,7 +1,8 @@
 // Port de ethimarket/src/components/DashboardLayout.tsx — navigation à 6 entrées du concept AFRISUPPLY
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store } from 'lucide-react';
+import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useApi } from '../lib/useApi';
 
@@ -49,7 +50,7 @@ export default function AppLayout() {
             {restaurants.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
         ) : <p className="mt-1 font-semibold text-white truncate">{restaurant?.name}</p>}
-        <span className="pill mt-2 bg-brand-700/30 text-brand-200 capitalize">{restaurant?.plan === 'trial' ? 'Essai gratuit' : `Offre ${restaurant?.plan}`}</span>
+        <Link to="/app/abonnement" onClick={() => setOpen(false)} className="pill mt-2 bg-brand-700/30 text-brand-200 capitalize hover:bg-brand-700/50">{restaurant?.plan === 'trial' ? 'Essai gratuit' : `Offre ${restaurant?.plan}`}</Link>
       </div>
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {NAV.map(({ to, icon: Icon, label, end }) => (
@@ -82,8 +83,22 @@ export default function AppLayout() {
             <Link to="/app/ia" className="btn-primary !py-1.5"><Sparkles size={16} /> <span className="hidden sm:inline">Demander à l’IA</span></Link>
           </div>
         </header>
+        <TrialBanner />
         <main id="main-content" className="px-4 py-6 lg:px-8 lg:py-8 max-w-7xl"><Outlet /></main>
       </div>
     </div>
   );
+}
+
+/** Bandeau fin d'essai / paiement (chantier 6) + interception des réponses 402 de l'API. */
+function TrialBanner() {
+  const [b, setB] = useState<{ state: string; trialDaysLeft: number | null; blocked: boolean; enforced: boolean } | null>(null);
+  const [paywall, setPaywall] = useState<string | null>(null);
+  useEffect(() => { api<typeof b>('/billing').then(setB).catch(() => null); const h = (e: Event) => setPaywall((e as CustomEvent<string>).detail); window.addEventListener('afs:paywall', h); return () => window.removeEventListener('afs:paywall', h); }, []);
+  if (!b) return null;
+  const show = paywall || b.blocked || b.state === 'past_due' || (b.state === 'trialing' && b.trialDaysLeft !== null && b.trialDaysLeft <= 7);
+  if (!show) return null;
+  const tone = paywall || b.blocked ? 'bg-amber-100 text-amber-900' : b.state === 'past_due' ? 'bg-red-100 text-red-900' : 'bg-brand-100 text-brand-900';
+  const text = paywall ?? (b.state === 'expired' ? 'Votre essai gratuit est terminé : l’app est en lecture seule, vos données sont conservées.' : b.state === 'past_due' ? 'Dernier paiement refusé : mettez à jour votre carte pour éviter l’interruption.' : `Plus que ${b.trialDaysLeft} jour${(b.trialDaysLeft ?? 0) > 1 ? 's' : ''} d’essai gratuit.`);
+  return <div className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm ${tone}`}><span>{text}</span><Link to="/app/abonnement" className="font-bold underline" onClick={() => setPaywall(null)}>Choisir ma formule →</Link></div>;
 }

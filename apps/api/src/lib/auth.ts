@@ -4,7 +4,8 @@ import bcrypt from 'bcryptjs';
 import type { Context, Next } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { eq, and } from 'drizzle-orm';
-import { getDb, users, restaurantMembers } from '@afrisupply/db';
+import { getDb, users, restaurantMembers, restaurants } from '@afrisupply/db';
+import { accessState, billingEnforced, PLAN_RANK } from './billing.js';
 
 const secret = new TextEncoder().encode(process.env.JWT_SECRET ?? 'dev-secret-change-me-in-production');
 const TOKEN_TTL = '30d';
@@ -26,7 +27,7 @@ export async function verifyToken(token: string): Promise<AuthUser | null> {
   } catch { return null; }
 }
 
-export type Env = { Variables: { user: AuthUser; restaurantId: string } };
+export type Env = { Variables: { user: AuthUser; restaurantId: string; plan: string } };
 
 /** Middleware : exige un JWT (header Authorization: Bearer ou cookie afs_token). */
 export async function requireAuth(c: Context<Env>, next: Next) {
@@ -52,7 +53,30 @@ export async function requireRestaurant(c: Context<Env>, next: Next) {
   const rid = wanted ?? memberships[0].restaurantId;
   if (!memberships.some((m) => m.restaurantId === rid)) return c.json({ error: 'Accès refusé à ce restaurant' }, 403);
   c.set('restaurantId', rid);
+  // Chantier 6 : accès selon l'abonnement. Essai expiré / résilié → lecture seule (GET) ; le reste répond 402 avec l'action à faire.
+  const [r] = await db.select({ plan: restaurants.plan, trialEndsAt: restaurants.trialEndsAt, subscriptionStatus: restaurants.subscriptionStatus, currentPeriodEnd: restaurants.currentPeriodEnd }).from(restaurants).where(eq(restaurants.id, rid));
+  c.set('plan', r?.plan ?? 'trial');
+  if (r && billingEnforced()) {
+    const s = accessState(r);
+    const path = c.req.path;
+    if (s.blocked && c.req.method !== 'GET' && !path.includes('/billing') && !path.includes('/account')) {
+      return c.json({ error: s.state === 'past_due' ? 'Paiement en attente : mettez à jour votre moyen de paiement pour continuer.' : 'Votre essai gratuit est terminé. Choisissez une formule pour continuer (vos données sont conservées).', code: 'subscription_required', state: s.state }, 402);
+    }
+    const need = planRequired(path);
+    if (need && (PLAN_RANK[r.plan] ?? 0) < PLAN_RANK[need] && !(s.state === 'trialing' && r.plan === 'trial')) {
+      return c.json({ error: `Cette fonction fait partie de l'offre ${need[0].toUpperCase()}${need.slice(1)}.`, code: 'plan_required', plan: need }, 402);
+    }
+  }
   await next();
+}
+
+/** Fonctions réservées à une formule (chemins d'API). L'essai gratuit donne accès à tout le Pro. */
+const PRO_PATHS = ['/api/forecast', '/api/compare', '/api/smart-cart', '/api/assistant', '/api/recipes', '/api/reorder-rules', '/api/quick/invoice'];
+const BUSINESS_PATHS = ['/api/marketplace/group-buys', '/api/account/export'];
+export function planRequired(path: string): 'pro' | 'business' | null {
+  if (BUSINESS_PATHS.some((p) => path.startsWith(p))) return 'business';
+  if (PRO_PATHS.some((p) => path.startsWith(p))) return 'pro';
+  return null;
 }
 
 export const membershipWhere = (userId: string, restaurantId: string) =>

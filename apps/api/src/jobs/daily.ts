@@ -9,6 +9,8 @@ import { buildSmartCart } from '../lib/forecast.js';
 import { stockStatus } from '../lib/engines.js';
 import { buildDigest, type DigestInput } from '../lib/digest.js';
 import { sendMail } from '../lib/mailer.js';
+import { sweepTrials, billingEnforced } from '../lib/billing.js';
+import { invoiceCommissions } from '../routes/billing.js';
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -102,6 +104,19 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
   for (const r of all) { const { preview: _p, ...res } = await runDailyForRestaurant(r.id, opts); void _p; results.push(res); }
   const errors = results.filter((r) => r.digest === 'error');
   const summary = { ranAt: (opts.now ?? new Date()).toISOString(), dryRun: !!opts.dryRun, count: results.length, sent: results.filter((r) => r.digest === 'sent').length, errors: errors.length, results };
+  // Chantier 6 : essais expirés + relances J-7/J-3/J-1 ; factures de commission le 1er du mois pour le mois précédent.
+  let billing: Record<string, unknown> = {};
+  try {
+    const now = opts.now ?? new Date();
+    const sw = await sweepTrials(now);
+    if (!opts.dryRun) for (const r of sw.reminders) {
+      const recips = await recipientsFor(r.id);
+      for (const { email: to } of recips) await sendMail({ to, subject: r.daysLeft === 1 ? `Dernier jour d'essai AFRISUPPLY pour ${r.name}` : `Plus que ${r.daysLeft} jours d'essai AFRISUPPLY`, text: `Bonjour,\n\nVotre essai gratuit AFRISUPPLY pour ${r.name} se termine dans ${r.daysLeft} jour(s). Pour garder votre stock, vos fournisseurs et vos alertes, choisissez une formule ici : ${APP_URL()}/app/abonnement\n\nBesoin d'aide ? Répondez simplement à cet e-mail.\n\nL'équipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY pour <b>${r.name}</b> se termine dans <b>${r.daysLeft} jour(s)</b>.</p><p>Pour garder votre stock, vos fournisseurs et vos alertes : <a href="${APP_URL()}/app/abonnement">choisir ma formule</a>.</p><p>Besoin d'aide ? Répondez simplement à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`, tags: { type: 'trial-reminder' } });
+    }
+    billing = { trialsExpired: sw.expired.length, reminders: sw.reminders.length, enforced: billingEnforced() };
+    if (now.getUTCDate() === 1) { const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)); const inv = await invoiceCommissions(prev.toISOString().slice(0, 7), { dryRun: opts.dryRun }); billing.commissionInvoices = inv.invoices.length; }
+  } catch (e) { billing = { error: String(e) }; void captureException(e as Error, { route: '/api/jobs/daily#billing' }); }
+  (summary as Record<string, unknown>).billing = billing;
   const finishedAt = new Date();
   if (!opts.dryRun) {
     try { await db.insert(jobRuns).values({ job: 'daily', status: errors.length === 0 ? 'ok' : errors.length === results.length ? 'error' : 'partial', startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors.map((e) => `${e.name}: ${e.error}`).join(' | ') || null }); } catch (e) { console.error('[jobs] job_runs', e); }

@@ -20,6 +20,7 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   if (init.json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(init.json); }
   const res = await fetch(`/api${path}`, { ...init, headers, body, credentials: 'include' });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
+  if (res.status === 402 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('afs:paywall', { detail: data?.error ?? 'Abonnement requis' }));
   if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`, data?.details);
   return data as T;
 }
