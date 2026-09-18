@@ -3823,7 +3823,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path2 from "node:path";
 function mailerConfig() {
   return {
-    transport: process.env.RESEND_API_KEY ? "resend" : "file",
+    // resend en prod ; fichier en dev ; « log » (console uniquement) sur serverless sans clé : rien n'est perdu, rien ne casse
+    transport: process.env.RESEND_API_KEY ? "resend" : process.env.VERCEL || process.env.NODE_ENV === "production" ? "log" : "file",
     from: process.env.MAIL_FROM ?? "AFRISUPPLY <bonjour@afrisupply.fr>",
     outbox: process.env.MAIL_OUTBOX_DIR ?? path2.resolve(process.cwd(), ".outbox")
   };
@@ -3844,6 +3845,10 @@ async function sendMail(m) {
     } catch (e) {
       return { ok: false, error: e.message, transport: "resend" };
     }
+  }
+  if (cfg.transport === "log") {
+    console.warn(`[mail] RESEND_API_KEY absent \u2014 mail non envoy\xE9 \xE0 ${m.to} : \xAB ${m.subject} \xBB`);
+    return { ok: true, id: "logged", transport: "log" };
   }
   try {
     await mkdir(cfg.outbox, { recursive: true });
