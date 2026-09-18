@@ -1,0 +1,111 @@
+# AFRISUPPLY
+
+> **Achetez mieux. Gaspillez moins. Gagnez plus.**
+> L'assistant d'approvisionnement intelligent des restaurants africains.
+
+Monorepo TypeScript — **React + Vite** (web) · **Hono** (API) · **Drizzle ORM** · **Neon Postgres** (prod) / **PGlite** (local).
+
+Voir aussi : [`ROADMAP_MISE_SUR_LE_MARCHE.md`](./ROADMAP_MISE_SUR_LE_MARCHE.md) (les 10 chantiers).
+
+---
+
+## Démarrage en 2 minutes (sans rien installer d'autre que Node 20)
+
+```bash
+npm install
+npm run dev          # API sur :8787 + web sur :3000 (proxy /api → API)
+```
+
+Ouvrir http://localhost:3000 — compte démo : **awa@chezawa.fr / demo1234**
+(restaurant « Chez Awa », Nantes : 50 produits, 5 fournisseurs, 10 recettes, 60 jours de ventes, 12 commandes).
+
+Sans `DATABASE_URL`, l'API utilise **PGlite** (Postgres WASM embarqué dans `packages/db/.pglite`). Migrations et seed sont appliqués automatiquement au démarrage.
+
+## Passer sur Neon
+
+1. Créer un projet Neon → copier la chaîne de connexion **pooler**.
+2. `cp .env.example .env` puis renseigner `DATABASE_URL` et `JWT_SECRET`.
+3. `npm run db:migrate && npm run db:seed` (ou laisser `AUTO_MIGRATE=true` / `SEED_DEMO=true`).
+
+Le code métier ne change pas : `getDb()` retourne le même client Drizzle dans les deux cas.
+
+---
+
+## Structure
+
+```
+apps/
+  web/            React 18 + Vite + Tailwind — 9 pages, layout à 6 onglets
+  api/            Hono (Node) — auth JWT, endpoints métier, moteurs
+packages/
+  db/             Schéma Drizzle (16 tables), migrations SQL, seed démo, client Neon/PGlite
+```
+
+### Schéma (16 tables)
+
+| Domaine | Tables |
+|---|---|
+| Comptes | `users`, `restaurants`, `restaurant_members` |
+| Référentiel & fournisseurs | `products` (partagé + privés), `suppliers`, `supplier_offers`, `price_history` |
+| Stock | `inventory_items`, `stock_movements` |
+| Commandes | `orders`, `order_lines`, `deliveries`, `delivery_discrepancies` |
+| Menu | `recipes`, `recipe_ingredients`, `sales` |
+| Intelligence | `alerts`, `reorder_rules`, `forecasts` |
+
+Isolation multi-tenant : chaque table métier porte `restaurant_id`, et l'API filtre systématiquement via le middleware `requireRestaurant` (équivalent applicatif de la RLS Supabase ; Neon n'ayant pas d'auth intégrée, la sécurité vit dans l'API).
+
+### API (`/api`)
+
+| Route | Rôle |
+|---|---|
+| `POST /auth/register` `POST /auth/login` `GET /auth/me` | Auth (bcrypt + JWT 30 j, cookie httpOnly ou Bearer) |
+| `GET /dashboard` | Compteurs 🟢🟠🔴, dépenses 30 j & évolution, alertes, dernières commandes |
+| `GET /stock` `POST /stock/:id/movements` | Stock avec conso/jour et jours restants ; inventaire/ajustement |
+| `GET /suppliers` `GET /suppliers/:id` `POST /suppliers` | Fiches, fiabilité calculée (retards, écarts), dépenses |
+| `GET /products` `GET /compare/:productId?qty=` | Catalogue ; **comparateur** multi-critères avec justification en français |
+| `GET /orders` `POST /orders` `POST /orders/:id/send` `POST /orders/:id/receive` | Commandes ; **réception** → stock + prix + écarts + réclamation pré-rédigée |
+| `GET /recipes` | **Coût matière**, marge, prix conseillé, ingrédients qui dérivent |
+| `POST /alerts/refresh` `GET /alerts` `POST /alerts/:id/read` | **Moteur d'alertes** : rupture, stock bas, hausse de prix, opportunité |
+
+### Moteurs (`apps/api/src/lib/engines.ts`)
+
+Fonctions pures, testées (`npm test`), portées d'ethimarket (`alertsEngine`, `procurementComparator`, `pricingEngine`) et adaptées au domaine restaurant :
+
+- `computeDailyUse` — consommation/jour = ventes × grammages recette (fenêtre 28 j)
+- `stockStatus` / `daysOfStock` — 🟢🟠🔴 par seuil **et** par jours restants
+- `alertsFromStock`, `alertsFromPrices`, `alertsFromOpportunities` — alertes dédupliquées, rédigées en FR
+- `compareOffers` — score prix 50 % / délai vs urgence 30 % / fiabilité 20 %, pénalité rupture, justification
+- `recipeCost`, `marginAnalysis` — coût matière, marge brute, prix conseillé
+- `supplierReliability` — 100 − 60 × taux de retard − 40 × taux d'écart
+
+---
+
+## Scripts
+
+| Commande | Effet |
+|---|---|
+| `npm run dev` | API + web en parallèle |
+| `npm run typecheck` / `npm test` / `npm run lint` | Qualité |
+| `npm run db:generate` | Génère une migration SQL après modification de `schema.ts` |
+| `npm run db:migrate` / `npm run db:seed` | Applique / seed (PGlite ou Neon selon `DATABASE_URL`) |
+| `npm run build` | Build web (`apps/web/dist`) |
+
+## Déploiement
+
+- **Web** : Vercel (`vercel.json` fourni) — définir `API_URL` ou servir l'API sous le même domaine via rewrite `/api/*`.
+- **API** : Node long-running (Railway, Fly.io, Render) ou adaptation Hono → Vercel Functions / Cloudflare Workers (le driver Neon serverless est déjà compatible edge).
+- **DB** : Neon (branche `main` = prod, branches Neon par PR pour les previews).
+
+## Origine du code
+
+Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout, auth-context, moteurs d'alertes / comparaison / prix, logique de commandes-réception. Abandonné : Supabase, certifications, Trust Center, RASFF, CRM, blog, admin (≈ 70 % du volume, hors périmètre restaurant).
+
+## État du chantier 1 ✅ et suite
+
+- [x] Monorepo, schéma, migrations, seed, client Neon/PGlite
+- [x] Auth JWT, multi-restaurants, isolation par tenant
+- [x] Dashboard, Stock, Fournisseurs, Comparateur, Commandes + Réception, Recettes, Alertes
+- [x] Tests des moteurs, CI GitHub Actions, build prod
+- [ ] Chantier 2 : référentiel 300 produits, import CSV fournisseurs, 25 recettes types
+- [ ] Chantier 3 : formulaires création produit/offre/recette, saisie ventes du jour, inventaire mobile
+- [ ] Chantier 4 : prévision 7 j, panier intelligent, auto-reorder, assistant IA, e-mail quotidien
