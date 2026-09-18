@@ -9,6 +9,10 @@ Voir aussi : [`ROADMAP_MISE_SUR_LE_MARCHE.md`](./ROADMAP_MISE_SUR_LE_MARCHE.md) 
 
 ---
 
+## Déploiement
+
+Neon + Render (API) + Vercel (web) : voir **`docs/DEPLOIEMENT.md`** (`render.yaml`, `apps/web/vercel.json`).
+
 ## Démarrage en 2 minutes (sans rien installer d'autre que Node 20)
 
 ```bash
