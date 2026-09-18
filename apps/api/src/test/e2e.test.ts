@@ -76,6 +76,28 @@ describe('4. Ventes → prévision → panier → alertes', () => {
   });
 });
 
+describe('4 bis. Saisie express', () => {
+  it('« vendu 30 <plat> » → ventes du jour + stock décrémenté ; « reste 7 kg <produit> » → ajustement', async () => {
+    const rec = await call('GET', '/api/recipes', undefined, A()); const recipe = rec.json.recipes[0];
+    const p = await call('POST', '/api/quick/parse', { text: `vendu 30 ${recipe.name}` }, A()); expect(p.status).toBe(200); expect(p.json.kind).toBe('vente'); expect(p.json.lines[0].match?.id).toBe(recipe.id);
+    const stockBefore = (await call('GET', '/api/stock', undefined, A())).json.items;
+    const a = await call('POST', '/api/quick/apply', { kind: 'vente', lines: [{ id: recipe.id, qty: 30 }] }, A()); expect(a.status).toBe(200); expect(a.json.applied).toBe(1);
+    const stockAfter = (await call('GET', '/api/stock', undefined, A())).json.items;
+    expect(stockAfter.reduce((s: number, i: Json) => s + Number(i.quantity), 0)).toBeLessThan(stockBefore.reduce((s: number, i: Json) => s + Number(i.quantity), 0));
+    const item = stockAfter[0];
+    const c = await call('POST', '/api/quick/parse', { text: `reste 7 kg ${item.name}` }, A()); expect(c.json.kind).toBe('comptage'); expect(c.json.lines[0].match?.id).toBe(item.id);
+    await call('POST', '/api/quick/apply', { kind: 'comptage', lines: [{ id: item.id, qty: 7 }] }, A());
+    const inv = await call('GET', '/api/quick/inventory', undefined, A()); expect(inv.json.countedLast7Days).toBeGreaterThanOrEqual(1);
+    expect(Number((await call('GET', '/api/stock', undefined, A())).json.items.find((i: Json) => i.id === item.id).quantity)).toBe(7);
+  });
+  it('photo de facture sans LLM → 503 explicite ; validation manuelle de lignes → réception + prix', async () => {
+    delete process.env.LLM_API_KEY;
+    expect((await call('POST', '/api/quick/invoice', { image: 'data:image/jpeg;base64,AAAA' }, A())).status).toBe(503);
+    const item = (await call('GET', '/api/stock', undefined, A())).json.items[0];
+    const r = await call('POST', '/api/quick/invoice/apply', { supplierId, lines: [{ inventoryItemId: item.id, qty: 10, unitPrice: 1.9 }] }, A()); expect(r.status).toBe(200); expect(r.json).toMatchObject({ received: 1, pricesUpdated: 1 });
+  });
+});
+
 describe('5. Exploitation : cron, statut, RGPD, sécurité', () => {
   it('le cron exige le secret, enregistre un job_run et /status le reflète', async () => {
     expect((await call('GET', '/api/jobs/daily')).status).toBe(401);

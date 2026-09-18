@@ -10,6 +10,7 @@ import { publicRoutes } from './routes/public.js';
 import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
 import { accountRoutes } from './routes/account.js';
+import { quickRoutes } from './routes/quick.js';
 import { statusRoutes } from './routes/status.js';
 import { captureException, securityHeaders, rateLimit, buildInfo } from './lib/ops.js';
 
@@ -32,6 +33,7 @@ app.route('/api', intelligenceRoutes);
 app.route('/api', manageRoutes);
 app.route('/api', settingsRoutes);
 app.route('/api', accountRoutes);
+app.route('/api', quickRoutes);
 
 app.notFound((c) => c.json({ error: 'Route inconnue' }, 404));
 app.onError((err, c) => {

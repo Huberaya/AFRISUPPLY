@@ -128,5 +128,6 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - [x] Chantier 3 : formulaires fournisseur/prix/recette, réglages & inventaire stock, envoi de commande WhatsApp/e-mail, modification/annulation, écarts de livraison, historique de prix — voir `docs/CHANTIER_3_GESTION.md`
 - [x] Chantier 4 : prévision 7 j explicable, panier intelligent multi-fournisseurs, auto-reorder (préparation seule), assistant « Demander à l’IA » (moteur local + LLM optionnel) — voir `docs/CHANTIER_4_INTELLIGENCE.md`
 - [x] Chantier 5 : site vitrine (`/`, `/tarifs`, `/fonctionnalites`, `/faq`, `/demander-un-acces`), offre 39/89/199 + pilote fondateur, leads + admin, script démo & plaquette — voir `docs/CHANTIER_5_MARQUE_OFFRE.md`
+- [x] Chantier 9 : saisie express (phrase/dictée → ventes, comptage, réception, perte), inventaire rapide, photo de facture → stock + prix, PWA installable — `docs/CHANTIER_9_SAISIE_EXPRESS.md`
 - [x] Chantier 8 : fiabilité prod (Sentry sans SDK, `/statut`, job_runs, rate-limit, en-têtes, audit, RGPD export/suppression, CGV, migrations au déploiement, 12 tests e2e) — `docs/CHANTIER_8_FIABILITE.md`
 - [x] Chantier 4 bis : e-mail quotidien « Votre matin AFRISUPPLY » + job cron (alertes → auto-reorder → mail) — `docs/CHANTIER_4BIS_NOTIFICATIONS.md`

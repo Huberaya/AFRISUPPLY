@@ -1194,7 +1194,7 @@ var init_seed = __esm({
     init_client();
     init_schema();
     init_products();
-    daysAgo = (n6) => new Date(Date.now() - n6 * 864e5);
+    daysAgo = (n7) => new Date(Date.now() - n7 * 864e5);
     isoDay = (d) => d.toISOString().slice(0, 10);
     num = (v, dec = 3) => v.toFixed(dec);
     if (process.argv[1] && process.argv[1].endsWith("seed.ts")) {
@@ -1642,7 +1642,7 @@ var init_src = __esm({
 import { getRequestListener } from "@hono/node-server";
 
 // apps/api/src/app.ts
-import { Hono as Hono10 } from "hono";
+import { Hono as Hono11 } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
@@ -2489,16 +2489,16 @@ function pick(row, key) {
 }
 var toNumber = (s) => {
   const clean = s.replace(/[€\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
-  const n6 = Number(clean);
-  return Number.isFinite(n6) && clean !== "" ? n6 : null;
+  const n7 = Number(clean);
+  return Number.isFinite(n7) && clean !== "" ? n7 : null;
 };
 function parsePack(label) {
   const s = label.toLowerCase().replace(",", ".");
   const mult = s.match(/(\d+)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*(kg|g|l|cl|ml)/);
   if (mult) {
-    const n6 = Number(mult[1]);
+    const n7 = Number(mult[1]);
     const q2 = Number(mult[2]);
-    return convert(n6 * q2, mult[3]);
+    return convert(n7 * q2, mult[3]);
   }
   const single = s.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|cl|ml)\b/);
   if (single) return convert(Number(single[1]), single[2]);
@@ -2852,16 +2852,16 @@ function buildSmartCart(needs, offers) {
   const unavailable = [];
   const choices = [];
   let baseline = 0;
-  for (const n6 of needs) {
-    if (n6.neededQty <= 0) continue;
-    const cands = offers.filter((o) => o.productId === n6.productId && o.inStock);
+  for (const n7 of needs) {
+    if (n7.neededQty <= 0) continue;
+    const cands = offers.filter((o) => o.productId === n7.productId && o.inStock);
     if (!cands.length) {
-      unavailable.push({ productId: n6.productId, productName: n6.productName, unit: n6.unit, neededQty: n6.neededQty });
+      unavailable.push({ productId: n7.productId, productName: n7.productName, unit: n7.unit, neededQty: n7.neededQty });
       continue;
     }
-    const urgencyH = n6.daysOfStockLeft !== null ? Math.max(24, n6.daysOfStockLeft * 24) : Infinity;
+    const urgencyH = n7.daysOfStockLeft !== null ? Math.max(24, n7.daysOfStockLeft * 24) : Infinity;
     const score = (o) => {
-      const packs2 = Math.max(1, Math.ceil(n6.neededQty / o.packQty));
+      const packs2 = Math.max(1, Math.ceil(n7.neededQty / o.packQty));
       const cost = packs2 * o.packPrice;
       const latePenalty = o.leadTimeHours > urgencyH ? 1e6 : 0;
       const reliabilityPenalty = (100 - o.reliabilityPct) / 100 * cost * 0.15;
@@ -2869,13 +2869,13 @@ function buildSmartCart(needs, offers) {
     };
     const ranked = [...cands].sort((a, b) => score(a) - score(b));
     const best = ranked[0];
-    const packs = Math.max(1, Math.ceil(n6.neededQty / best.packQty));
-    const usual = n6.preferredSupplierId ? cands.find((o) => o.supplierId === n6.preferredSupplierId) : void 0;
-    const usualCost = usual ? Math.max(1, Math.ceil(n6.neededQty / usual.packQty)) * usual.packPrice : packs * best.packPrice;
+    const packs = Math.max(1, Math.ceil(n7.neededQty / best.packQty));
+    const usual = n7.preferredSupplierId ? cands.find((o) => o.supplierId === n7.preferredSupplierId) : void 0;
+    const usualCost = usual ? Math.max(1, Math.ceil(n7.neededQty / usual.packQty)) * usual.packPrice : packs * best.packPrice;
     baseline += usualCost;
     const lineTotal = packs * best.packPrice;
-    const reason = best.leadTimeHours > 48 && urgencyH !== Infinity ? `D\xE9lai ${Math.round(best.leadTimeHours / 24)} j accept\xE9 (stock ${n6.daysOfStockLeft} j)` : usual && usual.offerId !== best.offerId ? `${best.supplierName} moins cher que ${usual.supplierName} (${(usualCost - lineTotal).toFixed(2)} \u20AC \xE9conomis\xE9s)` : best.unitPrice === Math.min(...cands.map((c) => c.unitPrice)) ? "Meilleur prix disponible" : "Meilleur compromis prix / d\xE9lai / fiabilit\xE9";
-    choices.push({ line: { productId: n6.productId, productName: n6.productName, unit: n6.unit, neededQty: n6.neededQty, offer: best, packs, quantity: packs * best.packQty, lineTotal, alternativeSaving: Math.max(0, usualCost - lineTotal), reason }, alternatives: ranked.slice(1) });
+    const reason = best.leadTimeHours > 48 && urgencyH !== Infinity ? `D\xE9lai ${Math.round(best.leadTimeHours / 24)} j accept\xE9 (stock ${n7.daysOfStockLeft} j)` : usual && usual.offerId !== best.offerId ? `${best.supplierName} moins cher que ${usual.supplierName} (${(usualCost - lineTotal).toFixed(2)} \u20AC \xE9conomis\xE9s)` : best.unitPrice === Math.min(...cands.map((c) => c.unitPrice)) ? "Meilleur prix disponible" : "Meilleur compromis prix / d\xE9lai / fiabilit\xE9";
+    choices.push({ line: { productId: n7.productId, productName: n7.productName, unit: n7.unit, neededQty: n7.neededQty, offer: best, packs, quantity: packs * best.packQty, lineTotal, alternativeSaving: Math.max(0, usualCost - lineTotal), reason }, alternatives: ranked.slice(1) });
   }
   const group = () => {
     const m = /* @__PURE__ */ new Map();
@@ -4099,11 +4099,257 @@ accountRoutes.delete("/account", async (c) => {
   return c.json({ ok: true, restaurantsDeleted: deleted.length, restaurantsLeft: left.length });
 });
 
-// apps/api/src/routes/status.ts
+// apps/api/src/routes/quick.ts
 init_src();
 import { Hono as Hono9 } from "hono";
-import { desc as desc6, eq as eq12, sql as sql8 } from "drizzle-orm";
-var statusRoutes = new Hono9();
+import { z as z9 } from "zod";
+import { and as and8, eq as eq12, inArray as inArray7, sql as sql8 } from "drizzle-orm";
+
+// apps/api/src/lib/quick.ts
+var normalize2 = (s) => s.replace(/(\d),(\d)/g, "$1.$2").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9. ]+/g, " ").replace(/\.(?!\d)/g, " ").replace(/\s+/g, " ").trim();
+var KIND_WORDS = [
+  [/\b(vendu|vente|ventes|servi|sorti|fait)\b/, "vente"],
+  [/\b(reste|restant|il reste|stock|compte|comptage|inventaire|j ai|on a)\b/, "comptage"],
+  [/\b(recu|reception|livre|livraison|arrive|rentre)\b/, "reception"],
+  [/\b(perdu|perte|jete|casse|perime|poubelle|gaspille)\b/, "perte"]
+];
+var UNITS = { kg: "kg", kilo: "kg", kilos: "kg", g: "g", gr: "g", grammes: "g", l: "L", litre: "L", litres: "L", ml: "mL", cl: "cL", piece: "piece", pieces: "piece", pc: "piece", pcs: "piece", unite: "piece", unites: "piece", botte: "botte", bottes: "botte", sac: "sac", sacs: "sac", carton: "carton", cartons: "carton", bidon: "bidon", bidons: "bidon", portion: "portion", portions: "portion", assiette: "portion", assiettes: "portion", plat: "portion", plats: "portion" };
+var NUM_WORDS = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11, douze: 12, quinze: 15, vingt: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60, cent: 100 };
+var STOP = /* @__PURE__ */ new Set(["de", "du", "des", "le", "la", "les", "et", "a", "au", "aux", "en", "pour", "ce", "ces", "soir", "midi", "aujourd", "hui", "hier", "matin", "avec", "sur"]);
+function detectKind(text2, fallback = "vente") {
+  const n7 = normalize2(text2);
+  for (const [re, k] of KIND_WORDS) if (re.test(n7)) return k;
+  return fallback;
+}
+function similarity(a, b) {
+  const na = normalize2(a), nb = normalize2(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  if (nb.includes(na) || na.includes(nb)) return 0.92;
+  const wa = na.split(" "), wb = nb.split(" ");
+  if (wa.some((w) => w.length >= 4 && wb.some((x) => x.startsWith(w) || w.startsWith(x)))) return 0.85;
+  const ph = (s) => s.slice(0, 4).replace(/p/g, "b").replace(/k|q/g, "c").replace(/[aeiouy]/g, "a");
+  if (wa.some((w) => w.length >= 4 && wb.some((x) => x.length >= 4 && ph(w) === ph(x)))) return 0.7;
+  const grams = (s) => {
+    const g = /* @__PURE__ */ new Map();
+    const t = ` ${s} `;
+    for (let i = 0; i < t.length - 1; i++) {
+      const k = t.slice(i, i + 2);
+      g.set(k, (g.get(k) ?? 0) + 1);
+    }
+    return g;
+  };
+  const ga = grams(na), gb = grams(nb);
+  let inter = 0, tot = 0;
+  for (const [k, v] of ga) {
+    tot += v;
+    inter += Math.min(v, gb.get(k) ?? 0);
+  }
+  for (const v of gb.values()) tot += v;
+  return tot ? 2 * inter / tot : 0;
+}
+function bestMatches(name, entities2, limit = 3) {
+  return entities2.map((e) => ({ id: e.id, name: e.name, score: Math.max(similarity(name, e.name), ...(e.aliases ?? []).map((a) => similarity(name, a))) })).filter((m) => m.score >= 0.45).sort((a, b) => b.score - a.score).slice(0, limit);
+}
+function tokenize(text2) {
+  let n7 = normalize2(text2);
+  for (const [w, v] of Object.entries(NUM_WORDS)) n7 = n7.replace(new RegExp(`\\b${w}\\b`, "g"), String(v));
+  n7 = n7.replace(/(\d)(kg|g|l|ml|cl)\b/g, "$1 $2");
+  const out = [];
+  const re = /(\d+(?:\.\d+)?)\s+([^\d]+?)(?=\s+\d|$)/g;
+  let m;
+  while (m = re.exec(n7)) {
+    const qty3 = Number(m[1]);
+    const words = m[2].trim().split(" ").filter((w) => w && !STOP.has(w));
+    if (!words.length) continue;
+    let unit2;
+    if (UNITS[words[0]]) {
+      unit2 = UNITS[words[0]];
+      words.shift();
+    }
+    const label = words.filter((w) => !KIND_WORDS.some(([r]) => r.test(w))).join(" ").trim();
+    if (label) out.push({ qty: qty3, unit: unit2, label, raw: m[0].trim() });
+  }
+  return out;
+}
+function parseQuick(text2, ctx, forceKind) {
+  const kind = forceKind ?? detectKind(text2);
+  const pool = kind === "vente" ? ctx.recipes : ctx.products;
+  const lines = tokenize(text2).map((t) => {
+    const cands = bestMatches(t.label, pool);
+    const top = cands[0];
+    const second = cands[1];
+    const confident = !!top && (!second || top.score - second.score >= 0.15) && top.score >= 0.6;
+    return { kind, raw: t.raw, qty: t.qty, unit: t.unit, match: confident ? top : null, candidates: cands };
+  });
+  return { kind, lines, unmatched: lines.filter((l) => !l.match).map((l) => l.raw) };
+}
+var INVOICE_PROMPT = `Tu lis une facture ou un bon de livraison de fournisseur alimentaire (grossiste africain, march\xE9, cash & carry) photographi\xE9 par un restaurateur.
+R\xE9ponds UNIQUEMENT avec un JSON valide, sans texte autour, de la forme :
+{"supplierName": string|null, "date": "AAAA-MM-JJ"|null, "total": number|null, "lines": [{"label": string, "qty": number, "unit": "kg"|"g"|"L"|"mL"|"piece"|"sac"|"carton"|"botte"|null, "unitPrice": number|null, "total": number|null}]}
+R\xE8gles : une ligne par produit ; qty = quantit\xE9 livr\xE9e (si \xAB 2 x 25 kg \xBB, qty = 50 et unit = "kg") ; prix en euros TTC si visible ; ignore les lignes de transport, consigne, remise globale. Si un champ est illisible, mets null.`;
+async function extractInvoiceFromImage(imageDataUrl) {
+  if (!process.env.LLM_API_KEY) return { ok: false, error: "Lecture de facture indisponible : LLM_API_KEY non configur\xE9" };
+  const base = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
+  const model = process.env.LLM_VISION_MODEL ?? process.env.LLM_MODEL ?? "gpt-4o-mini";
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.LLM_API_KEY}` },
+      signal: AbortSignal.timeout(45e3),
+      body: JSON.stringify({ model, temperature: 0, max_tokens: 1500, response_format: { type: "json_object" }, messages: [
+        { role: "system", content: INVOICE_PROMPT },
+        { role: "user", content: [{ type: "text", text: "Voici la facture." }, { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } }] }
+      ] })
+    });
+    if (!res.ok) return { ok: false, error: `LLM HTTP ${res.status}` };
+    const data = await res.json();
+    const raw = data.choices?.[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw.replace(/^```json\s*|```$/g, ""));
+    parsed.lines = (parsed.lines ?? []).filter((l) => l && l.label && Number.isFinite(Number(l.qty))).map((l) => ({ ...l, qty: Number(l.qty) }));
+    return { ok: true, data: parsed };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// apps/api/src/routes/quick.ts
+var quickRoutes = new Hono9();
+quickRoutes.use("*", requireAuth, requireRestaurant);
+var n6 = (v) => v === null || v === void 0 ? 0 : Number(v);
+async function entities(rid) {
+  const db = await getDb();
+  const [recs, items] = await Promise.all([
+    db.select({ id: recipes.id, name: recipes.name }).from(recipes).where(and8(eq12(recipes.restaurantId, rid), eq12(recipes.isActive, true))),
+    db.select({ id: inventoryItems.id, name: products.name, aliases: products.aliases, unit: products.baseUnit }).from(inventoryItems).innerJoin(products, eq12(products.id, inventoryItems.productId)).where(eq12(inventoryItems.restaurantId, rid))
+  ]);
+  return { recipes: recs, products: items.map((i) => ({ id: i.id, name: i.name, aliases: i.aliases, unit: i.unit })) };
+}
+quickRoutes.post("/quick/parse", async (c) => {
+  const body = z9.object({ text: z9.string().min(2).max(500), kind: z9.enum(["vente", "comptage", "reception", "perte"]).optional() }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "Texte requis" }, 400);
+  const ctx = await entities(c.get("restaurantId"));
+  return c.json(parseQuick(body.data.text, ctx, body.data.kind));
+});
+quickRoutes.post("/quick/apply", async (c) => {
+  const body = z9.object({
+    kind: z9.enum(["vente", "comptage", "reception", "perte"]),
+    day: z9.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    note: z9.string().max(200).optional(),
+    lines: z9.array(z9.object({ id: z9.string().uuid(), qty: z9.number().nonnegative() })).min(1).max(60)
+  }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "Donn\xE9es invalides", details: body.error.flatten() }, 400);
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const user = c.get("user");
+  const d = body.data;
+  const day = d.day ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  if (d.kind === "vente") {
+    const ids2 = d.lines.map((l) => l.id);
+    const valid = new Set((await db.select({ id: recipes.id }).from(recipes).where(and8(eq12(recipes.restaurantId, rid), inArray7(recipes.id, ids2)))).map((r) => r.id));
+    const prev = new Map((await db.select().from(sales).where(and8(eq12(sales.restaurantId, rid), eq12(sales.day, day)))).map((p) => [p.recipeId, p.portions]));
+    let applied2 = 0;
+    let consumed = 0;
+    for (const l of d.lines) {
+      if (!valid.has(l.id)) continue;
+      const portions = Math.round(l.qty);
+      const delta = portions - (prev.get(l.id) ?? 0);
+      await db.insert(sales).values({ restaurantId: rid, recipeId: l.id, day, portions }).onConflictDoUpdate({ target: [sales.restaurantId, sales.recipeId, sales.day], set: { portions } });
+      applied2++;
+      if (delta === 0) continue;
+      const ings = await db.select().from(recipeIngredients).where(eq12(recipeIngredients.recipeId, l.id));
+      for (const ing of ings) {
+        const [item] = await db.select().from(inventoryItems).where(and8(eq12(inventoryItems.restaurantId, rid), eq12(inventoryItems.productId, ing.productId)));
+        if (!item) continue;
+        const q2 = n6(ing.quantity) * delta;
+        if (!q2) continue;
+        await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type: "consommation", quantity: (-q2).toFixed(3), note: `Saisie express ventes ${day}`, createdBy: user.id });
+        await db.update(inventoryItems).set({ quantity: Math.max(0, n6(item.quantity) - q2).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq12(inventoryItems.id, item.id));
+        consumed++;
+      }
+    }
+    return c.json({ ok: true, kind: d.kind, day, applied: applied2, stockLinesUpdated: consumed });
+  }
+  const ids = d.lines.map((l) => l.id);
+  const items = await db.select().from(inventoryItems).where(and8(eq12(inventoryItems.restaurantId, rid), inArray7(inventoryItems.id, ids)));
+  const byId = new Map(items.map((i) => [i.id, i]));
+  let applied = 0;
+  for (const l of d.lines) {
+    const item = byId.get(l.id);
+    if (!item) continue;
+    const type = d.kind === "comptage" ? "ajustement" : d.kind === "reception" ? "reception" : "perte";
+    const delta = type === "ajustement" ? l.qty - n6(item.quantity) : type === "reception" ? l.qty : -l.qty;
+    if (type !== "ajustement" && delta === 0) continue;
+    await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type, quantity: delta.toFixed(3), note: d.note ?? "Saisie express", createdBy: user.id });
+    await db.update(inventoryItems).set({ quantity: Math.max(0, n6(item.quantity) + delta).toFixed(3), updatedAt: /* @__PURE__ */ new Date(), ...type === "ajustement" ? { lastCountedAt: /* @__PURE__ */ new Date() } : {} }).where(eq12(inventoryItems.id, item.id));
+    applied++;
+  }
+  return c.json({ ok: true, kind: d.kind, applied });
+});
+quickRoutes.get("/quick/inventory", async (c) => {
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const rows = await db.select({ id: inventoryItems.id, name: products.name, unit: products.baseUnit, category: products.category, quantity: inventoryItems.quantity, criticalLevel: inventoryItems.criticalLevel, lastCountedAt: inventoryItems.lastCountedAt }).from(inventoryItems).innerJoin(products, eq12(products.id, inventoryItems.productId)).where(eq12(inventoryItems.restaurantId, rid));
+  const items = rows.map((r) => ({ ...r, quantity: n6(r.quantity), criticalLevel: n6(r.criticalLevel), daysSinceCount: r.lastCountedAt ? Math.floor((Date.now() - new Date(r.lastCountedAt).getTime()) / 864e5) : null })).sort((a, b) => (a.daysSinceCount ?? 999) === (b.daysSinceCount ?? 999) ? a.name.localeCompare(b.name) : (b.daysSinceCount ?? 999) - (a.daysSinceCount ?? 999));
+  const [{ counted7 }] = await db.select({ counted7: sql8`count(*) filter (where ${inventoryItems.lastCountedAt} > now() - interval '7 days')` }).from(inventoryItems).where(eq12(inventoryItems.restaurantId, rid));
+  return c.json({ items, total: items.length, countedLast7Days: n6(counted7) });
+});
+quickRoutes.post("/quick/invoice", async (c) => {
+  const body = z9.object({ image: z9.string().startsWith("data:image/").max(8e6) }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "Image requise (data URL, \u2264 6 Mo)" }, 400);
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const res = await extractInvoiceFromImage(body.data.image);
+  if (!res.ok) return c.json({ error: res.error }, 503);
+  const ctx = await entities(rid);
+  const sups = await db.select({ id: suppliers.id, name: suppliers.name }).from(suppliers).where(eq12(suppliers.restaurantId, rid));
+  const supplier = res.data.supplierName ? bestMatches(res.data.supplierName, sups, 1)[0] ?? null : null;
+  const lines = res.data.lines.map((l) => {
+    const cands = bestMatches(l.label, ctx.products);
+    return { ...l, match: cands[0] && cands[0].score >= 0.6 ? cands[0] : null, candidates: cands };
+  });
+  return c.json({ supplierName: res.data.supplierName ?? null, supplier, date: res.data.date ?? null, total: res.data.total ?? null, lines, matched: lines.filter((l) => l.match).length });
+});
+quickRoutes.post("/quick/invoice/apply", async (c) => {
+  const body = z9.object({
+    supplierId: z9.string().uuid().optional(),
+    date: z9.string().optional(),
+    note: z9.string().max(200).optional(),
+    lines: z9.array(z9.object({ inventoryItemId: z9.string().uuid(), qty: z9.number().positive(), unitPrice: z9.number().positive().optional() })).min(1).max(80)
+  }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "Donn\xE9es invalides", details: body.error.flatten() }, 400);
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const user = c.get("user");
+  const d = body.data;
+  const items = await db.select().from(inventoryItems).where(and8(eq12(inventoryItems.restaurantId, rid), inArray7(inventoryItems.id, d.lines.map((l) => l.inventoryItemId))));
+  const byId = new Map(items.map((i) => [i.id, i]));
+  let received = 0;
+  let pricesUpdated = 0;
+  if (d.supplierId) {
+    const [s] = await db.select({ id: suppliers.id }).from(suppliers).where(and8(eq12(suppliers.id, d.supplierId), eq12(suppliers.restaurantId, rid)));
+    if (!s) return c.json({ error: "Fournisseur introuvable" }, 404);
+  }
+  for (const l of d.lines) {
+    const item = byId.get(l.inventoryItemId);
+    if (!item) continue;
+    await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type: "reception", quantity: l.qty.toFixed(3), note: d.note ?? `Facture ${d.date ?? ""}`.trim(), createdBy: user.id });
+    await db.update(inventoryItems).set({ quantity: (n6(item.quantity) + l.qty).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq12(inventoryItems.id, item.id));
+    received++;
+    if (d.supplierId && l.unitPrice) {
+      const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid, supplierId: d.supplierId, productId: item.productId, packLabel: "facture", packQty: "1.000", packPriceEur: l.unitPrice.toFixed(2), inStock: true }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packPriceEur: l.unitPrice.toFixed(2), lastSeenAt: /* @__PURE__ */ new Date() } }).returning();
+      await db.insert(priceHistory).values({ restaurantId: rid, offerId: offer.id, unitPriceEur: l.unitPrice.toFixed(4), source: "facture" });
+      pricesUpdated++;
+    }
+  }
+  return c.json({ ok: true, received, pricesUpdated });
+});
+
+// apps/api/src/routes/status.ts
+init_src();
+import { Hono as Hono10 } from "hono";
+import { desc as desc6, eq as eq13, sql as sql9 } from "drizzle-orm";
+var statusRoutes = new Hono10();
 statusRoutes.get("/status", async (c) => {
   const t0 = Date.now();
   let dbOk = false;
@@ -4111,10 +4357,10 @@ statusRoutes.get("/status", async (c) => {
   let lastJob = null;
   try {
     const db = await getDb();
-    await db.execute(sql8`select 1`);
+    await db.execute(sql9`select 1`);
     dbMs = Date.now() - t0;
     dbOk = true;
-    const [j] = await db.select().from(jobRuns).where(eq12(jobRuns.job, "daily")).orderBy(desc6(jobRuns.startedAt)).limit(1);
+    const [j] = await db.select().from(jobRuns).where(eq13(jobRuns.job, "daily")).orderBy(desc6(jobRuns.startedAt)).limit(1);
     if (j) lastJob = { status: j.status, finishedAt: j.finishedAt, durationMs: j.durationMs, sent: j.summary?.sent, count: j.summary?.count };
   } catch {
     dbOk = false;
@@ -4144,7 +4390,7 @@ statusRoutes.get("/status/jobs", async (c) => {
 });
 
 // apps/api/src/app.ts
-var app = new Hono10();
+var app = new Hono11();
 if (process.env.NODE_ENV !== "test") app.use("*", logger());
 app.use("*", securityHeaders);
 app.use("/api/auth/login", rateLimit({ windowMs: 6e4, max: 10 }));
@@ -4162,6 +4408,7 @@ app.route("/api", intelligenceRoutes);
 app.route("/api", manageRoutes);
 app.route("/api", settingsRoutes);
 app.route("/api", accountRoutes);
+app.route("/api", quickRoutes);
 app.notFound((c) => c.json({ error: "Route inconnue" }, 404));
 app.onError((err, c) => {
   console.error(err);

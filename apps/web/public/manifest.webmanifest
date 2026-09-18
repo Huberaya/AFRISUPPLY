@@ -1,0 +1,22 @@
+{
+  "name": "AFRISUPPLY",
+  "short_name": "AFRISUPPLY",
+  "description": "L'assistant d'approvisionnement des restaurants africains",
+  "start_url": "/app/express",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fafaf9",
+  "theme_color": "#c2410c",
+  "lang": "fr",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Saisie express", "url": "/app/express", "description": "Ventes du soir, comptage, facture" },
+    { "name": "Stock", "url": "/app/stock" },
+    { "name": "Panier", "url": "/app/achats/panier" }
+  ]
+}
