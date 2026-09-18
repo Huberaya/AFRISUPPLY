@@ -11,6 +11,8 @@ import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
 import { accountRoutes } from './routes/account.js';
 import { quickRoutes } from './routes/quick.js';
+import { marketplaceRoutes } from './routes/marketplace.js';
+import { vendorRoutes, vendorAdminRoutes } from './routes/vendor.js';
 import { statusRoutes } from './routes/status.js';
 import { captureException, securityHeaders, rateLimit, buildInfo } from './lib/ops.js';
 
@@ -27,6 +29,8 @@ app.route('/api', statusRoutes);
 app.route('/api', jobsRoutes); // cron (secret propre)
 app.route('/api', publicRoutes); // public en premier : les routeurs suivants imposent l'auth via use('*')
 app.route('/api/auth', authRoutes);
+app.route('/api', vendorRoutes); // espace fournisseur : comptes sans restaurant → avant les routeurs qui imposent requireRestaurant
+app.route('/api', vendorAdminRoutes);
 app.route('/api', restaurantRoutes);
 app.route('/api', catalogRoutes);
 app.route('/api', intelligenceRoutes);
@@ -34,6 +38,8 @@ app.route('/api', manageRoutes);
 app.route('/api', settingsRoutes);
 app.route('/api', accountRoutes);
 app.route('/api', quickRoutes);
+app.route('/api', marketplaceRoutes);
+
 
 app.notFound((c) => c.json({ error: 'Route inconnue' }, 404));
 app.onError((err, c) => {

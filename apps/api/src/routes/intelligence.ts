@@ -8,6 +8,7 @@ import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, orders, orderLines, deliveries,
   recipes, recipeIngredients, sales, forecasts, reorderRules, alerts, restaurants,
 } from '@afrisupply/db';
+import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { forecastRecipes, forecastProducts, buildSmartCart, type CartOffer } from '../lib/forecast.js';
 import { compareOffers, recipeCost, marginAnalysis, supplierReliability, daysOfStock, stockStatus } from '../lib/engines.js';
@@ -81,8 +82,7 @@ intelligenceRoutes.post('/smart-cart/checkout', async (c) => {
     const [sup] = await db.select().from(suppliers).where(and(eq(suppliers.id, s.supplierId), eq(suppliers.restaurantId, rid)));
     if (!sup) continue;
     const offs = await db.select().from(supplierOffers).where(and(eq(supplierOffers.supplierId, sup.id), inArray(supplierOffers.id, s.lines.map((l) => l.offerId))));
-    const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(orders).where(eq(orders.restaurantId, rid));
-    const reference = `AFS-${new Date().getFullYear()}-${String(n(count) + 1).padStart(6, '0')}`;
+    const reference = await nextOrderReference();
     const lines = s.lines.flatMap((l) => { const o = offs.find((x) => x.id === l.offerId); if (!o) return []; const unit = n(o.packPriceEur) / n(o.packQty); return [{ productId: o.productId, offerId: o.id, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n(o.packQty)).toFixed(3), unitPriceEur: unit.toFixed(4), lineTotalEur: (l.packs * n(o.packPriceEur)).toFixed(2) }]; });
     const total = lines.reduce((a, l) => a + Number(l.lineTotalEur), 0);
     const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: sup.id, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + sup.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: sup.deliveryFeeEur, source: body.data.source, createdBy: user.id }).returning();
@@ -276,8 +276,7 @@ export async function runAutoReorder(rid: string, userId: string | null = null) 
     const f = ctx.productForecasts.find((x) => x.productId === s.productId);
     const cmp = compareOffers(cands, { daysOfStockLeft: f?.daysOfStockLeft ?? null, neededQty: n(rule.reorderQty), unit: s.unit });
     const best = cmp.recommended!; const packs = Math.max(1, Math.ceil(n(rule.reorderQty) / best.packQty));
-    const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(orders).where(eq(orders.restaurantId, rid));
-    const reference = `AFS-${new Date().getFullYear()}-${String(n(count) + 1).padStart(6, '0')}`;
+    const reference = await nextOrderReference();
     const total = packs * best.packPrice;
     const sup = await db.select().from(suppliers).where(eq(suppliers.id, best.supplierId)).then((r) => r[0]);
     const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: best.supplierId, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + best.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: best.deliveryFee.toFixed(2), source: 'auto_reorder', createdBy: userId, notes: cmp.justification.join(' ') }).returning();

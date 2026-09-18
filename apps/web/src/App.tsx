@@ -21,6 +21,9 @@ const Onboarding = lazy(() => import('./pages/Onboarding'));
 const Import = lazy(() => import('./pages/Import'));
 const Forecast = lazy(() => import('./pages/Forecast'));
 const SmartCart = lazy(() => import('./pages/SmartCart'));
+const Marketplace = lazy(() => import('./pages/Marketplace'));
+const VendorSpace = lazy(() => import('./pages/vendor/VendorSpace'));
+const AdminVendors = lazy(() => import('./pages/admin/AdminVendors'));
 const Sales = lazy(() => import('./pages/Sales'));
 const Discrepancies = lazy(() => import('./pages/Discrepancies'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -58,6 +61,7 @@ export default function App() {
               <Route path="/statut" element={<StatusPage />} />
             </Route>
             <Route path="/connexion" element={<Login />} />
+            <Route path="/fournisseur" element={<VendorSpace />} />
             <Route path="/inscription" element={<Register />} />
             <Route element={<Protected />}>
               <Route path="/app" element={<AppLayout />}>
@@ -70,6 +74,8 @@ export default function App() {
                 <Route path="achats/ecarts" element={<Discrepancies />} />
                 <Route path="ventes" element={<Sales />} />
                 <Route path="fournisseurs" element={<Suppliers />} />
+                <Route path="marketplace" element={<Marketplace />} />
+                <Route path="admin/fournisseurs" element={<AdminVendors />} />
                 <Route path="fournisseurs/:id" element={<SupplierDetail />} />
                 <Route path="recettes" element={<Recipes />} />
                 <Route path="analyse" element={<Analysis />} />

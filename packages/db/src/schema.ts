@@ -7,6 +7,7 @@
 // =============================================================
 
 import {
+  primaryKey,
   pgTable, uuid, text, timestamp, numeric, integer, boolean,
   date, jsonb, pgEnum, index, uniqueIndex,
 } from 'drizzle-orm/pg-core';
@@ -111,6 +112,7 @@ export const suppliers = pgTable('suppliers', {
   rating: numeric('rating', { precision: 2, scale: 1 }),   // note manuelle 0–5
   notes: text('notes'),
   isActive: boolean('is_active').default(true).notNull(),
+  vendorId: uuid('vendor_id'),                       // fournisseur inscrit sur la plateforme (chantier 10)
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('suppliers_restaurant_idx').on(t.restaurantId)]);
 
@@ -189,6 +191,9 @@ export const orders = pgTable('orders', {
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   sentAt: timestamp('sent_at', { withTimezone: true }),
   deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  vendorId: uuid('vendor_id'),                       // commande « plateforme » (chantier 10)
+  vendorDecisionAt: timestamp('vendor_decision_at', { withTimezone: true }),
+  vendorNote: text('vendor_note'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('orders_restaurant_idx').on(t.restaurantId, t.createdAt), uniqueIndex('orders_ref').on(t.reference)]);
 
@@ -417,3 +422,86 @@ export const auditLog = pgTable('audit_log', {
   target: text('target'),
   meta: jsonb('meta').$type<Record<string, unknown>>(),
 }, (t) => [index('audit_at_idx').on(t.at)]);
+
+// -------------------------------------------------------------
+// Marketplace B2B (chantier 10) : fournisseurs inscrits sur la plateforme, catalogue public,
+// commandes « plateforme » confirmées par le fournisseur, achats groupés, commission.
+// -------------------------------------------------------------
+export const vendorStatus = pgEnum('vendor_status', ['en_attente', 'actif', 'suspendu']);
+export const vendors = pgTable('vendors', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull().unique(),
+  description: text('description'),
+  city: text('city'),
+  deliveryZones: text('delivery_zones').array().default(sql`'{}'::text[]`).notNull(), // codes postaux / villes / « France » (livraison en ligne)
+  categories: productCategory('categories').array().default(sql`'{}'::product_category[]`).notNull(),
+  leadTimeHours: integer('lead_time_hours').default(48).notNull(),
+  deliveryDays: integer('delivery_days').array().default(sql`'{1,2,3,4,5}'::int[]`).notNull(),
+  minOrderEur: numeric('min_order_eur', { precision: 10, scale: 2 }).default('0').notNull(),
+  deliveryFeeEur: numeric('delivery_fee_eur', { precision: 10, scale: 2 }).default('0').notNull(),
+  commissionPct: numeric('commission_pct', { precision: 4, scale: 2 }).default('3.00').notNull(), // 2–5 %
+  contactEmail: text('contact_email'),
+  contactPhone: text('contact_phone'),
+  whatsapp: text('whatsapp'),
+  status: vendorStatus('status').default('en_attente').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const vendorMembers = pgTable('vendor_members', {
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  role: text('role').default('owner').notNull(), // owner | staff
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [primaryKey({ columns: [t.vendorId, t.userId] })]);
+
+/** Catalogue public d'un fournisseur plateforme (produits du référentiel commun uniquement). */
+export const vendorOffers = pgTable('vendor_offers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  productId: uuid('product_id').notNull().references(() => products.id, { onDelete: 'cascade' }),
+  packLabel: text('pack_label').notNull(),
+  packQty: numeric('pack_qty', { precision: 10, scale: 3 }).notNull(),
+  packPriceEur: numeric('pack_price_eur', { precision: 10, scale: 2 }).notNull(),
+  inStock: boolean('in_stock').default(true).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('vendor_offers_vendor_idx').on(t.vendorId), index('vendor_offers_product_idx').on(t.productId), uniqueIndex('vendor_offers_unique').on(t.vendorId, t.productId, t.packLabel)]);
+
+/** Achat groupé : plusieurs restaurants d'une zone se regroupent sur une offre ; palier de remise atteint → commandes créées. */
+export const groupBuyStatus = pgEnum('group_buy_status', ['ouvert', 'atteint', 'cloture', 'annule']);
+export const groupBuys = pgTable('group_buys', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  vendorOfferId: uuid('vendor_offer_id').notNull().references(() => vendorOffers.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),                    // « Riz brisé 25 kg — palier 40 sacs = −12 % »
+  zone: text('zone').notNull(),                       // « Nantes », « 44 », « Île-de-France »
+  targetPacks: integer('target_packs').notNull(),
+  discountPct: numeric('discount_pct', { precision: 4, scale: 2 }).notNull(),
+  closesAt: timestamp('closes_at', { withTimezone: true }).notNull(),
+  deliveryDate: date('delivery_date'),
+  status: groupBuyStatus('status').default('ouvert').notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('group_buys_zone_idx').on(t.zone, t.status)]);
+
+export const groupBuyParticipations = pgTable('group_buy_participations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  groupBuyId: uuid('group_buy_id').notNull().references(() => groupBuys.id, { onDelete: 'cascade' }),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  packs: integer('packs').notNull(),
+  orderId: uuid('order_id').references(() => orders.id, { onDelete: 'set null' }), // créée à la clôture
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex('gbp_unique').on(t.groupBuyId, t.restaurantId)]);
+
+/** Commission plateforme par commande « plateforme » confirmée (base de facturation fournisseur). */
+export const commissions = pgTable('commissions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  orderId: uuid('order_id').notNull().references(() => orders.id, { onDelete: 'cascade' }).unique(),
+  orderTotalEur: numeric('order_total_eur', { precision: 10, scale: 2 }).notNull(),
+  pct: numeric('pct', { precision: 4, scale: 2 }).notNull(),
+  amountEur: numeric('amount_eur', { precision: 10, scale: 2 }).notNull(),
+  period: text('period').notNull(),                  // AAAA-MM
+  invoiced: boolean('invoiced').default(false).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('commissions_vendor_period_idx').on(t.vendorId, t.period)]);

@@ -1,0 +1,246 @@
+// Espace fournisseur (chantier 10) : inscription, catalogue, commandes reçues (confirmer / refuser / livrer),
+// achats groupés (créer / clôturer → commandes), commissions. Un utilisateur peut être membre d'un ou plusieurs vendors.
+import { Hono, type Context, type Next } from 'hono';
+import { z } from 'zod';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { getDb, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, suppliers, supplierOffers } from '@afrisupply/db';
+import { nextOrderReference } from '../lib/reference.js';
+import { requireAuth, type Env } from '../lib/auth.js';
+import { sendMail } from '../lib/mailer.js';
+import { audit } from '../lib/ops.js';
+import { APP_URL } from '../jobs/daily.js';
+
+type VEnv = { Variables: Env['Variables'] & { vendorId: string } };
+export const vendorRoutes = new Hono<VEnv>();
+const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
+const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
+const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
+
+/** Résout le vendor courant (header X-Vendor-Id ou 1er du membre). */
+async function requireVendor(c: Context<VEnv>, next: Next) {
+  const db = await getDb(); const user = c.get('user'); const wanted = c.req.header('x-vendor-id');
+  const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq(vendorMembers.userId, user.id));
+  const vid = wanted && rows.some((r) => r.vendorId === wanted) ? wanted : rows[0]?.vendorId;
+  if (!vid) return c.json({ error: 'Aucun espace fournisseur pour ce compte' }, 403);
+  c.set('vendorId', vid); await next();
+}
+
+// ---- inscription (compte utilisateur existant requis : le fournisseur crée d'abord un compte AFRISUPPLY) ----
+vendorRoutes.post('/vendor/register', requireAuth, async (c) => {
+  const body = z.object({
+    name: z.string().min(2), description: z.string().max(500).optional(), city: z.string().optional(), deliveryZones: z.array(z.string().min(1)).max(30).default([]),
+    categories: z.array(z.enum(['feculents', 'frais', 'viandes_poissons', 'epicerie', 'boissons', 'emballages'])).default([]),
+    leadTimeHours: z.number().int().positive().default(48), minOrderEur: z.number().nonnegative().default(0), deliveryFeeEur: z.number().nonnegative().default(0),
+    contactEmail: z.string().email().optional(), contactPhone: z.string().optional(), whatsapp: z.string().optional(),
+  }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
+  const db = await getDb(); const user = c.get('user'); const d = body.data;
+  const [v] = await db.insert(vendors).values({ ...d, slug: `${slugify(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z) => z.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: process.env.VENDOR_AUTO_APPROVE === 'true' ? 'actif' : 'en_attente' }).returning();
+  await db.insert(vendorMembers).values({ vendorId: v.id, userId: user.id, role: 'owner' });
+  await audit('vendor.register', { actorEmail: user.email, target: v.id, meta: { name: v.name } });
+  return c.json({ vendor: v, message: v.status === 'actif' ? 'Espace fournisseur activé.' : 'Demande enregistrée : votre espace sera activé après vérification (sous 24 h ouvrées).' }, 201);
+});
+
+vendorRoutes.get('/vendor/me', requireAuth, async (c) => {
+  const db = await getDb(); const user = c.get('user');
+  const rows = await db.select({ vendor: vendors, role: vendorMembers.role }).from(vendorMembers).innerJoin(vendors, eq(vendors.id, vendorMembers.vendorId)).where(eq(vendorMembers.userId, user.id));
+  return c.json({ vendors: rows.map((r) => ({ ...r.vendor, role: r.role })), isAdmin: isAdmin(user.email) });
+});
+
+// ---- tout ce qui suit exige un vendor ----
+vendorRoutes.use('/vendor/*', requireAuth, requireVendor);
+
+vendorRoutes.get('/vendor/dashboard', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
+  const [stats] = await db.select({
+    pending: sql<number>`count(*) filter (where ${orders.status} = 'envoyee')`, confirmed: sql<number>`count(*) filter (where ${orders.status} = 'confirmee')`,
+    month: sql<number>`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= date_trunc('month', now())),0)`,
+    restaurants: sql<number>`count(distinct ${orders.restaurantId}) filter (where ${orders.status} <> 'annulee')`,
+  }).from(orders).where(eq(orders.vendorId, vid));
+  const [{ offers }] = await db.select({ offers: sql<number>`count(*)` }).from(vendorOffers).where(eq(vendorOffers.vendorId, vid));
+  const [{ linked }] = await db.select({ linked: sql<number>`count(*)` }).from(suppliers).where(eq(suppliers.vendorId, vid));
+  const period = new Date().toISOString().slice(0, 7);
+  const [{ commission }] = await db.select({ commission: sql<number>`coalesce(sum(${commissions.amountEur}),0)` }).from(commissions).where(and(eq(commissions.vendorId, vid), eq(commissions.period, period)));
+  return c.json({ vendor: v, stats: { pendingOrders: n(stats.pending), confirmedOrders: n(stats.confirmed), monthRevenue: n(stats.month), restaurantsServed: n(stats.restaurants), offers: n(offers), restaurantsFollowing: n(linked), commissionThisMonth: n(commission), commissionPct: n(v.commissionPct) } });
+});
+
+vendorRoutes.put('/vendor/profile', async (c) => {
+  const body = z.object({ name: z.string().min(2).optional(), description: z.string().max(500).nullable().optional(), city: z.string().nullable().optional(), deliveryZones: z.array(z.string()).max(30).optional(), leadTimeHours: z.number().int().positive().optional(), deliveryDays: z.array(z.number().int().min(1).max(7)).optional(), minOrderEur: z.number().nonnegative().optional(), deliveryFeeEur: z.number().nonnegative().optional(), contactEmail: z.string().email().nullable().optional(), contactPhone: z.string().nullable().optional(), whatsapp: z.string().nullable().optional() }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb(); const d = body.data;
+  const [v] = await db.update(vendors).set({ ...d, deliveryZones: d.deliveryZones?.map((z) => z.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq(vendors.id, c.get('vendorId'))).returning();
+  return c.json({ vendor: v });
+});
+
+// ---- catalogue ----
+vendorRoutes.get('/vendor/offers', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const rows = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq(products.id, vendorOffers.productId)).where(eq(vendorOffers.vendorId, vid)).orderBy(products.category, products.name);
+  return c.json({ offers: rows.map(({ offer, product }) => ({ ...offer, productName: product.name, category: product.category, unit: product.baseUnit, unitPrice: Math.round((n(offer.packPriceEur) / n(offer.packQty)) * 10000) / 10000 })) });
+});
+
+/** Upsert d'une offre + propagation du prix à tous les restaurants qui ont lié ce fournisseur. */
+vendorRoutes.post('/vendor/offers', async (c) => {
+  const body = z.object({ productId: z.string().uuid(), packLabel: z.string().min(1), packQty: z.number().positive(), packPrice: z.number().positive(), inStock: z.boolean().default(true) }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId'); const d = body.data;
+  const [p] = await db.select({ id: products.id }).from(products).where(and(eq(products.id, d.productId), sql`${products.restaurantId} is null`)); if (!p) return c.json({ error: 'Produit hors référentiel commun' }, 400);
+  const [offer] = await db.insert(vendorOffers).values({ vendorId: vid, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock })
+    .onConflictDoUpdate({ target: [vendorOffers.vendorId, vendorOffers.productId, vendorOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, updatedAt: new Date() } }).returning();
+  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq(suppliers.vendorId, vid));
+  for (const s of linked) {
+    await db.insert(supplierOffers).values({ restaurantId: s.restaurantId, supplierId: s.id, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock })
+      .onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, lastSeenAt: new Date() } });
+  }
+  return c.json({ offer, propagatedTo: linked.length }, 201);
+});
+
+/** Import CSV du catalogue : product,pack_label,pack_qty,pack_price[,in_stock] — product = nom du référentiel (ou alias). */
+vendorRoutes.post('/vendor/offers/import', async (c) => {
+  const body = z.object({ rows: z.array(z.object({ product: z.string(), packLabel: z.string(), packQty: z.number().positive(), packPrice: z.number().positive(), inStock: z.boolean().optional() })).min(1).max(2000) }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId');
+  const ref = await db.select({ id: products.id, name: products.name, aliases: products.aliases }).from(products).where(sql`${products.restaurantId} is null`);
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  const byName = new Map<string, string>(); for (const p of ref) { byName.set(norm(p.name), p.id); for (const a of p.aliases) byName.set(norm(a), p.id); }
+  let ok = 0; const unknown: string[] = [];
+  for (const r of body.data.rows) {
+    const pid = byName.get(norm(r.product)); if (!pid) { unknown.push(r.product); continue; }
+    await db.insert(vendorOffers).values({ vendorId: vid, productId: pid, packLabel: r.packLabel, packQty: r.packQty.toFixed(3), packPriceEur: r.packPrice.toFixed(2), inStock: r.inStock ?? true })
+      .onConflictDoUpdate({ target: [vendorOffers.vendorId, vendorOffers.productId, vendorOffers.packLabel], set: { packQty: r.packQty.toFixed(3), packPriceEur: r.packPrice.toFixed(2), inStock: r.inStock ?? true, updatedAt: new Date() } }); ok++;
+  }
+  return c.json({ imported: ok, unknown });
+});
+
+vendorRoutes.delete('/vendor/offers/:id', async (c) => {
+  const db = await getDb(); await db.delete(vendorOffers).where(and(eq(vendorOffers.id, c.req.param('id')), eq(vendorOffers.vendorId, c.get('vendorId')))); return c.json({ ok: true });
+});
+
+// ---- commandes reçues ----
+vendorRoutes.get('/vendor/orders', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId'); const status = c.req.query('status');
+  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address })
+    .from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId))
+    .where(status ? and(eq(orders.vendorId, vid), eq(orders.status, status as typeof orders.status.enumValues[number])) : eq(orders.vendorId, vid)).orderBy(desc(orders.createdAt)).limit(100);
+  const ids = rows.map((r) => r.order.id);
+  const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(inArray(orderLines.orderId, ids)) : [];
+  return c.json({ orders: rows.map((r) => ({ ...r.order, restaurantName: r.restaurantName, city: r.city, address: r.address, lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
+});
+
+async function notifyRestaurant(orderId: string, subject: string, text: string) {
+  const db = await getDb();
+  const [o] = await db.select({ restaurantId: orders.restaurantId }).from(orders).where(eq(orders.id, orderId));
+  const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, o.restaurantId), inArray(restaurantMembers.role, ['owner', 'manager'])));
+  for (const r of rcpts) void sendMail({ to: r.email, subject, text, html: `<p>${text.replace(/\n/g, '<br>')}</p><p><a href="${APP_URL()}/app/achats">Voir mes commandes</a></p>`, tags: { type: 'order_status' } });
+}
+
+/** Confirmer : statut confirmee + date de livraison + commission calculée. */
+vendorRoutes.post('/vendor/orders/:id/confirm', async (c) => {
+  const body = z.object({ expectedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), note: z.string().max(300).optional() }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid))); if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  if (o.status !== 'envoyee') return c.json({ error: `Commande déjà ${o.status}` }, 400);
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
+  const [upd] = await db.update(orders).set({ status: 'confirmee', expectedAt: body.data.expectedAt ?? o.expectedAt, vendorDecisionAt: new Date(), vendorNote: body.data.note }).where(eq(orders.id, o.id)).returning();
+  const amount = n(o.totalEur) * n(v.commissionPct) / 100;
+  await db.insert(commissions).values({ vendorId: vid, orderId: o.id, orderTotalEur: o.totalEur, pct: v.commissionPct, amountEur: amount.toFixed(2), period: new Date().toISOString().slice(0, 7) }).onConflictDoNothing();
+  void notifyRestaurant(o.id, `✅ ${v.name} a confirmé votre commande ${o.reference}`, `${v.name} a confirmé la commande ${o.reference} (${eur(n(o.totalEur))}).\nLivraison prévue le ${upd.expectedAt ?? 'à confirmer'}.${body.data.note ? `\nMessage du fournisseur : ${body.data.note}` : ''}`);
+  return c.json({ order: upd, commission: Math.round(amount * 100) / 100 });
+});
+
+vendorRoutes.post('/vendor/orders/:id/refuse', async (c) => {
+  const body = z.object({ reason: z.string().min(2).max(300) }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Motif requis' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid))); if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  if (o.status !== 'envoyee') return c.json({ error: `Commande déjà ${o.status}` }, 400);
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, vid));
+  const [upd] = await db.update(orders).set({ status: 'annulee', vendorDecisionAt: new Date(), vendorNote: body.data.reason }).where(eq(orders.id, o.id)).returning();
+  void notifyRestaurant(o.id, `❌ ${v.name} ne peut pas honorer la commande ${o.reference}`, `${v.name} a refusé la commande ${o.reference}.\nMotif : ${body.data.reason}\n\nLe comparateur AFRISUPPLY vous propose des alternatives dans le panier.`);
+  return c.json({ order: upd });
+});
+
+/** Marquer expédiée/livrée côté fournisseur (le restaurant confirme la réception réelle dans son app). */
+vendorRoutes.post('/vendor/orders/:id/shipped', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [o] = await db.update(orders).set({ vendorNote: sql`coalesce(${orders.vendorNote}, '') || ' [expédiée]'` }).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid), eq(orders.status, 'confirmee'))).returning();
+  if (!o) return c.json({ error: 'Commande introuvable ou non confirmée' }, 404);
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, vid));
+  void notifyRestaurant(o.id, `🚚 ${v.name} : commande ${o.reference} en route`, `Votre commande ${o.reference} est partie. Pensez à la réceptionner dans AFRISUPPLY pour mettre le stock à jour et signaler tout écart.`);
+  return c.json({ order: o });
+});
+
+// ---- achats groupés ----
+vendorRoutes.get('/vendor/group-buys', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const rows = await db.select({ gb: groupBuys, productName: products.name, packLabel: vendorOffers.packLabel }).from(groupBuys).innerJoin(vendorOffers, eq(vendorOffers.id, groupBuys.vendorOfferId)).innerJoin(products, eq(products.id, vendorOffers.productId)).where(eq(groupBuys.vendorId, vid)).orderBy(desc(groupBuys.createdAt));
+  const ids = rows.map((r) => r.gb.id);
+  const parts = ids.length ? await db.select({ p: groupBuyParticipations, restaurantName: restaurants.name, city: restaurants.city }).from(groupBuyParticipations).innerJoin(restaurants, eq(restaurants.id, groupBuyParticipations.restaurantId)).where(inArray(groupBuyParticipations.groupBuyId, ids)) : [];
+  return c.json({ groupBuys: rows.map((r) => { const p = parts.filter((x) => x.p.groupBuyId === r.gb.id); return { ...r.gb, productName: r.productName, packLabel: r.packLabel, committedPacks: p.reduce((a, x) => a + x.p.packs, 0), participants: p.map((x) => ({ restaurantName: x.restaurantName, city: x.city, packs: x.p.packs })) }; }) });
+});
+
+vendorRoutes.post('/vendor/group-buys', async (c) => {
+  const body = z.object({ vendorOfferId: z.string().uuid(), zone: z.string().min(2), targetPacks: z.number().int().min(2), discountPct: z.number().min(1).max(50), closesInDays: z.number().int().min(1).max(30).default(7), deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), title: z.string().max(120).optional() }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
+  const db = await getDb(); const vid = c.get('vendorId'); const d = body.data; const user = c.get('user');
+  const [o] = await db.select({ offer: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq(products.id, vendorOffers.productId)).where(and(eq(vendorOffers.id, d.vendorOfferId), eq(vendorOffers.vendorId, vid))); if (!o) return c.json({ error: 'Offre introuvable' }, 404);
+  const title = d.title ?? `${o.productName} ${o.offer.packLabel} — ${d.targetPacks} colis = −${d.discountPct} %`;
+  const [gb] = await db.insert(groupBuys).values({ vendorId: vid, vendorOfferId: d.vendorOfferId, title, zone: d.zone.trim().toLowerCase() === 'france' ? 'France' : d.zone.trim().toLowerCase(), targetPacks: d.targetPacks, discountPct: d.discountPct.toFixed(2), closesAt: new Date(Date.now() + d.closesInDays * 86_400_000), deliveryDate: d.deliveryDate, createdBy: user.id }).returning();
+  return c.json({ groupBuy: gb }, 201);
+});
+
+/** Clôture : si palier atteint → une commande « plateforme » confirmée par restaurant au prix remisé ; sinon annulé. */
+vendorRoutes.post('/vendor/group-buys/:id/close', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId'); const id = c.req.param('id');
+  const [gb] = await db.select().from(groupBuys).where(and(eq(groupBuys.id, id), eq(groupBuys.vendorId, vid))); if (!gb) return c.json({ error: 'Introuvable' }, 404);
+  if (!['ouvert', 'atteint'].includes(gb.status)) return c.json({ error: `Déjà ${gb.status}` }, 400);
+  const parts = await db.select().from(groupBuyParticipations).where(eq(groupBuyParticipations.groupBuyId, id));
+  const committed = parts.reduce((a, p) => a + p.packs, 0);
+  if (committed < gb.targetPacks) { await db.update(groupBuys).set({ status: 'annule' }).where(eq(groupBuys.id, id)); return c.json({ ok: true, status: 'annule', committed, target: gb.targetPacks }); }
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
+  const [offer] = await db.select().from(vendorOffers).where(eq(vendorOffers.id, gb.vendorOfferId));
+  const packPrice = n(offer.packPriceEur) * (1 - n(gb.discountPct) / 100);
+  const { linkVendor } = await import('./marketplace.js');
+  let created = 0;
+  for (const p of parts) {
+    if (p.packs <= 0 || p.orderId) continue;
+    const link = await linkVendor(p.restaurantId, vid); if (!link) continue;
+    const total = p.packs * packPrice;
+    const [order] = await db.insert(orders).values({ restaurantId: p.restaurantId, supplierId: link.supplier.id, vendorId: vid, reference: await nextOrderReference(), status: 'confirmee', channel: 'plateforme', sentAt: new Date(), vendorDecisionAt: new Date(), expectedAt: gb.deliveryDate ?? new Date(Date.now() + v.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: '0', source: 'achat_groupe', notes: `Achat groupé « ${gb.title} » : −${n(gb.discountPct)} %` }).returning();
+    await db.insert(orderLines).values({ orderId: order.id, productId: offer.productId, packLabel: offer.packLabel, packs: p.packs, quantity: (p.packs * n(offer.packQty)).toFixed(3), unitPriceEur: (packPrice / n(offer.packQty)).toFixed(4), lineTotalEur: total.toFixed(2) });
+    await db.insert(commissions).values({ vendorId: vid, orderId: order.id, orderTotalEur: total.toFixed(2), pct: v.commissionPct, amountEur: (total * n(v.commissionPct) / 100).toFixed(2), period: new Date().toISOString().slice(0, 7) }).onConflictDoNothing();
+    await db.update(groupBuyParticipations).set({ orderId: order.id }).where(eq(groupBuyParticipations.id, p.id));
+    void notifyRestaurant(order.id, `🤝 Achat groupé réussi : ${gb.title}`, `Le palier est atteint (${committed} colis). Votre commande ${order.reference} de ${p.packs} colis à ${eur(packPrice)} le colis (−${n(gb.discountPct)} %) est confirmée chez ${v.name}.`);
+    created++;
+  }
+  await db.update(groupBuys).set({ status: 'cloture' }).where(eq(groupBuys.id, id));
+  return c.json({ ok: true, status: 'cloture', committed, ordersCreated: created });
+});
+
+// ---- commissions ----
+vendorRoutes.get('/vendor/commissions', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const rows = await db.select({ period: commissions.period, orders: sql<number>`count(*)`, base: sql<number>`sum(${commissions.orderTotalEur})`, amount: sql<number>`sum(${commissions.amountEur})`, invoiced: sql<boolean>`bool_and(${commissions.invoiced})` }).from(commissions).where(eq(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc(commissions.period));
+  return c.json({ periods: rows.map((r) => ({ ...r, orders: n(r.orders), base: n(r.base), amount: n(r.amount) })) });
+});
+
+// ---- admin plateforme : validation des fournisseurs ----
+export const vendorAdminRoutes = new Hono<Env>();
+vendorAdminRoutes.use('/admin/vendors/*', requireAuth); vendorAdminRoutes.use('/admin/vendors', requireAuth);
+vendorAdminRoutes.get('/admin/vendors', async (c) => {
+  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  const db = await getDb();
+  const rows = await db.select({ v: vendors, offerCount: sql<number>`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orderCount: sql<number>`(select count(*) from orders o where o.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc(vendors.createdAt));
+  return c.json({ vendors: rows.map((r) => ({ ...r.v, offerCount: Number(r.offerCount), orderCount: Number(r.orderCount) })) });
+});
+vendorAdminRoutes.put('/admin/vendors/:id', async (c) => {
+  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  const body = z.object({ status: z.enum(['en_attente', 'actif', 'suspendu']).optional(), commissionPct: z.number().min(0).max(20).optional() }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb();
+  const [v] = await db.update(vendors).set({ status: body.data.status, commissionPct: body.data.commissionPct?.toFixed(2) }).where(eq(vendors.id, c.req.param('id'))).returning();
+  if (v && body.data.status === 'actif' && v.contactEmail) void sendMail({ to: v.contactEmail, subject: 'Votre espace fournisseur AFRISUPPLY est activé', text: `Bonjour,\n\nVotre espace ${v.name} est actif : ${APP_URL()}/fournisseur\nAjoutez votre catalogue, les restaurants de votre zone vous verront dès aujourd'hui.\nCommission plateforme : ${n(v.commissionPct)} % sur les commandes confirmées, facturée mensuellement.`, html: `<p>Votre espace <b>${v.name}</b> est actif : <a href="${APP_URL()}/fournisseur">${APP_URL()}/fournisseur</a></p><p>Commission plateforme : ${n(v.commissionPct)} % sur les commandes confirmées.</p>`, tags: { type: 'vendor_activated' } });
+  await audit('vendor.update', { actorEmail: c.get('user').email, target: v?.id, meta: body.data });
+  return c.json({ vendor: v });
+});

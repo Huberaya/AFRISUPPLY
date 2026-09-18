@@ -5,6 +5,7 @@ import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements,
   orders, orderLines, deliveries, recipes, recipeIngredients, sales, alerts, restaurants,
 } from '@afrisupply/db';
+import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import {
   computeDailyUse, stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, alertsFromOpportunities,
@@ -262,9 +263,7 @@ restaurantRoutes.post('/orders', async (c) => {
   if (!sup) return c.json({ error: 'Fournisseur introuvable' }, 404);
   const offers = await db.select().from(supplierOffers).where(and(eq(supplierOffers.supplierId, sup.id), inArray(supplierOffers.id, d.lines.map((l) => l.offerId))));
   if (offers.length !== d.lines.length) return c.json({ error: 'Offre invalide pour ce fournisseur' }, 400);
-
-  const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(orders).where(eq(orders.restaurantId, rid));
-  const reference = `AFS-${new Date().getFullYear()}-${String(n(count) + 1).padStart(6, '0')}`;
+  const reference = await nextOrderReference();
   const linesData = d.lines.map((l) => {
     const o = offers.find((x) => x.id === l.offerId)!;
     const qty = l.packs * n(o.packQty); const unit = n(o.packPriceEur) / n(o.packQty);

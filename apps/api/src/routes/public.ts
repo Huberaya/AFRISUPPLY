@@ -1,8 +1,8 @@
 // Routes publiques (site vitrine) : tarifs, demande d'accès (lead), + admin léger des leads.
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { desc, eq, sql } from 'drizzle-orm';
-import { getDb, leads } from '@afrisupply/db';
+import { and, desc, eq, ilike, isNull, sql } from 'drizzle-orm';
+import { getDb, leads, products } from '@afrisupply/db';
 import { requireAuth, type Env } from '../lib/auth.js';
 
 export const publicRoutes = new Hono<Env>();
@@ -65,4 +65,12 @@ publicRoutes.put('/admin/leads/:id', requireAuth, async (c) => {
   const [row] = await db.update(leads).set(body.data).where(eq(leads.id, c.req.param('id') ?? '')).returning();
   if (!row) return c.json({ error: 'Lead introuvable' }, 404);
   return c.json(row);
+});
+
+/** Recherche dans le référentiel commun (produits sans restaurant) — utilisé par l'espace fournisseur pour créer ses offres. */
+publicRoutes.get('/public/reference', async (c) => {
+  const q = (c.req.query('q') ?? '').trim(); if (q.length < 2) return c.json({ products: [] });
+  const db = await getDb();
+  const rows = await db.select({ id: products.id, name: products.name, category: products.category, baseUnit: products.baseUnit }).from(products).where(and(isNull(products.restaurantId), ilike(products.name, `%${q}%`))).orderBy(products.name).limit(20);
+  return c.json({ products: rows });
 });

@@ -1,13 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { Logo } from '../components/AppLayout';
 
 export default function Login() {
-  const { login } = useAuth(); const nav = useNavigate();
+  const { login } = useAuth(); const nav = useNavigate(); const [sp] = useSearchParams(); const next = sp.get('next')?.startsWith('/') ? sp.get('next')! : '/app';
   const [email, setEmail] = useState('awa@chezawa.fr'); const [password, setPassword] = useState('demo1234');
   const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false);
-  const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); setError(null); try { await login(email, password); nav('/app'); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } };
+  const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); setError(null); try { await login(email, password); nav(next); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } };
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
       <div className="hidden lg:flex flex-col justify-between bg-stone-900 p-12 text-white">
