@@ -931,7 +931,7 @@ var init_products = __esm({
       P("Mayonnaise", "epicerie", "kg", ["mayo"], ["Pot 500 g", "Seau 5 kg"], "France", 180, ["sandwich", "salade"]),
       P("Ketchup", "epicerie", "kg", [], ["Bouteille 1 kg", "Seau 5 kg"], "France / Pays-Bas", 365, ["sandwich", "frites"]),
       P("Sauce piment (pili-pili en pot)", "epicerie", "kg", ["pili-pili", "sauce piment\xE9e", "pur\xE9e de piment", "sauce chili", "kani"], ["Pot 500 g", "Seau 2,5 kg"], "France / Cameroun / Tha\xEFlande", 365, ["condiment"]),
-      P("Shito (sauce piment ghan\xE9enne)", "epicerie", "kg", ["shito", "sauce piment noire", "ghana black pepper sauce"], ["Pot 300 g", "Pot 1 kg"], "Ghana", 180, ["kenkey", "waakye", "riz"]),
+      P("Shito (sauce piment ghan\xE9enne)", "epicerie", "kg", ["shito", "sauce piment noire", "ghana black pepper sauce"], ["Pot 300 g", "Pot 1 kg"], "Ghana", 180, ["kenkey", "waakye"]),
       P("Sauce soja", "epicerie", "L", ["soja"], ["Bouteille 1 L", "Bidon 5 L"], "Chine / Pays-Bas", 1e3, ["marinade poulet"]),
       P("Sauce Worcestershire / Tabasco", "epicerie", "L", ["worcestershire", "tabasco", "sauce anglaise"], ["Bouteille 150 mL"], "Royaume-Uni / USA", 1e3, ["marinade"]),
       P("Tamarin (pulpe)", "epicerie", "kg", ["dakhar", "pulpe de tamarin", "tamarin bloc", "tamarin sans graines"], ["Bloc 400 g", "Bloc 1 kg", "Carton 10 kg"], "Tha\xEFlande / Mali / S\xE9n\xE9gal", 365, ["jus de tamarin", "sauce", "dakhar"]),
@@ -5538,11 +5538,13 @@ function toBase(qty3, unit2, baseUnit) {
 function rankProducts(label, prods, mine, withOffers) {
   const words = normalize2(label).split(" ").filter((w) => w.length >= 2);
   const scored = prods.map((p) => {
-    const hay = [p.name, ...p.aliases].map((x) => normalize2(x).split(" "));
-    const exact = words.length && words.every((w) => hay.some((ws) => ws.includes(w))) ? 1 : 0;
-    const firstWord = hay.some((ws) => ws[0] === words[0]) ? 0.03 : 0;
-    const fuzzy = bestMatches(label, [{ id: p.id, name: p.name, aliases: p.aliases }], 1)[0]?.score ?? 0;
-    const score = Math.max(exact ? 0.9 + firstWord : 0, fuzzy) + (mine.has(p.id) ? 0.04 : 0) + (withOffers.has(p.id) ? 0.02 : 0);
+    const nameWords = normalize2(p.name).split(" ");
+    const aliasWords = p.aliases.map((x) => normalize2(x).split(" "));
+    const inName = words.length && words.every((w) => nameWords.includes(w));
+    const inAlias = words.length && words.every((w) => aliasWords.some((ws) => ws.includes(w)));
+    const exact = inName ? 0.95 + (nameWords[0] === words[0] ? 0.02 : 0) : inAlias ? aliasWords.some((ws) => ws.join(" ") === words.join(" ")) ? 0.9 : 0.85 : 0;
+    const fuzzy = Math.min(0.84, bestMatches(label, [{ id: p.id, name: p.name, aliases: p.aliases }], 1)[0]?.score ?? 0);
+    const score = Math.max(exact, fuzzy) + (mine.has(p.id) ? 0.02 : 0) + (withOffers.has(p.id) ? 0.01 : 0);
     return { id: p.id, name: p.name, score: Math.min(1, Math.round(score * 1e3) / 1e3) };
   }).filter((m) => m.score >= 0.45).sort((a, b) => b.score - a.score);
   return scored.slice(0, 4);

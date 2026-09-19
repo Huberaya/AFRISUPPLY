@@ -247,7 +247,7 @@ export const REFERENCE_PRODUCTS: RefProduct[] = [
   P('Mayonnaise', 'epicerie', 'kg', ['mayo'], ['Pot 500 g', 'Seau 5 kg'], 'France', 180, ['sandwich', 'salade']),
   P('Ketchup', 'epicerie', 'kg', [], ['Bouteille 1 kg', 'Seau 5 kg'], 'France / Pays-Bas', 365, ['sandwich', 'frites']),
   P('Sauce piment (pili-pili en pot)', 'epicerie', 'kg', ['pili-pili', 'sauce pimentée', 'purée de piment', 'sauce chili', 'kani'], ['Pot 500 g', 'Seau 2,5 kg'], 'France / Cameroun / Thaïlande', 365, ['condiment']),
-  P('Shito (sauce piment ghanéenne)', 'epicerie', 'kg', ['shito', 'sauce piment noire', 'ghana black pepper sauce'], ['Pot 300 g', 'Pot 1 kg'], 'Ghana', 180, ['kenkey', 'waakye', 'riz']),
+  P('Shito (sauce piment ghanéenne)', 'epicerie', 'kg', ['shito', 'sauce piment noire', 'ghana black pepper sauce'], ['Pot 300 g', 'Pot 1 kg'], 'Ghana', 180, ['kenkey', 'waakye']),
   P('Sauce soja', 'epicerie', 'L', ['soja'], ['Bouteille 1 L', 'Bidon 5 L'], 'Chine / Pays-Bas', 1000, ['marinade poulet']),
   P('Sauce Worcestershire / Tabasco', 'epicerie', 'L', ['worcestershire', 'tabasco', 'sauce anglaise'], ['Bouteille 150 mL'], 'Royaume-Uni / USA', 1000, ['marinade']),
   P('Tamarin (pulpe)', 'epicerie', 'kg', ['dakhar', 'pulpe de tamarin', 'tamarin bloc', 'tamarin sans graines'], ['Bloc 400 g', 'Bloc 1 kg', 'Carton 10 kg'], 'Thaïlande / Mali / Sénégal', 365, ['jus de tamarin', 'sauce', 'dakhar']),

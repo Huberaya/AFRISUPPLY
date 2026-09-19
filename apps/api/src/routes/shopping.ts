@@ -31,11 +31,13 @@ function toBase(qty: number, unit: string | undefined, baseUnit: string): { qty:
 export function rankProducts(label: string, prods: { id: string; name: string; aliases: string[] }[], mine: Set<string>, withOffers: Set<string>) {
   const words = normalize(label).split(' ').filter((w) => w.length >= 2);
   const scored = prods.map((p) => {
-    const hay = [p.name, ...p.aliases].map((x) => normalize(x).split(' '));
-    const exact = words.length && words.every((w) => hay.some((ws) => ws.includes(w))) ? 1 : 0;
-    const firstWord = hay.some((ws) => ws[0] === words[0]) ? 0.03 : 0;
-    const fuzzy = bestMatches(label, [{ id: p.id, name: p.name, aliases: p.aliases }], 1)[0]?.score ?? 0;
-    const score = Math.max(exact ? 0.9 + firstWord : 0, fuzzy) + (mine.has(p.id) ? 0.04 : 0) + (withOffers.has(p.id) ? 0.02 : 0);
+    const nameWords = normalize(p.name).split(' '); const aliasWords = p.aliases.map((x) => normalize(x).split(' '));
+    const inName = words.length && words.every((w) => nameWords.includes(w));
+    const inAlias = words.length && words.every((w) => aliasWords.some((ws) => ws.includes(w)));
+    // le nom du produit prime sur un alias (un alias est un raccourci, pas une identité) ; alias exact complet reste fort
+    const exact = inName ? 0.95 + (nameWords[0] === words[0] ? 0.02 : 0) : inAlias ? (aliasWords.some((ws) => ws.join(' ') === words.join(' ')) ? 0.9 : 0.85) : 0;
+    const fuzzy = Math.min(0.84, bestMatches(label, [{ id: p.id, name: p.name, aliases: p.aliases }], 1)[0]?.score ?? 0);
+    const score = Math.max(exact, fuzzy) + (mine.has(p.id) ? 0.02 : 0) + (withOffers.has(p.id) ? 0.01 : 0);
     return { id: p.id, name: p.name, score: Math.min(1, Math.round(score * 1000) / 1000) };
   }).filter((m) => m.score >= 0.45).sort((a, b) => b.score - a.score);
   return scored.slice(0, 4);
