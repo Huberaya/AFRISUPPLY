@@ -1,6 +1,6 @@
 // Admin — Prospection : deux sections (Restaurants / Fournisseurs). Chaque fiche : nom, adresse, téléphone, e-mail, contact, statut, notes, relance.
 import { useEffect, useState } from 'react';
-import { Plus, Phone, Mail, MapPin, Pencil, Trash2, Upload, Search } from 'lucide-react';
+import { Plus, Phone, Mail, MapPin, Pencil, Trash2, Upload, Search, Send, Copy } from 'lucide-react';
 import { api } from '../../lib/api';
 import { PageTitle, ErrorBox, Stat } from '../../components/ui';
 import { Modal, Field } from '../../components/Modal';
@@ -21,6 +21,8 @@ export default function AdminProspects() {
   useEffect(() => { const t = setTimeout(() => void load(), 200); return () => clearTimeout(t); }, [kind, q, status]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async () => { if (!edit) return; const json = { ...edit, email: edit.email || null, nextActionAt: edit.nextActionAt || null }; if (edit.id) await api(`/admin/prospects/${edit.id}`, { method: 'PUT', json }); else await api('/admin/prospects', { method: 'POST', json }); setEdit(null); void load(); };
   const remove = async (p: P) => { if (!confirm(`Supprimer ${p.name} ?`)) return; await api(`/admin/prospects/${p.id}`, { method: 'DELETE' }); void load(); };
+  const [inv, setInv] = useState<{ p: P; url?: string; whatsapp?: string; sent?: boolean; message?: string; email: string; busy: boolean } | null>(null);
+  const invite = async () => { if (!inv) return; setInv({ ...inv, busy: true }); try { const r = await api<{ url: string; whatsapp: string; sent: boolean; message: string; mailError: string | null }>(`/admin/prospects/${inv.p.id}/invite-vendor`, { method: 'POST', json: { email: inv.email || undefined, send: !!inv.email } }); setInv({ ...inv, ...r, busy: false, message: r.sent ? r.message : `${r.message}${r.mailError ? ` (e-mail : ${r.mailError})` : ''}` }); void load(); } catch (e) { setInv({ ...inv, busy: false, message: (e as Error).message }); } };
   const setSt = async (p: P, s: string) => { await api(`/admin/prospects/${p.id}`, { method: 'PUT', json: { status: s } }); void load(); };
   const doImport = async () => {
     const rows = csv.split(/\r?\n/).map((l) => l.split(/\t|;/).map((x) => x.trim())).filter((c) => c[0] && c[0].length >= 2 && !/^nom$/i.test(c[0])).map((c) => ({ name: c[0], address: c[1] || null, city: c[2] || null, phone: c[3] || null, email: c[4] || null, contactName: c[5] || null }));
@@ -43,7 +45,7 @@ export default function AdminProspects() {
       <div className="grid gap-3 md:grid-cols-2">{list.map((p) => (
         <div key={p.id} className={`card space-y-2 ${p.nextActionAt && p.nextActionAt <= today && !['converti', 'perdu'].includes(p.status) ? 'border-amber-300 bg-amber-50/40' : ''}`}>
           <div className="flex items-start justify-between gap-2"><div><p className="text-lg font-bold">{p.name}</p>{p.contactName && <p className="text-sm text-stone-600">👤 {p.contactName}</p>}</div>
-            <select className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-semibold" value={p.status} onChange={(e) => void setSt(p, e.target.value)}>{Object.entries(STATUS).map(([s, m]) => <option key={s} value={s}>{m.label}</option>)}</select></div>
+            {p.kind === 'fournisseur' && <button className="pill bg-brand-600 !px-2.5 text-white" title="Inviter à créer son espace fournisseur (fiche pré-remplie)" onClick={() => setInv({ p, email: p.email ?? '', busy: false })}><Send size={12} className="mr-1 inline" />Inviter</button>}<select className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-semibold" value={p.status} onChange={(e) => void setSt(p, e.target.value)}>{Object.entries(STATUS).map(([s, m]) => <option key={s} value={s}>{m.label}</option>)}</select></div>
           <div className="space-y-1 text-sm">
             <p className="flex items-center gap-2 text-stone-700"><MapPin size={14} className="shrink-0 text-stone-400" /> {[p.address, p.city].filter(Boolean).join(', ') || <span className="text-stone-400">Adresse non renseignée</span>}</p>
             <p className="flex items-center gap-2"><Phone size={14} className="shrink-0 text-stone-400" /> {p.phone ? <a className="font-semibold text-brand-800 hover:underline" href={`tel:${p.phone.replace(/\s/g, '')}`}>{p.phone}</a> : <span className="text-stone-400">Téléphone non renseigné</span>}</p>
@@ -62,6 +64,20 @@ export default function AdminProspects() {
           <div className="grid gap-3 sm:grid-cols-2"><Field label="Statut"><select className="input" value={edit.status ?? 'a_contacter'} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>{Object.entries(STATUS).map(([s, m]) => <option key={s} value={s}>{m.label}</option>)}</select></Field><Field label="Relance prévue le"><input className="input" type="date" value={edit.nextActionAt ?? ''} onChange={(e) => setEdit({ ...edit, nextActionAt: e.target.value || null })} /></Field></div>
           <Field label="Notes" hint="Ce qu’il a dit, ce qu’il utilise aujourd’hui, ses fournisseurs, le bon moment pour rappeler…"><textarea className="input" rows={3} value={edit.notes ?? ''} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></Field>
           <div className="flex justify-end gap-2"><button className="btn-ghost" onClick={() => setEdit(null)}>Annuler</button><button className="btn-primary" disabled={!edit.name || edit.name.length < 2} onClick={() => void save()}>Enregistrer</button></div>
+        </div>
+      </Modal>}
+      {inv && <Modal title={`Inviter ${inv.p.name}`} onClose={() => setInv(null)}>
+        <div className="space-y-3 text-sm">
+          <p className="text-stone-600">Génère un lien personnel (30 jours) : fiche pré-remplie, création du mot de passe, activation immédiate, import du tarif.</p>
+          {!inv.url ? <>
+            <Field label="E-mail du grossiste (facultatif — sinon lien WhatsApp)"><input className="input" type="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /></Field>
+            <div className="flex justify-end gap-2"><button className="btn-ghost" onClick={() => setInv(null)}>Annuler</button><button className="btn-primary" disabled={inv.busy} onClick={() => void invite()}><Send size={14} /> {inv.email ? 'Envoyer l’e-mail + générer le lien' : 'Générer le lien'}</button></div>
+          </> : <>
+            <p className={`rounded-xl p-3 ${inv.sent ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900'}`}>{inv.message}</p>
+            <Field label="Lien d’invitation"><div className="flex gap-2"><input className="input flex-1 text-xs" readOnly value={inv.url} /><button className="btn-ghost" onClick={() => void navigator.clipboard.writeText(inv.url!)}><Copy size={14} /></button></div></Field>
+            <Field label="Message WhatsApp prêt à coller"><textarea className="input text-xs" rows={4} readOnly value={inv.whatsapp} /></Field>
+            <div className="flex justify-end gap-2">{inv.p.phone && <a className="btn-primary" target="_blank" rel="noreferrer" href={`https://wa.me/${inv.p.phone.replace(/\D/g, '').replace(/^0/, '33')}?text=${encodeURIComponent(inv.whatsapp ?? '')}`}>Ouvrir WhatsApp</a>}<button className="btn-ghost" onClick={() => setInv(null)}>Fermer</button></div>
+          </>}
         </div>
       </Modal>}
 

@@ -9,6 +9,8 @@ import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
+import { readVendorInvite } from './prospects.js';
+import { prospects } from '@afrisupply/db';
 import { APP_URL } from '../jobs/daily.js';
 
 type VEnv = { Variables: Env['Variables'] & { vendorId: string } };
@@ -33,13 +35,15 @@ vendorRoutes.post('/vendor/register', requireAuth, async (c) => {
     name: z.string().min(2), description: z.string().max(500).optional(), city: z.string().optional(), deliveryZones: z.array(z.string().min(1)).max(30).default([]),
     categories: z.array(z.enum(['feculents', 'frais', 'viandes_poissons', 'epicerie', 'boissons', 'emballages'])).default([]),
     leadTimeHours: z.number().int().positive().default(48), minOrderEur: z.number().nonnegative().default(0), deliveryFeeEur: z.number().nonnegative().default(0),
-    contactEmail: z.string().email().optional(), contactPhone: z.string().optional(), whatsapp: z.string().optional(),
+    contactEmail: z.string().email().optional(), contactPhone: z.string().optional(), whatsapp: z.string().optional(), invite: z.string().optional(),
   }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
-  const db = await getDb(); const user = c.get('user'); const d = body.data;
-  const [v] = await db.insert(vendors).values({ ...d, slug: `${slugify(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z) => z.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: process.env.VENDOR_AUTO_APPROVE === 'true' ? 'actif' : 'en_attente' }).returning();
+  const db = await getDb(); const user = c.get('user'); const { invite, ...d } = body.data;
+  const inv = invite ? await readVendorInvite(invite) : null; // invité par l'équipe AFRISUPPLY = déjà vérifié → actif immédiatement
+  const [v] = await db.insert(vendors).values({ ...d, slug: `${slugify(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z) => z.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === 'true' ? 'actif' : 'en_attente' }).returning();
+  if (inv) await db.update(prospects).set({ status: 'converti', email: user.email, updatedAt: new Date() }).where(eq(prospects.id, inv.pid));
   await db.insert(vendorMembers).values({ vendorId: v.id, userId: user.id, role: 'owner' });
-  await audit('vendor.register', { actorEmail: user.email, target: v.id, meta: { name: v.name } });
+  await audit('vendor.register', { actorEmail: user.email, target: v.id, meta: { name: v.name, invited: !!inv } });
   return c.json({ vendor: v, message: v.status === 'actif' ? 'Espace fournisseur activé.' : 'Demande enregistrée : votre espace sera activé après vérification (sous 24 h ouvrées).' }, 201);
 });
 

@@ -14,7 +14,7 @@ import { accountRoutes } from './routes/account.js';
 import { quickRoutes } from './routes/quick.js';
 import { billingRoutes, billingPublicRoutes, billingAdminRoutes } from './routes/billing.js';
 import { pilotRoutes, pilotPublicRoutes, pilotAdminRoutes } from './routes/pilots.js';
-import { prospectRoutes } from './routes/prospects.js';
+import { prospectRoutes, prospectPublicRoutes } from './routes/prospects.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
 import { shoppingRoutes } from './routes/shopping.js';
 import { vendorRoutes, vendorAdminRoutes } from './routes/vendor.js';
@@ -34,6 +34,7 @@ app.route('/api', statusRoutes);
 app.route('/api', jobsRoutes); // cron (secret propre)
 app.route('/api', publicRoutes);
 app.route('/api', storefrontRoutes); // vitrine publique (chantier 13)
+app.route('/api', prospectPublicRoutes); // lecture d'une invitation fournisseur (chantier 14)
 app.route('/api', billingPublicRoutes);
 app.route('/api', pilotPublicRoutes); // webhook Stripe (signature, pas de JWT) // public en premier : les routeurs suivants imposent l'auth via use('*')
 app.route('/api/auth', authRoutes);

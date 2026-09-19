@@ -1,11 +1,12 @@
 // Espace fournisseur (chantier 10) — /fournisseur : inscription, tableau de bord, catalogue, commandes, achats groupés, commissions.
 // Volontairement simple et autonome : un grossiste doit pouvoir confirmer une commande depuis son téléphone en 2 taps.
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, LogOut } from 'lucide-react';
 import { api, tokenStore, CATEGORY_LABEL } from '../../lib/api';
 import { Field } from '../../components/Modal';
 import { CatalogImport, QuickPrice } from './CatalogImport';
+import { InviteLanding } from './InviteLanding';
 
 type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
 type Tab = 'dashboard' | 'offers' | 'orders' | 'groupbuys' | 'commissions';
@@ -13,10 +14,11 @@ const eur = (v: number | string) => `${Number(v).toFixed(2).replace('.', ',')} �
 const STATUS: Record<string, string> = { envoyee: '🕒 À confirmer', confirmee: '✅ Confirmée', livree: '📦 Livrée', livree_partiel: '📦 Livrée (écarts)', annulee: '❌ Refusée/annulée' };
 
 export default function VendorSpace() {
-  const nav = useNavigate();
+  const nav = useNavigate(); const [sp] = useSearchParams(); const invite = sp.get('invite');
   const [me, setMe] = useState<{ vendors: Vendor[]; isAdmin: boolean } | null>(null); const [err, setErr] = useState<string | null>(null); const [tab, setTab] = useState<Tab>('orders');
   const load = () => api<{ vendors: Vendor[]; isAdmin: boolean }>('/vendor/me').then(setMe).catch((e) => { if ((e as { status?: number }).status === 401) nav('/connexion?next=/fournisseur'); else setErr((e as Error).message); });
-  useEffect(() => { if (!tokenStore.get()) { nav('/connexion?next=/fournisseur'); return; } void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!tokenStore.get()) { if (!invite) nav('/connexion?next=/fournisseur'); return; } void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (invite && (!tokenStore.get() || (me && !me.vendors.length))) return <Shell><InviteLanding token={invite} onDone={load} /></Shell>;
   if (err) return <Shell><p className="text-red-700">{err}</p></Shell>;
   if (!me) return <Shell><p className="text-stone-500">Chargement…</p></Shell>;
   if (!me.vendors.length) return <Shell><Register onDone={load} /></Shell>;

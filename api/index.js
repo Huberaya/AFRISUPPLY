@@ -5526,9 +5526,32 @@ init_pilots();
 init_src();
 init_auth();
 init_ops();
+init_mailer();
+init_daily();
 import { Hono as Hono13 } from "hono";
 import { z as z13 } from "zod";
 import { and as and14, desc as desc8, eq as eq17, ilike as ilike2, or, sql as sql13 } from "drizzle-orm";
+import { SignJWT as SignJWT2, jwtVerify as jwtVerify2 } from "jose";
+var inviteSecret = () => new TextEncoder().encode(`invite:${process.env.JWT_SECRET ?? "dev-secret-change-me-in-production"}`);
+async function signVendorInvite(v) {
+  return new SignJWT2(v).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("30d").sign(inviteSecret());
+}
+async function readVendorInvite(token) {
+  try {
+    const { payload } = await jwtVerify2(token, inviteSecret());
+    return payload;
+  } catch {
+    return null;
+  }
+}
+var prospectPublicRoutes = new Hono13();
+prospectPublicRoutes.get("/public/vendor-invite/:token", async (c) => {
+  const inv = await readVendorInvite(c.req.param("token"));
+  if (!inv) return c.json({ error: "Invitation invalide ou expir\xE9e" }, 404);
+  const db = await getDb();
+  const [p] = await db.select({ status: prospects.status }).from(prospects).where(eq17(prospects.id, inv.pid));
+  return c.json({ invite: { ...inv, converted: p?.status === "converti" } });
+});
 var isAdmin3 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 var PROSPECT_STATUS = ["a_contacter", "contacte", "rdv", "interesse", "converti", "perdu"];
 var body = z13.object({
@@ -5592,6 +5615,36 @@ prospectRoutes.delete("/admin/prospects/:id", async (c) => {
   const db = await getDb();
   await db.delete(prospects).where(eq17(prospects.id, c.req.param("id")));
   return c.json({ ok: true });
+});
+prospectRoutes.post("/admin/prospects/:id/invite-vendor", async (c) => {
+  const db = await getDb();
+  const [p] = await db.select().from(prospects).where(eq17(prospects.id, c.req.param("id")));
+  if (!p) return c.json({ error: "Introuvable" }, 404);
+  if (p.kind !== "fournisseur") return c.json({ error: "R\xE9serv\xE9 aux prospects fournisseurs" }, 400);
+  const body2 = z13.object({ email: z13.string().email().optional(), send: z13.boolean().default(true) }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body2.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
+  const email = body2.data.email ?? p.email ?? null;
+  if (body2.data.email && body2.data.email !== p.email) await db.update(prospects).set({ email: body2.data.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq17(prospects.id, p.id));
+  const token = await signVendorInvite({ pid: p.id, name: p.name, city: p.city, phone: p.phone, email, contactName: p.contactName });
+  const url = `${APP_URL()}/fournisseur?invite=${token}`;
+  const first = p.contactName ? `Bonjour ${p.contactName}` : "Bonjour";
+  const text2 = `${first},
+
+AFRISUPPLY est la marketplace des restaurants africains de France : ils y comparent les grossistes et commandent en un clic.
+
+Votre fiche \xAB ${p.name} \xBB est d\xE9j\xE0 pr\xE9par\xE9e. Il vous suffit de cliquer, de cr\xE9er un mot de passe et de coller votre tarif (Excel, texte ou photo) : vous \xEAtes en ligne en 10 minutes, sans engagement, commission uniquement sur les ventes.
+
+\u{1F449} ${url}
+
+Le lien est valable 30 jours. R\xE9pondez \xE0 ce message pour toute question.
+
+L'\xE9quipe AFRISUPPLY`;
+  const whatsapp = `${first}, c'est AFRISUPPLY, la marketplace des restaurants africains. Votre fiche \xAB ${p.name} \xBB est pr\xEAte : cliquez, cr\xE9ez un mot de passe, collez votre tarif et vous \xEAtes en ligne en 10 min \u{1F449} ${url}`;
+  let mail = { ok: false, error: "Pas d'e-mail" };
+  if (email && body2.data.send) mail = await sendMail({ to: email, subject: `${p.name} : votre catalogue devant 200 restaurants africains \u2014 fiche d\xE9j\xE0 pr\xEAte`, text: text2, html: `<p>${text2.replace(/\n/g, "<br/>").replace(url, `<a href="${url}">${url}</a>`)}</p>`, tags: { type: "vendor-invite" } });
+  await db.update(prospects).set({ status: p.status === "a_contacter" ? "contacte" : p.status, notes: `${p.notes ? p.notes + "\n" : ""}[${(/* @__PURE__ */ new Date()).toLocaleDateString("fr-FR")}] Invitation fournisseur ${mail.ok ? "envoy\xE9e par e-mail" : "g\xE9n\xE9r\xE9e"}${email ? ` (${email})` : ""}`, updatedAt: /* @__PURE__ */ new Date() }).where(eq17(prospects.id, p.id));
+  await audit("prospect.invite_vendor", { actorEmail: c.get("user").email, target: p.id, meta: { email, sent: mail.ok } });
+  return c.json({ url, whatsapp, email, sent: mail.ok, mailError: mail.ok ? null : mail.error ?? null, message: mail.ok ? `Invitation envoy\xE9e \xE0 ${email}.` : "Lien g\xE9n\xE9r\xE9 : copiez-le ou envoyez le message WhatsApp." });
 });
 
 // apps/api/src/app.ts
@@ -5751,6 +5804,7 @@ init_reference();
 init_auth();
 init_mailer();
 init_ops();
+init_src();
 init_daily();
 
 // apps/api/src/lib/catalog-import.ts
@@ -5933,15 +5987,18 @@ vendorRoutes.post("/vendor/register", requireAuth, async (c) => {
     deliveryFeeEur: z16.number().nonnegative().default(0),
     contactEmail: z16.string().email().optional(),
     contactPhone: z16.string().optional(),
-    whatsapp: z16.string().optional()
+    whatsapp: z16.string().optional(),
+    invite: z16.string().optional()
   }).safeParse(await c.req.json());
   if (!body2.success) return c.json({ error: "Donn\xE9es invalides", details: body2.error.flatten() }, 400);
   const db = await getDb();
   const user = c.get("user");
-  const d = body2.data;
-  const [v] = await db.insert(vendors).values({ ...d, slug: `${slugify3(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z17) => z17.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
+  const { invite, ...d } = body2.data;
+  const inv = invite ? await readVendorInvite(invite) : null;
+  const [v] = await db.insert(vendors).values({ ...d, slug: `${slugify3(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z17) => z17.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
+  if (inv) await db.update(prospects).set({ status: "converti", email: user.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq20(prospects.id, inv.pid));
   await db.insert(vendorMembers).values({ vendorId: v.id, userId: user.id, role: "owner" });
-  await audit("vendor.register", { actorEmail: user.email, target: v.id, meta: { name: v.name } });
+  await audit("vendor.register", { actorEmail: user.email, target: v.id, meta: { name: v.name, invited: !!inv } });
   return c.json({ vendor: v, message: v.status === "actif" ? "Espace fournisseur activ\xE9." : "Demande enregistr\xE9e : votre espace sera activ\xE9 apr\xE8s v\xE9rification (sous 24 h ouvr\xE9es)." }, 201);
 });
 vendorRoutes.get("/vendor/me", requireAuth, async (c) => {
@@ -6328,6 +6385,7 @@ app.route("/api", statusRoutes);
 app.route("/api", jobsRoutes);
 app.route("/api", publicRoutes);
 app.route("/api", storefrontRoutes);
+app.route("/api", prospectPublicRoutes);
 app.route("/api", billingPublicRoutes);
 app.route("/api", pilotPublicRoutes);
 app.route("/api/auth", authRoutes);
