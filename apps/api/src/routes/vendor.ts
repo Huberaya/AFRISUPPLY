@@ -10,6 +10,7 @@ import { requireAuth, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
+import { orderPdf } from '../lib/pdf.js';
 import { restaurantZones } from './marketplace.js';
 import { inventoryItems, leads } from '@afrisupply/db';
 import { prospects } from '@afrisupply/db';
@@ -356,4 +357,22 @@ vendorRoutes.get('/vendor/analytics', async (c) => {
   const num = <T extends Record<string, unknown>>(o: T) => Object.fromEntries(Object.entries(o).map(([k, val]) => [k, typeof val === 'string' && /^-?\d+(\.\d+)?$/.test(val) ? Number(val) : val])) as T;
   return c.json({ period: '90 jours', byProduct: byProduct.map(num), topCustomers: topCustomers.map(num), monthly: monthly.map(num), funnel: num(funnel), uncovered, restaurantsInZone: inZone.length,
     alerts: alerts.map((a) => ({ product: (a.message ?? '').replace(/^Alerte produit : /, ''), count: n(a.c) })) });
+});
+
+// ---------------- Chantier 16 : documents PDF (bon de commande / bon de livraison) ----------------
+export async function buildOrderDoc(orderId: string, kind: 'bon_commande' | 'bon_livraison') {
+  const db = await getDb();
+  const [o] = await db.select({ order: orders, r: restaurants, v: vendors }).from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId)).leftJoin(vendors, eq(vendors.id, orders.vendorId)).where(eq(orders.id, orderId)); if (!o) return null;
+  const lines = await db.select({ l: orderLines, name: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(eq(orderLines.orderId, orderId));
+  const [owner] = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, o.r.id), eq(restaurantMembers.role, 'owner')));
+  const STATUS: Record<string, string> = { envoyee: 'En attente de confirmation', confirmee: 'Confirmée', livree: 'Livrée', livree_partiel: 'Livrée avec écarts', annulee: 'Annulée' };
+  let vendor = { name: o.v?.name ?? 'Fournisseur', city: o.v?.city, email: o.v?.contactEmail, phone: o.v?.contactPhone ?? o.v?.whatsapp };
+  if (!o.v) { const [s] = await db.select().from(suppliers).where(eq(suppliers.id, o.order.supplierId)); if (s) vendor = { name: s.name, city: s.city, email: s.email, phone: s.phone ?? s.whatsapp }; }
+  return { doc: orderPdf({ kind, reference: o.order.reference, date: o.order.createdAt, status: STATUS[o.order.status] ?? o.order.status, expectedAt: o.order.expectedAt ? new Date(o.order.expectedAt) : null, notes: o.order.notes, vendor, restaurant: { name: o.r.name, address: o.r.address, city: o.r.city, email: owner?.email },
+    lines: lines.map((x) => ({ productName: x.name, packLabel: x.l.packLabel, packs: x.l.packs, quantity: n(x.l.quantity), unit: x.unit, unitPriceEur: n(x.l.unitPriceEur), lineTotalEur: n(x.l.lineTotalEur) })), totalEur: n(o.order.totalEur), deliveryFeeEur: n(o.order.deliveryFeeEur) }), order: o.order };
+}
+vendorRoutes.get('/vendor/orders/:id/pdf', async (c) => {
+  const kind = c.req.query('type') === 'livraison' ? 'bon_livraison' : 'bon_commande';
+  const r = await buildOrderDoc(c.req.param('id'), kind); if (!r || r.order.vendorId !== c.get('vendorId')) return c.json({ error: 'Commande introuvable' }, 404);
+  return new Response(new Uint8Array(r.doc), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${r.order.reference}-${kind}.pdf"` } });
 });

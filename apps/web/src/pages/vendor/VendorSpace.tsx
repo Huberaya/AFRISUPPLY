@@ -2,8 +2,8 @@
 // Volontairement simple et autonome : un grossiste doit pouvoir confirmer une commande depuis son téléphone en 2 taps.
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, LogOut, BarChart3 } from 'lucide-react';
-import { api, tokenStore, CATEGORY_LABEL } from '../../lib/api';
+import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, LogOut, BarChart3, FileText } from 'lucide-react';
+import { api, tokenStore, CATEGORY_LABEL, openPdf } from '../../lib/api';
 import { Field } from '../../components/Modal';
 import { CatalogImport, QuickPrice } from './CatalogImport';
 import { InviteLanding } from './InviteLanding';
@@ -131,7 +131,8 @@ function Orders() {
           <ul className="text-sm">{o.lines.map((l) => <li key={l.id} className="flex justify-between border-t border-stone-100 py-1"><span>{l.packs} × {l.packLabel ?? l.productName} <span className="text-stone-400">({Number(l.quantity)} {l.unit})</span></span><span>{eur(l.lineTotalEur)}</span></li>)}</ul>
           {o.notes && <p className="rounded-lg bg-stone-50 p-2 text-sm">💬 {o.notes}</p>}{o.vendorNote && <p className="text-xs text-stone-500">Votre note : {o.vendorNote}</p>}
           {o.status === 'envoyee' && <div className="flex flex-wrap items-end gap-2"><Field label="Livraison le"><input type="date" className="input" value={date[o.id] ?? o.expectedAt ?? ''} onChange={(e) => setDate({ ...date, [o.id]: e.target.value })} /></Field><button className="btn-primary !py-3" onClick={() => void act(o.id, 'confirm')}><Check size={18} /> Confirmer</button><div className="flex items-end gap-1"><input className="input" placeholder="Motif de refus" value={reason[o.id] ?? ''} onChange={(e) => setReason({ ...reason, [o.id]: e.target.value })} /><button className="btn-ghost !text-red-700" onClick={() => void act(o.id, 'refuse')}><X size={16} /> Refuser</button></div></div>}
-          {o.status === 'confirmee' && !o.vendorNote?.includes('[expédiée]') && <button className="btn-ghost" onClick={() => void act(o.id, 'shipped')}><Truck size={16} /> Marquer expédiée (prévenir le restaurant)</button>}
+          <div className="flex flex-wrap gap-2">{o.status === 'confirmee' && !o.vendorNote?.includes('[expédiée]') && <button className="btn-ghost" onClick={() => void act(o.id, 'shipped')}><Truck size={16} /> Marquer expédiée (prévenir le restaurant)</button>}
+          {o.status !== 'annulee' && <><button className="btn-ghost" onClick={() => void openPdf(`/vendor/orders/${o.id}/pdf`)}><FileText size={16} /> Bon de commande PDF</button><button className="btn-ghost" onClick={() => void openPdf(`/vendor/orders/${o.id}/pdf?type=livraison`)}><FileText size={16} /> Bon de livraison PDF</button></>}</div>
         </div>))}
     </div>
   );

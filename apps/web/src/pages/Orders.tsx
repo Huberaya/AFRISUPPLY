@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Send, PackageCheck, Copy, MessageCircle, Mail, Pencil, XCircle, AlertTriangle } from 'lucide-react';
-import { api, fmtEur, fmtQty, fmtDate, STATUS_LABEL } from '../lib/api';
+import { api, fmtEur, fmtQty, fmtDate, STATUS_LABEL, openPdf } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
 import { Modal } from '../components/Modal';
@@ -47,6 +47,7 @@ export default function Orders() {
         <div className="mt-3 flex flex-wrap gap-2">
           {o.status === 'preparee' && <><button onClick={() => void openSend(o)} className="btn-primary !py-1.5"><Send size={14} /> Envoyer au fournisseur</button><button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button></>}
           {['envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void openSend(o)} className="btn-ghost !py-1.5"><Copy size={14} /> Revoir le message</button>}
+          {!['brouillon', 'annulee'].includes(o.status) && <button onClick={() => void openPdf(`/orders/${o.id}/pdf`)} className="btn-ghost !py-1.5">📄 PDF</button>}
           {['envoyee', 'confirmee', 'preparee'].includes(o.status) && <button onClick={() => openReceive(o)} className="btn-ghost !py-1.5"><PackageCheck size={14} /> Réceptionner</button>}
           {['preparee', 'envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void cancel(o)} className="btn-ghost !py-1.5 text-red-700 ml-auto"><XCircle size={14} /> Annuler</button>}
         </div>

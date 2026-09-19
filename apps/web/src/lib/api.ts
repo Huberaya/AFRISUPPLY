@@ -34,3 +34,10 @@ export const fmtQty = (q: number | string | null | undefined, unit = '') => {
 export const fmtDate = (iso: string | null | undefined) => iso ? new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }) : '—';
 export const CATEGORY_LABEL: Record<string, string> = { feculents: '🌾 Féculents', frais: '🥬 Frais', viandes_poissons: '🥩 Viandes & poissons', epicerie: '🫙 Épicerie', boissons: '🥤 Boissons', emballages: '📦 Emballages' };
 export const STATUS_LABEL: Record<string, string> = { brouillon: 'Brouillon', preparee: 'Préparée', envoyee: 'Envoyée', confirmee: 'Confirmée', livree_partiel: 'Livrée (écart)', livree: 'Livrée', annulee: 'Annulée' };
+
+/** Ouvre un PDF protégé par JWT dans un nouvel onglet (chantier 16). */
+export async function openPdf(path: string) {
+  const headers: Record<string, string> = {}; const t = tokenStore.get(); if (t) headers.Authorization = `Bearer ${t}`; const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
+  const res = await fetch(`/api${path}`, { headers }); if (!res.ok) throw new ApiError(res.status, 'PDF indisponible');
+  const url = URL.createObjectURL(await res.blob()); window.open(url, '_blank'); setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}

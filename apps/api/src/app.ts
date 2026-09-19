@@ -8,6 +8,7 @@ import { intelligenceRoutes } from './routes/intelligence.js';
 import { manageRoutes } from './routes/manage.js';
 import { publicRoutes } from './routes/public.js';
 import { storefrontRoutes } from './routes/storefront.js';
+import { referenceAdminRoutes, referenceRequestRoutes } from './routes/reference-admin.js';
 import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
 import { accountRoutes } from './routes/account.js';
@@ -38,6 +39,8 @@ app.route('/api', prospectPublicRoutes); // lecture d'une invitation fournisseur
 app.route('/api', billingPublicRoutes);
 app.route('/api', pilotPublicRoutes); // webhook Stripe (signature, pas de JWT) // public en premier : les routeurs suivants imposent l'auth via use('*')
 app.route('/api/auth', authRoutes);
+app.route('/api', referenceRequestRoutes); // signalement produit manquant (tout compte connecté)
+app.route('/api', referenceAdminRoutes);
 app.route('/api', vendorRoutes); // espace fournisseur : comptes sans restaurant → avant les routeurs qui imposent requireRestaurant
 app.route('/api', vendorAdminRoutes);
 app.route('/api', billingAdminRoutes);

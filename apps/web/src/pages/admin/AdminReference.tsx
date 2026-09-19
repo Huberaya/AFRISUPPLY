@@ -1,0 +1,47 @@
+// Chantier 16 — Admin « Référentiel produits » : demandes des grossistes, ajout, édition, fusion de doublons.
+import { useEffect, useState } from 'react';
+import { Plus, Pencil, Search, Merge, Check, X, Inbox } from 'lucide-react';
+import { api, CATEGORY_LABEL } from '../../lib/api';
+import { PageTitle, ErrorBox } from '../../components/ui';
+import { Modal, Field } from '../../components/Modal';
+
+type P = { id: string; name: string; aliases: string[]; category: string; baseUnit: string; origin: string | null; shelfLifeDays: number | null; imageUrl: string | null; offers: number; tracked: number };
+type Req = { id: string; product: string; from: string; email: string; notes: string | null; createdAt: string };
+type D = { products: P[]; requests: Req[]; categories: string[]; units: string[] };
+const empty = (name = ''): Partial<P> => ({ name, aliases: [], category: 'epicerie', baseUnit: 'kg', origin: '', shelfLifeDays: null, imageUrl: '' });
+
+export default function AdminReference() {
+  const [d, setD] = useState<D | null>(null); const [err, setErr] = useState<string | null>(null); const [q, setQ] = useState(''); const [cat, setCat] = useState('');
+  const [edit, setEdit] = useState<(Partial<P> & { requestId?: string }) | null>(null); const [aliasText, setAliasText] = useState(''); const [merge, setMerge] = useState<{ from: P; into: string } | null>(null); const [msg, setMsg] = useState<string | null>(null);
+  const load = () => api<D>(`/admin/reference?${new URLSearchParams({ ...(q && { q }), ...(cat && { category: cat }) })}`).then(setD).catch((e) => setErr((e as Error).message));
+  useEffect(() => { const t = setTimeout(() => void load(), 200); return () => clearTimeout(t); }, [q, cat]); // eslint-disable-line react-hooks/exhaustive-deps
+  const open = (p: Partial<P> & { requestId?: string }) => { setEdit(p); setAliasText((p.aliases ?? []).join(', ')); };
+  const save = async () => { if (!edit) return; const json = { ...edit, aliases: aliasText.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean), origin: edit.origin || null, imageUrl: edit.imageUrl || '', shelfLifeDays: edit.shelfLifeDays || null, offers: undefined, tracked: undefined, id: undefined, requestId: undefined };
+    try { const r = edit.id ? await api<{ product: P }>(`/admin/reference/${edit.id}`, { method: 'PUT', json }) : await api<{ message: string }>(`/admin/reference${edit.requestId ? `?request=${edit.requestId}` : ''}`, { method: 'POST', json }); setMsg('message' in r ? r.message : 'Enregistré.'); setEdit(null); void load(); } catch (e) { setMsg((e as Error).message); } };
+  const doMerge = async () => { if (!merge?.into) return; try { const r = await api<{ message: string }>(`/admin/reference/${merge.from.id}/merge`, { method: 'POST', json: { into: merge.into } }); setMsg(r.message); setMerge(null); void load(); } catch (e) { setMsg((e as Error).message); } };
+  if (err) return <ErrorBox message={err} />;
+  return (
+    <div className="animate-fade-up space-y-5">
+      <PageTitle title="📚 Référentiel produits" subtitle="Les produits communs à toute la plateforme : ce que les grossistes peuvent proposer et les restaurants suivre. Ajoutez, corrigez les alias, fusionnez les doublons." action={<button className="btn-primary" onClick={() => open(empty())}><Plus size={16} /> Nouveau produit</button>} />
+      {msg && <p className="rounded-xl bg-brand-50 p-3 text-sm text-brand-900">{msg}</p>}
+      {d && d.requests.length > 0 && <section className="card border-amber-200 bg-amber-50/60"><h2 className="flex items-center gap-2 font-bold"><Inbox size={18} /> {d.requests.length} demande{d.requests.length > 1 ? 's' : ''} de produit manquant</h2>
+        <div className="mt-2 divide-y divide-amber-100">{d.requests.map((r) => <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"><div><b>{r.product}</b> <span className="text-stone-500">— {r.from} ({r.email}) · {new Date(r.createdAt).toLocaleDateString('fr-FR')}</span>{r.notes && <p className="text-xs text-stone-500">{r.notes}</p>}</div><div className="flex gap-2"><button className="btn-primary !py-1.5" onClick={() => open({ ...empty(r.product), requestId: r.id })}><Plus size={14} /> Créer</button><button className="btn-ghost !py-1.5" onClick={() => void api(`/admin/reference/requests/${r.id}/dismiss`, { method: 'POST' }).then(load)}><X size={14} /> Ignorer</button></div></div>)}</div></section>}
+      <div className="flex flex-wrap gap-2"><div className="input flex flex-1 items-center gap-2"><Search size={16} className="text-stone-400" /><input className="w-full bg-transparent outline-none" placeholder="Rechercher un nom ou un alias…" value={q} onChange={(e) => setQ(e.target.value)} /></div><select className="input w-auto" value={cat} onChange={(e) => setCat(e.target.value)}><option value="">Tous les rayons</option>{Object.entries(CATEGORY_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+      <div className="card overflow-x-auto !p-0"><table className="w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-3">Produit</th><th className="p-3">Alias</th><th className="p-3">Unité</th><th className="p-3">Origine</th><th className="p-3 text-right">Offres</th><th className="p-3 text-right">Suivi par</th><th className="p-3"></th></tr></thead>
+        <tbody className="divide-y divide-stone-100">{(d?.products ?? []).map((p) => <tr key={p.id}><td className="p-3"><p className="font-semibold">{p.name}</p><p className="text-xs text-stone-500">{CATEGORY_LABEL[p.category]}</p></td><td className="max-w-xs p-3 text-xs text-stone-600">{p.aliases.slice(0, 6).join(', ')}{p.aliases.length > 6 ? ` +${p.aliases.length - 6}` : ''}</td><td className="p-3">{p.baseUnit}</td><td className="p-3 text-xs">{p.origin ?? '—'}</td><td className="p-3 text-right">{p.offers}</td><td className="p-3 text-right">{p.tracked}</td><td className="p-3"><div className="flex justify-end gap-1"><button className="btn-ghost !p-2" title="Modifier" onClick={() => open(p)}><Pencil size={14} /></button><button className="btn-ghost !p-2" title="Fusionner dans un autre produit" onClick={() => setMerge({ from: p, into: '' })}><Merge size={14} /></button></div></td></tr>)}</tbody></table>
+        {d && !d.products.length && <p className="p-6 text-center text-stone-500">Aucun produit.</p>}</div>
+      {edit && <Modal title={edit.id ? `Modifier « ${edit.name} »` : 'Nouveau produit du référentiel'} onClose={() => setEdit(null)}>
+        <div className="space-y-3">
+          <Field label="Nom canonique *" hint="Tel qu'affiché sur la vitrine (ex. « Huile de palme rouge »)"><input className="input" value={edit.name ?? ''} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
+          <Field label="Alias" hint="Autres orthographes, noms locaux, séparés par des virgules — servent à la reconnaissance des tarifs et à la recherche"><textarea className="input" rows={2} value={aliasText} onChange={(e) => setAliasText(e.target.value)} /></Field>
+          <div className="grid gap-3 sm:grid-cols-3"><Field label="Rayon"><select className="input" value={edit.category} onChange={(e) => setEdit({ ...edit, category: e.target.value })}>{Object.entries(CATEGORY_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field><Field label="Unité de base"><select className="input" value={edit.baseUnit} onChange={(e) => setEdit({ ...edit, baseUnit: e.target.value })}>{(d?.units ?? []).map((u) => <option key={u}>{u}</option>)}</select></Field><Field label="DLC moyenne (jours)"><input className="input" type="number" value={edit.shelfLifeDays ?? ''} onChange={(e) => setEdit({ ...edit, shelfLifeDays: Number(e.target.value) || null })} /></Field></div>
+          <div className="grid gap-3 sm:grid-cols-2"><Field label="Origine"><input className="input" value={edit.origin ?? ''} onChange={(e) => setEdit({ ...edit, origin: e.target.value })} /></Field><Field label="URL photo (facultatif)" hint="Sinon /produits/<slug>.jpg ou icône du rayon"><input className="input" value={edit.imageUrl ?? ''} onChange={(e) => setEdit({ ...edit, imageUrl: e.target.value })} /></Field></div>
+          <div className="flex justify-end gap-2"><button className="btn-ghost" onClick={() => setEdit(null)}>Annuler</button><button className="btn-primary" disabled={!edit.name || edit.name.length < 2} onClick={() => void save()}><Check size={16} /> Enregistrer</button></div>
+        </div></Modal>}
+      {merge && <Modal title={`Fusionner « ${merge.from.name} »`} onClose={() => setMerge(null)}>
+        <div className="space-y-3 text-sm"><p className="text-stone-600">Toutes les offres, stocks et commandes de ce produit seront rattachés au produit cible ; son nom deviendra un alias de la cible. Irréversible.</p>
+          <Field label="Produit cible"><select className="input" value={merge.into} onChange={(e) => setMerge({ ...merge, into: e.target.value })}><option value="">— choisir —</option>{(d?.products ?? []).filter((p) => p.id !== merge.from.id).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.baseUnit})</option>)}</select></Field>
+          <div className="flex justify-end gap-2"><button className="btn-ghost" onClick={() => setMerge(null)}>Annuler</button><button className="btn-primary" disabled={!merge.into} onClick={() => void doMerge()}><Merge size={16} /> Fusionner</button></div></div></Modal>}
+    </div>
+  );
+}

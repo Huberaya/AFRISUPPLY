@@ -9,6 +9,7 @@ import {
 } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { buildOrderMessage } from '../lib/messages.js';
+import { buildOrderDoc } from './vendor.js';
 
 export const manageRoutes = new Hono<Env>();
 manageRoutes.use('*', requireAuth, requireRestaurant);
@@ -204,6 +205,11 @@ manageRoutes.post('/stock/inventory', async (c) => {
 // -------------------------------------------------------------
 // Commandes : message d'envoi, modification de statut, annulation
 // -------------------------------------------------------------
+/** Bon de commande PDF (chantier 16) — côté restaurant. */
+manageRoutes.get('/orders/:id/pdf', async (c) => {
+  const r = await buildOrderDoc(c.req.param('id'), 'bon_commande'); if (!r || r.order.restaurantId !== c.get('restaurantId')) return c.json({ error: 'Commande introuvable' }, 404);
+  return new Response(new Uint8Array(r.doc), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${r.order.reference}.pdf"` } });
+});
 manageRoutes.get('/orders/:id/message', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb(); const user = c.get('user');
   const [row] = await db.select({ order: orders, supplier: suppliers }).from(orders).innerJoin(suppliers, eq(suppliers.id, orders.supplierId)).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid)));
