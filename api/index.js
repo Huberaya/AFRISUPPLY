@@ -2772,12 +2772,12 @@ function forecastRecipes(sales2, recipeIds, opts = {}) {
     const perDay = [];
     for (let d = 1; d <= horizon; d++) {
       const target = new Date(today.getTime() + d * DAY_MS);
-      let num2 = 0, den = 0;
+      let num3 = 0, den = 0;
       for (let k = 1; k <= 4; k++) {
         const past = isoDay2(new Date(target.getTime() - k * 7 * DAY_MS));
         const v = hist.get(past);
         if (v !== void 0) {
-          num2 += v * WEIGHTS[k - 1];
+          num3 += v * WEIGHTS[k - 1];
           den += WEIGHTS[k - 1];
         }
       }
@@ -2787,7 +2787,7 @@ function forecastRecipes(sales2, recipeIds, opts = {}) {
         const after = hist.has(isoDay2(new Date(target.getTime() - (k * 7 - 1) * DAY_MS)));
         return before || after;
       });
-      if (den > 0) base = num2 / den;
+      if (den > 0) base = num3 / den;
       else if (closedDow) base = 0;
       else if (daysWithData) base = [...hist.values()].reduce((a, b) => a + b, 0) / Math.max(daysWithData, 1) * 0.8;
       else base = 0;
@@ -5677,14 +5677,168 @@ shoppingRoutes.get("/shopping/suggestions", async (c) => {
 
 // apps/api/src/routes/vendor.ts
 init_src();
+import { Hono as Hono15 } from "hono";
+import { z as z15 } from "zod";
+import { and as and16, desc as desc11, eq as eq19, inArray as inArray10, sql as sql15 } from "drizzle-orm";
 init_reference();
 init_auth();
 init_mailer();
 init_ops();
 init_daily();
-import { Hono as Hono15 } from "hono";
-import { z as z15 } from "zod";
-import { and as and16, desc as desc11, eq as eq19, inArray as inArray10, sql as sql15 } from "drizzle-orm";
+
+// apps/api/src/lib/catalog-import.ts
+var UNIT = { kg: "kg", kilo: "kg", kilos: "kg", kgs: "kg", g: "g", gr: "g", l: "L", lt: "L", litre: "L", litres: "L", ml: "mL", cl: "cL", pc: "piece", pcs: "piece", piece: "piece", pieces: "piece", u: "piece", unite: "piece", unites: "piece", botte: "botte", bottes: "botte" };
+var PACK_WORDS = /\b(sac|carton|bidon|pot|bocal|boite|bouteille|seau|caisse|colis|filet|barquette|paquet|sachet|plateau|palette|lot|pack|bte|btl|ctn)\b/;
+function parseCatalogLine(rawIn) {
+  const raw = rawIn.trim();
+  if (!raw || /^(produit|designation|libelle|article|nom)\b/i.test(raw)) return null;
+  const cols = raw.split(/\t|;|\|/).map((c) => c.trim()).filter(Boolean);
+  if (cols.length >= 4 && isNum(cols[2]) && isNum(cols[3])) {
+    const unit2 = guessUnit(cols[1]) ?? "kg";
+    return { raw, label: cols[0], packLabel: cols[1], packQty: num2(cols[2]), packUnit: unit2, price: num2(cols[3]), inStock: !/non|0|faux|false|rupture/i.test(cols[4] ?? "oui") };
+  }
+  if (cols.length === 3 && isNum(cols[2])) {
+    const p = parsePack2(cols[1]);
+    if (p) return { raw, label: cols[0], packLabel: cols[1], packQty: p.qty, packUnit: p.unit, price: num2(cols[2]), inStock: true };
+  }
+  let n11 = normalize2(raw.replace(/€|eur|euros|ttc|ht/gi, " "));
+  const priceM = n11.match(/(\d+(?:\.\d+)?)\s*$/);
+  if (!priceM) return null;
+  const price = Number(priceM[1]);
+  n11 = n11.slice(0, priceM.index).trim();
+  if (!(price > 0)) return null;
+  let packQty = 0;
+  let packUnit = "";
+  let packLabel = "";
+  const multi = n11.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?\s*x\s*(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?/);
+  if (multi) {
+    const a = Number(multi[1]), b = Number(multi[3]);
+    const u = UNIT[multi[2] ?? multi[4] ?? ""] ?? "piece";
+    const per = multi[2] ? a : b;
+    const count = multi[2] ? b : a;
+    packQty = per * count;
+    packUnit = u;
+    packLabel = `${count} \xD7 ${per} ${u === "piece" ? "pi\xE8ce" : u}`.replace(/\.0+ /, " ");
+    n11 = n11.replace(multi[0], " ");
+  } else {
+    const q2 = n11.match(/(\d+(?:\.\d+)?)\s*(kg|kilos?|kgs|g|gr|l|lt|litres?|ml|cl|pcs?|pieces?|unites?|u|bottes?)\b/);
+    if (q2) {
+      packQty = Number(q2[1]);
+      packUnit = UNIT[q2[2]] ?? "kg";
+      const pw = n11.match(PACK_WORDS);
+      packLabel = `${pw ? cap(pw[1]) + " " : ""}${q2[1]} ${packUnit}`;
+      n11 = n11.replace(q2[0], " ").replace(PACK_WORDS, " ");
+    } else {
+      const pw = n11.match(PACK_WORDS);
+      const cnt = n11.match(/\bx?\s*(\d+)\s*$/);
+      packQty = cnt ? Number(cnt[1]) : 1;
+      packUnit = "piece";
+      packLabel = pw ? cap(pw[1]) : packQty > 1 ? `Lot de ${packQty}` : "Pi\xE8ce";
+      n11 = n11.replace(PACK_WORDS, " ").replace(/\bx?\s*\d+\s*$/, " ");
+    }
+  }
+  if (packUnit === "g") {
+    packQty = packQty / 1e3;
+    packUnit = "kg";
+  }
+  if (packUnit === "mL") {
+    packQty = packQty / 1e3;
+    packUnit = "L";
+  }
+  if (packUnit === "cL") {
+    packQty = packQty / 100;
+    packUnit = "L";
+  }
+  const label = n11.replace(/\s+/g, " ").replace(/[-–:]+$/, "").trim();
+  if (!label || packQty <= 0) return null;
+  return { raw, label, packLabel: packLabel.trim(), packQty: Math.round(packQty * 1e3) / 1e3, packUnit, price, inStock: true };
+}
+var isNum = (s) => /^\d+([.,]\d+)?$/.test(s.replace(/\s|€/g, ""));
+var num2 = (s) => Number(s.replace(/\s|€/g, "").replace(",", "."));
+var cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+function guessUnit(s) {
+  const m = normalize2(s).match(/\b(kg|kilos?|g|gr|l|litres?|ml|cl|pcs?|pieces?|unites?)\b/);
+  return m ? UNIT[m[1]] : void 0;
+}
+function parsePack2(s) {
+  const m = normalize2(s).match(/(\d+(?:\.\d+)?)\s*(kg|kilos?|g|gr|l|litres?|ml|cl|pcs?|pieces?|unites?)\b/);
+  if (!m) return null;
+  let qty3 = Number(m[1]);
+  let unit2 = UNIT[m[2]] ?? "kg";
+  if (unit2 === "g") {
+    qty3 /= 1e3;
+    unit2 = "kg";
+  }
+  if (unit2 === "mL") {
+    qty3 /= 1e3;
+    unit2 = "L";
+  }
+  if (unit2 === "cL") {
+    qty3 /= 100;
+    unit2 = "L";
+  }
+  return { qty: qty3, unit: unit2 };
+}
+function parseCatalogText(text2) {
+  return text2.split(/\r?\n/).map(parseCatalogLine).filter((l) => !!l);
+}
+function matchCatalogLines(lines, ref) {
+  return lines.map((l) => {
+    const words = normalize2(l.label).split(" ").filter((w) => w.length >= 2);
+    const scored = ref.map((p) => {
+      const nw = normalize2(p.name).split(" ");
+      const aw = p.aliases.map((a) => normalize2(a));
+      const inName = words.length && words.every((w) => nw.includes(w));
+      const exactAlias = aw.includes(normalize2(l.label));
+      let score = inName ? 0.95 : exactAlias ? 0.9 : Math.min(0.84, Math.max(similarity(l.label, p.name), ...p.aliases.map((a) => similarity(l.label, a))));
+      const compatible = p.baseUnit === l.packUnit || p.baseUnit === "piece" && l.packUnit === "piece" || ["sac", "carton", "botte"].includes(p.baseUnit) && l.packUnit === "piece";
+      if (!compatible) score -= 0.25;
+      return { id: p.id, name: p.name, baseUnit: p.baseUnit, score: Math.round(score * 1e3) / 1e3 };
+    }).filter((m) => m.score >= 0.45).sort((a, b) => b.score - a.score).slice(0, 4);
+    const top = scored[0];
+    const second = scored[1];
+    const confident = !!top && top.score >= 0.6 && (!second || top.score - second.score >= 0.08 || top.score >= 0.9);
+    const warning = top && top.baseUnit !== l.packUnit && !(top.baseUnit === "piece" || l.packUnit === "piece") ? `Unit\xE9 ${l.packUnit} \u2260 ${top.baseUnit} du r\xE9f\xE9rentiel` : void 0;
+    return { ...l, match: confident ? top : null, candidates: scored, warning };
+  });
+}
+var CATALOG_PROMPT = `Tu lis la photo (ou le PDF) d'un tarif / catalogue de grossiste alimentaire africain ou exotique.
+R\xE9ponds UNIQUEMENT avec un JSON valide : {"lines":[{"label":string,"packLabel":string|null,"packQty":number|null,"packUnit":"kg"|"g"|"L"|"mL"|"piece"|null,"price":number|null}]}
+R\xE8gles : une ligne par produit/conditionnement ; label = nom du produit sans le conditionnement ; packQty = quantit\xE9 par colis dans packUnit (\xAB 10 x 1 kg \xBB \u2192 10, "kg") ; price = prix du colis en euros (HT si indiqu\xE9, sinon tel quel). Ignore titres, totaux, conditions g\xE9n\xE9rales.`;
+async function extractCatalogFromImage(imageDataUrl) {
+  if (!process.env.LLM_API_KEY) return { ok: false, error: "Lecture de photo indisponible : LLM_API_KEY non configur\xE9. Collez le texte du tarif ou importez un fichier CSV/Excel." };
+  const base = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
+  const model = process.env.LLM_VISION_MODEL ?? process.env.LLM_MODEL ?? "gpt-4o-mini";
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.LLM_API_KEY}` },
+      signal: AbortSignal.timeout(6e4),
+      body: JSON.stringify({ model, temperature: 0, max_tokens: 4e3, response_format: { type: "json_object" }, messages: [{ role: "system", content: CATALOG_PROMPT }, { role: "user", content: [{ type: "text", text: "Voici le tarif." }, { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } }] }] })
+    });
+    if (!res.ok) return { ok: false, error: `LLM HTTP ${res.status}` };
+    const data = await res.json();
+    const parsed = JSON.parse((data.choices?.[0]?.message?.content ?? "{}").replace(/^```json\s*|```$/g, ""));
+    const lines = (parsed.lines ?? []).filter((l) => l && l.label && Number(l.price) > 0).map((l) => {
+      let qty3 = Number(l.packQty) || 1;
+      let unit2 = l.packUnit ?? "piece";
+      if (unit2 === "g") {
+        qty3 /= 1e3;
+        unit2 = "kg";
+      }
+      if (unit2 === "mL") {
+        qty3 /= 1e3;
+        unit2 = "L";
+      }
+      return { raw: `${l.label} ${l.packLabel ?? ""} ${l.price}`.trim(), label: l.label, packLabel: l.packLabel ?? (unit2 === "piece" ? "Pi\xE8ce" : `${qty3} ${unit2}`), packQty: qty3, packUnit: unit2, price: Number(l.price), inStock: true };
+    });
+    return { ok: true, lines };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// apps/api/src/routes/vendor.ts
 var vendorRoutes = new Hono15();
 var n10 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var eur6 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
@@ -5948,6 +6102,104 @@ Commission plateforme : ${n10(v.commissionPct)} % sur les commandes confirm\xE9e
   await audit("vendor.update", { actorEmail: c.get("user").email, target: v?.id, meta: body2.data });
   return c.json({ vendor: v });
 });
+async function refProducts() {
+  const db = await getDb();
+  return (await db.select({ id: products.id, name: products.name, aliases: products.aliases, baseUnit: products.baseUnit }).from(products).where(sql15`${products.restaurantId} is null`)).map((p) => ({ ...p, baseUnit: p.baseUnit }));
+}
+vendorRoutes.post("/vendor/catalog/parse", async (c) => {
+  const body2 = z15.object({ text: z15.string().max(2e5).optional(), image: z15.string().startsWith("data:image/").max(8e6).optional() }).refine((b) => b.text || b.image, "text ou image requis").safeParse(await c.req.json());
+  if (!body2.success) return c.json({ error: "Collez un texte ou envoyez une photo" }, 400);
+  let lines = [];
+  let source = "texte";
+  if (body2.data.image) {
+    const r = await extractCatalogFromImage(body2.data.image);
+    if (!r.ok) return c.json({ error: r.error }, 503);
+    lines = matchCatalogLines(r.lines, await refProducts());
+    source = "photo";
+  } else lines = matchCatalogLines(parseCatalogText(body2.data.text), await refProducts());
+  const db = await getDb();
+  const vid = c.get("vendorId");
+  const existing = await db.select({ productId: vendorOffers.productId, packLabel: vendorOffers.packLabel, packPriceEur: vendorOffers.packPriceEur }).from(vendorOffers).where(eq19(vendorOffers.vendorId, vid));
+  const out = lines.map((l) => {
+    const ex = l.match ? existing.find((e) => e.productId === l.match.id && e.packLabel.toLowerCase() === l.packLabel.toLowerCase()) : null;
+    return { ...l, currentPrice: ex ? n10(ex.packPriceEur) : null, changePct: ex && n10(ex.packPriceEur) > 0 ? Math.round((l.price - n10(ex.packPriceEur)) / n10(ex.packPriceEur) * 1e3) / 10 : null };
+  });
+  return c.json({ source, lines: out, matched: out.filter((l) => l.match).length, total: out.length, hint: out.length ? void 0 : "Aucune ligne reconnue. Format libre : \xAB Riz bris\xE9 sac 25 kg 29,90 \xBB (une ligne par produit)." });
+});
+vendorRoutes.post("/vendor/catalog/apply", async (c) => {
+  const body2 = z15.object({ lines: z15.array(z15.object({ productId: z15.string().uuid(), packLabel: z15.string().min(1).max(60), packQty: z15.number().positive(), packPrice: z15.number().positive(), inStock: z15.boolean().default(true) })).min(1).max(2e3), replaceMissing: z15.boolean().default(false) }).safeParse(await c.req.json());
+  if (!body2.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
+  const db = await getDb();
+  const vid = c.get("vendorId");
+  const ref = new Set((await refProducts()).map((p) => p.id));
+  const bad = body2.data.lines.filter((l) => !ref.has(l.productId));
+  if (bad.length) return c.json({ error: "Produit hors r\xE9f\xE9rentiel" }, 400);
+  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq19(suppliers.vendorId, vid));
+  let created = 0, updated = 0, priceChanges = 0;
+  const before = new Map((await db.select().from(vendorOffers).where(eq19(vendorOffers.vendorId, vid))).map((o) => [`${o.productId}|${o.packLabel.toLowerCase()}`, o]));
+  const seen = /* @__PURE__ */ new Set();
+  for (const l of body2.data.lines) {
+    const key = `${l.productId}|${l.packLabel.toLowerCase()}`;
+    seen.add(key);
+    const prev = before.get(key);
+    const packLabel = prev?.packLabel ?? l.packLabel;
+    await db.insert(vendorOffers).values({ vendorId: vid, productId: l.productId, packLabel, packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock }).onConflictDoUpdate({ target: [vendorOffers.vendorId, vendorOffers.productId, vendorOffers.packLabel], set: { packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock, updatedAt: /* @__PURE__ */ new Date() } });
+    if (prev) {
+      updated++;
+      if (n10(prev.packPriceEur) !== l.packPrice) priceChanges++;
+    } else created++;
+    for (const s of linked) {
+      const [so] = await db.insert(supplierOffers).values({ restaurantId: s.restaurantId, supplierId: s.id, productId: l.productId, packLabel, packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock, lastSeenAt: /* @__PURE__ */ new Date() } }).returning();
+      if (!prev || n10(prev.packPriceEur) !== l.packPrice) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (l.packPrice / l.packQty).toFixed(4), source: "catalogue" });
+    }
+  }
+  let outOfStock = 0;
+  if (body2.data.replaceMissing) {
+    for (const [key, o] of before) if (!seen.has(key) && o.inStock) {
+      await db.update(vendorOffers).set({ inStock: false, updatedAt: /* @__PURE__ */ new Date() }).where(eq19(vendorOffers.id, o.id));
+      outOfStock++;
+    }
+  }
+  await audit("vendor.catalog_import", { actorEmail: c.get("user").email, target: vid, meta: { created, updated, priceChanges, outOfStock } });
+  return c.json({ created, updated, priceChanges, outOfStock, propagatedTo: linked.length, message: `Catalogue publi\xE9 : ${created} nouveau(x), ${updated} mis \xE0 jour (${priceChanges} changement(s) de prix)${outOfStock ? `, ${outOfStock} pass\xE9(s) en rupture` : ""}${linked.length ? ` \xB7 r\xE9percut\xE9 chez ${linked.length} restaurant(s)` : ""}.` });
+});
+vendorRoutes.post("/vendor/offers/quick", async (c) => {
+  const body2 = z15.object({ text: z15.string().min(2).max(300) }).safeParse(await c.req.json());
+  if (!body2.success) return c.json({ error: "Texte requis" }, 400);
+  const db = await getDb();
+  const vid = c.get("vendorId");
+  const mine = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq19(products.id, vendorOffers.productId)).where(eq19(vendorOffers.vendorId, vid));
+  if (!mine.length) return c.json({ error: "Aucune offre dans votre catalogue" }, 400);
+  const txt = body2.data.text.trim();
+  const rupture = /\b(rupture|plus de|epuise|épuisé|indisponible)\b/i.test(txt);
+  const dispo = /\b(dispo|disponible|de retour|retour en stock)\b/i.test(txt);
+  const parsed = rupture || dispo ? null : parseCatalogText(txt)[0];
+  const label = parsed ? parsed.label : txt.replace(/\b(rupture|plus de|epuise|épuisé|indisponible|dispo|disponible|de retour|retour en stock)\b/gi, " ").trim();
+  const ents = mine.map(({ offer, product }) => ({ id: offer.id, name: `${product.name} ${offer.packLabel}`, aliases: [product.name, ...product.aliases] }));
+  const cands = bestMatchesLocal(label, ents, parsed?.packQty);
+  const top = cands[0];
+  if (!top) return c.json({ error: `Produit \xAB ${label} \xBB introuvable dans votre catalogue` }, 404);
+  const row = mine.find((m) => m.offer.id === top.id);
+  const set = { updatedAt: /* @__PURE__ */ new Date() };
+  if (parsed) set.packPriceEur = parsed.price.toFixed(2);
+  if (rupture) set.inStock = false;
+  if (dispo) set.inStock = true;
+  await db.update(vendorOffers).set(set).where(eq19(vendorOffers.id, row.offer.id));
+  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq19(suppliers.vendorId, vid));
+  for (const s of linked) {
+    const [so] = await db.update(supplierOffers).set({ ...parsed ? { packPriceEur: parsed.price.toFixed(2) } : {}, ...rupture ? { inStock: false } : {}, ...dispo ? { inStock: true } : {}, lastSeenAt: /* @__PURE__ */ new Date() }).where(and16(eq19(supplierOffers.supplierId, s.id), eq19(supplierOffers.productId, row.product.id), eq19(supplierOffers.packLabel, row.offer.packLabel))).returning();
+    if (so && parsed) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (parsed.price / n10(row.offer.packQty)).toFixed(4), source: "catalogue" });
+  }
+  const what = parsed ? `${eur6(n10(row.offer.packPriceEur))} \u2192 ${eur6(parsed.price)}` : rupture ? "pass\xE9 en rupture" : "de nouveau disponible";
+  return c.json({ offerId: row.offer.id, productName: row.product.name, packLabel: row.offer.packLabel, message: `${row.product.name} (${row.offer.packLabel}) : ${what}${linked.length ? ` \xB7 ${linked.length} restaurant(s) pr\xE9venus` : ""}.` });
+});
+function bestMatchesLocal(label, ents, qty3) {
+  return ents.map((e) => {
+    let s = Math.max(similarity(label, e.name), ...e.aliases.map((a) => similarity(label, a)));
+    if (qty3 && new RegExp(`\\b${qty3}\\b`).test(e.name)) s += 0.1;
+    return { id: e.id, score: s };
+  }).filter((m) => m.score >= 0.5).sort((a, b) => b.score - a.score);
+}
 
 // apps/api/src/routes/status.ts
 init_src();

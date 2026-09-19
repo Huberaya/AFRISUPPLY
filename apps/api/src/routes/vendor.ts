@@ -3,7 +3,8 @@
 import { Hono, type Context, type Next } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { getDb, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, suppliers, supplierOffers } from '@afrisupply/db';
+import { getDb, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
+import { similarity } from '../lib/quick.js';
 import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
@@ -244,3 +245,77 @@ vendorAdminRoutes.put('/admin/vendors/:id', async (c) => {
   await audit('vendor.update', { actorEmail: c.get('user').email, target: v?.id, meta: body.data });
   return c.json({ vendor: v });
 });
+
+// ---------------- Chantier 12 : import de catalogue assisté (texte / Excel / photo) + prix express ----------------
+import { parseCatalogText, matchCatalogLines, extractCatalogFromImage, type MatchedLine } from '../lib/catalog-import.js';
+async function refProducts() { const db = await getDb(); return (await db.select({ id: products.id, name: products.name, aliases: products.aliases, baseUnit: products.baseUnit }).from(products).where(sql`${products.restaurantId} is null`)).map((p) => ({ ...p, baseUnit: p.baseUnit as string })); }
+
+/** Analyse sans écrire : { text } (lignes collées / CSV / Excel converti) ou { image } (photo ou page de tarif). */
+vendorRoutes.post('/vendor/catalog/parse', async (c) => {
+  const body = z.object({ text: z.string().max(200_000).optional(), image: z.string().startsWith('data:image/').max(8_000_000).optional() }).refine((b) => b.text || b.image, 'text ou image requis').safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Collez un texte ou envoyez une photo' }, 400);
+  let lines: MatchedLine[] = []; let source = 'texte';
+  if (body.data.image) { const r = await extractCatalogFromImage(body.data.image); if (!r.ok) return c.json({ error: r.error }, 503); lines = matchCatalogLines(r.lines, await refProducts()); source = 'photo'; }
+  else lines = matchCatalogLines(parseCatalogText(body.data.text!), await refProducts());
+  const db = await getDb(); const vid = c.get('vendorId');
+  const existing = await db.select({ productId: vendorOffers.productId, packLabel: vendorOffers.packLabel, packPriceEur: vendorOffers.packPriceEur }).from(vendorOffers).where(eq(vendorOffers.vendorId, vid));
+  const out = lines.map((l) => { const ex = l.match ? existing.find((e) => e.productId === l.match!.id && e.packLabel.toLowerCase() === l.packLabel.toLowerCase()) : null; return { ...l, currentPrice: ex ? n(ex.packPriceEur) : null, changePct: ex && n(ex.packPriceEur) > 0 ? Math.round(((l.price - n(ex.packPriceEur)) / n(ex.packPriceEur)) * 1000) / 10 : null }; });
+  return c.json({ source, lines: out, matched: out.filter((l) => l.match).length, total: out.length, hint: out.length ? undefined : 'Aucune ligne reconnue. Format libre : « Riz brisé sac 25 kg 29,90 » (une ligne par produit).' });
+});
+
+/** Publication des lignes validées : upsert offres + propagation aux restaurants liés + historique de prix. */
+vendorRoutes.post('/vendor/catalog/apply', async (c) => {
+  const body = z.object({ lines: z.array(z.object({ productId: z.string().uuid(), packLabel: z.string().min(1).max(60), packQty: z.number().positive(), packPrice: z.number().positive(), inStock: z.boolean().default(true) })).min(1).max(2000), replaceMissing: z.boolean().default(false) }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId');
+  const ref = new Set((await refProducts()).map((p) => p.id)); const bad = body.data.lines.filter((l) => !ref.has(l.productId)); if (bad.length) return c.json({ error: 'Produit hors référentiel' }, 400);
+  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq(suppliers.vendorId, vid));
+  let created = 0, updated = 0, priceChanges = 0;
+  const before = new Map((await db.select().from(vendorOffers).where(eq(vendorOffers.vendorId, vid))).map((o) => [`${o.productId}|${o.packLabel.toLowerCase()}`, o]));
+  const seen = new Set<string>();
+  for (const l of body.data.lines) {
+    const key = `${l.productId}|${l.packLabel.toLowerCase()}`; seen.add(key); const prev = before.get(key);
+    const packLabel = prev?.packLabel ?? l.packLabel;
+    await db.insert(vendorOffers).values({ vendorId: vid, productId: l.productId, packLabel, packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock })
+      .onConflictDoUpdate({ target: [vendorOffers.vendorId, vendorOffers.productId, vendorOffers.packLabel], set: { packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock, updatedAt: new Date() } });
+    if (prev) { updated++; if (n(prev.packPriceEur) !== l.packPrice) priceChanges++; } else created++;
+    for (const s of linked) {
+      const [so] = await db.insert(supplierOffers).values({ restaurantId: s.restaurantId, supplierId: s.id, productId: l.productId, packLabel, packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock })
+        .onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock, lastSeenAt: new Date() } }).returning();
+      if (!prev || n(prev.packPriceEur) !== l.packPrice) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (l.packPrice / l.packQty).toFixed(4), source: 'catalogue' });
+    }
+  }
+  let outOfStock = 0;
+  if (body.data.replaceMissing) for (const [key, o] of before) if (!seen.has(key) && o.inStock) { await db.update(vendorOffers).set({ inStock: false, updatedAt: new Date() }).where(eq(vendorOffers.id, o.id)); outOfStock++; }
+  await audit('vendor.catalog_import', { actorEmail: c.get('user').email, target: vid, meta: { created, updated, priceChanges, outOfStock } });
+  return c.json({ created, updated, priceChanges, outOfStock, propagatedTo: linked.length, message: `Catalogue publié : ${created} nouveau(x), ${updated} mis à jour (${priceChanges} changement(s) de prix)${outOfStock ? `, ${outOfStock} passé(s) en rupture` : ''}${linked.length ? ` · répercuté chez ${linked.length} restaurant(s)` : ''}.` });
+});
+
+/** Prix express : « riz brisé 25 kg 41 » ou « huile de palme 5 L 23,50 » ou « attiéké rupture » — une ligne, un changement. */
+vendorRoutes.post('/vendor/offers/quick', async (c) => {
+  const body = z.object({ text: z.string().min(2).max(300) }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Texte requis' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId');
+  const mine = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq(products.id, vendorOffers.productId)).where(eq(vendorOffers.vendorId, vid));
+  if (!mine.length) return c.json({ error: 'Aucune offre dans votre catalogue' }, 400);
+  const txt = body.data.text.trim(); const rupture = /\b(rupture|plus de|epuise|épuisé|indisponible)\b/i.test(txt); const dispo = /\b(dispo|disponible|de retour|retour en stock)\b/i.test(txt);
+  const parsed = rupture || dispo ? null : parseCatalogText(txt)[0];
+  const label = parsed ? parsed.label : txt.replace(/\b(rupture|plus de|epuise|épuisé|indisponible|dispo|disponible|de retour|retour en stock)\b/gi, ' ').trim();
+  const ents = mine.map(({ offer, product }) => ({ id: offer.id, name: `${product.name} ${offer.packLabel}`, aliases: [product.name, ...product.aliases] }));
+  const cands = bestMatchesLocal(label, ents, parsed?.packQty);
+  const top = cands[0]; if (!top) return c.json({ error: `Produit « ${label} » introuvable dans votre catalogue` }, 404);
+  const row = mine.find((m) => m.offer.id === top.id)!;
+  const set: Partial<typeof vendorOffers.$inferInsert> = { updatedAt: new Date() };
+  if (parsed) set.packPriceEur = parsed.price.toFixed(2); if (rupture) set.inStock = false; if (dispo) set.inStock = true;
+  await db.update(vendorOffers).set(set).where(eq(vendorOffers.id, row.offer.id));
+  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq(suppliers.vendorId, vid));
+  for (const s of linked) {
+    const [so] = await db.update(supplierOffers).set({ ...(parsed ? { packPriceEur: parsed.price.toFixed(2) } : {}), ...(rupture ? { inStock: false } : {}), ...(dispo ? { inStock: true } : {}), lastSeenAt: new Date() }).where(and(eq(supplierOffers.supplierId, s.id), eq(supplierOffers.productId, row.product.id), eq(supplierOffers.packLabel, row.offer.packLabel))).returning();
+    if (so && parsed) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (parsed.price / n(row.offer.packQty)).toFixed(4), source: 'catalogue' });
+  }
+  const what = parsed ? `${eur(n(row.offer.packPriceEur))} → ${eur(parsed.price)}` : rupture ? 'passé en rupture' : 'de nouveau disponible';
+  return c.json({ offerId: row.offer.id, productName: row.product.name, packLabel: row.offer.packLabel, message: `${row.product.name} (${row.offer.packLabel}) : ${what}${linked.length ? ` · ${linked.length} restaurant(s) prévenus` : ''}.` });
+});
+function bestMatchesLocal(label: string, ents: { id: string; name: string; aliases: string[] }[], qty?: number) {
+  return ents.map((e) => { let s = Math.max(similarity(label, e.name), ...e.aliases.map((a) => similarity(label, a))); if (qty && new RegExp(`\\b${qty}\\b`).test(e.name)) s += 0.1; return { id: e.id, score: s }; }).filter((m) => m.score >= 0.5).sort((a, b) => b.score - a.score);
+}

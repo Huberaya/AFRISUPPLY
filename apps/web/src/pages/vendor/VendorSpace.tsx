@@ -2,9 +2,10 @@
 // Volontairement simple et autonome : un grossiste doit pouvoir confirmer une commande depuis son téléphone en 2 taps.
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, Upload, LogOut } from 'lucide-react';
+import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, LogOut } from 'lucide-react';
 import { api, tokenStore, CATEGORY_LABEL } from '../../lib/api';
 import { Field } from '../../components/Modal';
+import { CatalogImport, QuickPrice } from './CatalogImport';
 
 type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
 type Tab = 'dashboard' | 'offers' | 'orders' | 'groupbuys' | 'commissions';
@@ -87,16 +88,11 @@ function Dashboard() {
 type Offer = { id: string; productName: string; category: string; unit: string; packLabel: string; packQty: string; packPriceEur: string; unitPrice: number; inStock: boolean };
 function Offers() {
   const [offers, setOffers] = useState<Offer[]>([]); const [q, setQ] = useState(''); const [cands, setCands] = useState<{ id: string; name: string; baseUnit: string }[]>([]); const [sel, setSel] = useState<{ id: string; name: string; baseUnit: string } | null>(null);
-  const [f, setF] = useState({ packLabel: '', packQty: '', packPrice: '' }); const [msg, setMsg] = useState<string | null>(null); const [csv, setCsv] = useState('');
+  const [f, setF] = useState({ packLabel: '', packQty: '', packPrice: '' }); const [msg, setMsg] = useState<string | null>(null);
   const load = () => api<{ offers: Offer[] }>('/vendor/offers').then((r) => setOffers(r.offers));
   useEffect(() => { void load(); }, []);
   useEffect(() => { if (q.length < 2) { setCands([]); return; } const t = setTimeout(() => api<{ products: { id: string; name: string; baseUnit: string }[] }>(`/public/reference?q=${encodeURIComponent(q)}`).then((r) => setCands(r.products.slice(0, 8))).catch(() => setCands([])), 200); return () => clearTimeout(t); }, [q]);
   const add = async () => { if (!sel) return; const r = await api<{ propagatedTo: number }>('/vendor/offers', { method: 'POST', json: { productId: sel.id, packLabel: f.packLabel, packQty: Number(f.packQty), packPrice: Number(f.packPrice) } }); setMsg(`Offre enregistrée${r.propagatedTo ? ` · prix mis à jour chez ${r.propagatedTo} restaurant(s)` : ''}.`); setSel(null); setQ(''); setF({ packLabel: '', packQty: '', packPrice: '' }); void load(); };
-  const importCsv = async () => {
-    const rows = csv.split(/\r?\n/).map((l) => l.split(/[;,\t]/).map((x) => x.trim())).filter((c) => c.length >= 4 && !isNaN(Number(c[2]))).map((c) => ({ product: c[0], packLabel: c[1], packQty: Number(c[2].replace(',', '.')), packPrice: Number(c[3].replace(',', '.')) }));
-    if (!rows.length) { setMsg('Format attendu : produit;conditionnement;quantité;prix (une ligne par produit).'); return; }
-    const r = await api<{ imported: number; unknown: string[] }>('/vendor/offers/import', { method: 'POST', json: { rows } }); setMsg(`${r.imported} offres importées${r.unknown.length ? ` · non reconnus : ${r.unknown.slice(0, 5).join(', ')}${r.unknown.length > 5 ? '…' : ''}` : ''}.`); setCsv(''); void load();
-  };
   const toggle = async (o: Offer) => { await api('/vendor/offers', { method: 'POST', json: { productId: (o as unknown as { productId: string }).productId, packLabel: o.packLabel, packQty: Number(o.packQty), packPrice: Number(o.packPriceEur), inStock: !o.inStock } }); void load(); };
   return (
     <div className="space-y-4">
@@ -106,8 +102,9 @@ function Offers() {
           {!sel ? <><input className="input" placeholder="Rechercher dans le référentiel (riz brisé, huile de palme, attiéké…)" value={q} onChange={(e) => setQ(e.target.value)} />{cands.length > 0 && <ul className="divide-y divide-stone-100 rounded-xl border border-stone-200">{cands.map((c) => <li key={c.id}><button className="w-full px-3 py-2 text-left text-sm hover:bg-stone-50" onClick={() => setSel(c)}>{c.name} <span className="text-stone-400">({c.baseUnit})</span></button></li>)}</ul>}</>
             : <><p className="font-semibold">{sel.name} <button className="ml-2 text-xs text-stone-500 underline" onClick={() => setSel(null)}>changer</button></p><div className="grid grid-cols-3 gap-2"><input className="input" placeholder="Sac 25 kg" value={f.packLabel} onChange={(e) => setF({ ...f, packLabel: e.target.value })} /><input className="input" type="number" placeholder={`Qté (${sel.baseUnit})`} value={f.packQty} onChange={(e) => setF({ ...f, packQty: e.target.value })} /><input className="input" type="number" step="0.01" placeholder="Prix € TTC" value={f.packPrice} onChange={(e) => setF({ ...f, packPrice: e.target.value })} /></div><button className="btn-primary w-full" disabled={!f.packLabel || !f.packQty || !f.packPrice} onClick={() => void add()}>Enregistrer</button></>}
         </div>
-        <div className="card space-y-3"><h2 className="flex items-center gap-2 font-bold"><Upload size={18} /> Import en masse</h2><p className="text-xs text-stone-500">Collez votre tarif : <code>produit;conditionnement;quantité;prix</code> — ex. <code>Riz brisé parfumé;Sac 25 kg;25;29,90</code></p><textarea className="input font-mono text-xs" rows={5} value={csv} onChange={(e) => setCsv(e.target.value)} /><button className="btn-ghost" onClick={() => void importCsv()}>Importer</button></div>
+        <QuickPrice onDone={() => void load()} />
       </div>
+      <CatalogImport onDone={() => void load()} />
       <div className="card overflow-x-auto p-0"><table className="w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-3">Produit</th><th className="p-3">Conditionnement</th><th className="p-3 text-right">Prix</th><th className="p-3 text-right">€/unité</th><th className="p-3">Stock</th></tr></thead><tbody className="divide-y divide-stone-100">
         {offers.map((o) => <tr key={o.id}><td className="p-3 font-semibold">{o.productName}</td><td className="p-3">{o.packLabel}</td><td className="p-3 text-right">{eur(o.packPriceEur)}</td><td className="p-3 text-right text-stone-500">{o.unitPrice.toFixed(2)} €/{o.unit}</td><td className="p-3"><button onClick={() => void toggle(o)} className={`pill ${o.inStock ? 'bg-emerald-50 text-emerald-800' : 'bg-stone-100 text-stone-500'}`}>{o.inStock ? 'Disponible' : 'Rupture'}</button></td></tr>)}
         {!offers.length && <tr><td colSpan={5} className="p-6 text-center text-stone-500">Catalogue vide — ajoutez vos produits : les restaurants ne voient que ce qui est ici.</td></tr>}</tbody></table></div>
