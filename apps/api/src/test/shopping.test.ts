@@ -45,3 +45,12 @@ describe('liste de courses', () => {
     expect((await call('POST', '/api/orders', { supplierId: s.sellerId, lines: [{ offerId: s.offerId, packs: s.packs }], source: 'liste_courses' }, H)).status).toBe(201);
   });
 });
+describe('classement des produits', () => {
+  it('« riz » préfère un produit Riz (mot exact) plutôt qu’un produit dont un alias ressemble', async () => {
+    const { rankProducts } = await import('../routes/shopping.js');
+    const prods = [{ id: 'a', name: 'Shito (sauce piment ghanéenne)', aliases: ['shito', 'sauce riz'] }, { id: 'b', name: 'Riz parfumé', aliases: ['riz jasmin'] }, { id: 'c', name: 'Riz brisé', aliases: [] }];
+    expect(rankProducts('riz', prods, new Set(), new Set(['b']))[0].id).toBe('b');
+    expect(rankProducts('riz', prods, new Set(['c']), new Set())[0].id).toBe('c');
+    expect(rankProducts('piment', prods, new Set(), new Set())[0].id).toBe('a');
+  });
+});

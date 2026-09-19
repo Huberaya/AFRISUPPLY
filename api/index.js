@@ -5535,6 +5535,18 @@ function toBase(qty3, unit2, baseUnit) {
   if (["sac", "carton", "bidon"].includes(unit2)) return { qty: qty3, note: `${qty3} ${unit2}${qty3 > 1 ? "s" : ""} \u2192 colis` };
   return { qty: qty3, note: `unit\xE9 \xAB ${unit2} \xBB \u2260 ${baseUnit}` };
 }
+function rankProducts(label, prods, mine, withOffers) {
+  const words = normalize2(label).split(" ").filter((w) => w.length >= 2);
+  const scored = prods.map((p) => {
+    const hay = [p.name, ...p.aliases].map((x) => normalize2(x).split(" "));
+    const exact = words.length && words.every((w) => hay.some((ws) => ws.includes(w))) ? 1 : 0;
+    const firstWord = hay.some((ws) => ws[0] === words[0]) ? 0.03 : 0;
+    const fuzzy = bestMatches(label, [{ id: p.id, name: p.name, aliases: p.aliases }], 1)[0]?.score ?? 0;
+    const score = Math.max(exact ? 0.9 + firstWord : 0, fuzzy) + (mine.has(p.id) ? 0.04 : 0) + (withOffers.has(p.id) ? 0.02 : 0);
+    return { id: p.id, name: p.name, score: Math.min(1, Math.round(score * 1e3) / 1e3) };
+  }).filter((m) => m.score >= 0.45).sort((a, b) => b.score - a.score);
+  return scored.slice(0, 4);
+}
 shoppingRoutes.post("/shopping/parse", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
@@ -5554,8 +5566,7 @@ shoppingRoutes.post("/shopping/parse", async (c) => {
   const linkedVendorIds = new Set(mySups.map((s) => s.vendorId).filter(Boolean));
   const so = mySups.length ? await db.select().from(supplierOffers).where(and15(eq18(supplierOffers.restaurantId, rid), eq18(supplierOffers.inStock, true), inArray9(supplierOffers.supplierId, mySups.map((s) => s.id)))) : [];
   const lines = tokens.map((t) => {
-    const cands = bestMatches(t.label, prods.map((p2) => ({ id: p2.id, name: p2.name, aliases: p2.aliases })), 4);
-    cands.sort((a, b) => b.score + (mine.has(b.id) ? 0.05 : 0) - (a.score + (mine.has(a.id) ? 0.05 : 0)));
+    const cands = rankProducts(t.label, prods, mine, /* @__PURE__ */ new Set([...vo.map((o) => o.productId), ...so.map((o) => o.productId)]));
     const top = cands[0];
     if (!top || top.score < 0.55) return { raw: t.raw, qty: t.qty, unit: t.unit, product: null, candidates: cands, offers: [], selected: null, note: "Produit inconnu" };
     const p = prods.find((x) => x.id === top.id);

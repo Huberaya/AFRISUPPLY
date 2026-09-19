@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb, vendors, vendorOffers, suppliers, supplierOffers, products, restaurants, inventoryItems } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
-import { tokenize, bestMatches } from '../lib/quick.js';
+import { tokenize, bestMatches, normalize } from '../lib/quick.js';
 import { restaurantZones } from './marketplace.js';
 
 export const shoppingRoutes = new Hono<Env>();
@@ -24,6 +24,21 @@ function toBase(qty: number, unit: string | undefined, baseUnit: string): { qty:
   if (unit === 'cL' && baseUnit === 'L') return { qty: qty / 100 };
   if (['sac', 'carton', 'bidon'].includes(unit)) return { qty, note: `${qty} ${unit}${qty > 1 ? 's' : ''} → colis` };
   return { qty, note: `unité « ${unit} » ≠ ${baseUnit}` };
+}
+
+/** Classement des produits pour un libellé : mot exact (« riz » ⊂ « Riz parfumé ») > similarité floue ;
+ *  puis, à score égal, produits déjà suivis en stock, puis produits ayant au moins une offre. */
+export function rankProducts(label: string, prods: { id: string; name: string; aliases: string[] }[], mine: Set<string>, withOffers: Set<string>) {
+  const words = normalize(label).split(' ').filter((w) => w.length >= 2);
+  const scored = prods.map((p) => {
+    const hay = [p.name, ...p.aliases].map((x) => normalize(x).split(' '));
+    const exact = words.length && words.every((w) => hay.some((ws) => ws.includes(w))) ? 1 : 0;
+    const firstWord = hay.some((ws) => ws[0] === words[0]) ? 0.03 : 0;
+    const fuzzy = bestMatches(label, [{ id: p.id, name: p.name, aliases: p.aliases }], 1)[0]?.score ?? 0;
+    const score = Math.max(exact ? 0.9 + firstWord : 0, fuzzy) + (mine.has(p.id) ? 0.04 : 0) + (withOffers.has(p.id) ? 0.02 : 0);
+    return { id: p.id, name: p.name, score: Math.min(1, Math.round(score * 1000) / 1000) };
+  }).filter((m) => m.score >= 0.45).sort((a, b) => b.score - a.score);
+  return scored.slice(0, 4);
 }
 
 shoppingRoutes.post('/shopping/parse', async (c) => {
@@ -45,9 +60,7 @@ shoppingRoutes.post('/shopping/parse', async (c) => {
   const so = mySups.length ? await db.select().from(supplierOffers).where(and(eq(supplierOffers.restaurantId, rid), eq(supplierOffers.inStock, true), inArray(supplierOffers.supplierId, mySups.map((s) => s.id)))) : [];
 
   const lines = tokens.map((t) => {
-    const cands = bestMatches(t.label, prods.map((p) => ({ id: p.id, name: p.name, aliases: p.aliases })), 4);
-    // priorité aux produits déjà suivis en cas d'égalité
-    cands.sort((a, b) => (b.score + (mine.has(b.id) ? 0.05 : 0)) - (a.score + (mine.has(a.id) ? 0.05 : 0)));
+    const cands = rankProducts(t.label, prods, mine, new Set([...vo.map((o) => o.productId), ...so.map((o) => o.productId)]));
     const top = cands[0];
     if (!top || top.score < 0.55) return { raw: t.raw, qty: t.qty, unit: t.unit, product: null, candidates: cands, offers: [] as ShopOffer[], selected: null as string | null, note: 'Produit inconnu' };
     const p = prods.find((x) => x.id === top.id)!;
