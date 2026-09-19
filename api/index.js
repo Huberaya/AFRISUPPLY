@@ -58,6 +58,7 @@ __export(schema_exports, {
   restaurantsRelations: () => restaurantsRelations,
   sales: () => sales,
   salesRelations: () => salesRelations,
+  shoppingLists: () => shoppingLists,
   stockMovements: () => stockMovements,
   stockMovementsRelations: () => stockMovementsRelations,
   supplierOffers: () => supplierOffers,
@@ -88,7 +89,7 @@ import {
   uniqueIndex
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
-var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, feedback, usageEvents, prospects;
+var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, feedback, usageEvents, prospects, shoppingLists;
 var init_schema = __esm({
   "packages/db/src/schema.ts"() {
     "use strict";
@@ -625,6 +626,18 @@ var init_schema = __esm({
       createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
       updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
     }, (t) => [index("prospects_kind_idx").on(t.kind, t.status)]);
+    shoppingLists = pgTable("shopping_lists", {
+      id: uuid("id").primaryKey().defaultRandom(),
+      restaurantId: uuid("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+      name: text("name").notNull(),
+      // « Liste du lundi »
+      text: text("text").notNull(),
+      // texte libre tel que saisi/dicté
+      lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+      useCount: integer("use_count").default(0).notNull(),
+      createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+      updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+    }, (t) => [index("shopping_lists_restaurant_idx").on(t.restaurantId)]);
   }
 });
 
@@ -1803,6 +1816,7 @@ __export(src_exports, {
   salesRelations: () => salesRelations,
   schema: () => schema_exports,
   seedDemo: () => seedDemo,
+  shoppingLists: () => shoppingLists,
   stockMovements: () => stockMovements,
   stockMovementsRelations: () => stockMovementsRelations,
   supplierOffers: () => supplierOffers,
@@ -5521,7 +5535,7 @@ init_src();
 init_auth();
 import { Hono as Hono14 } from "hono";
 import { z as z14 } from "zod";
-import { and as and15, eq as eq18, inArray as inArray9, isNull as isNull4, or as or2 } from "drizzle-orm";
+import { and as and15, desc as desc10, eq as eq18, inArray as inArray9, isNull as isNull4, or as or2, sql as sql14 } from "drizzle-orm";
 init_marketplace();
 var shoppingRoutes = new Hono14();
 shoppingRoutes.use("*", requireAuth, requireRestaurant);
@@ -5605,6 +5619,61 @@ shoppingRoutes.post("/shopping/parse", async (c) => {
   });
   return c.json({ lines, unmatched: lines.filter((l) => !l.product).map((l) => l.raw), sellers: { vendors: activeVendors.length, suppliers: mySups.length } });
 });
+var fmtQ = (q2) => Number.isInteger(q2) ? String(q2) : q2.toFixed(1).replace(".", ",");
+shoppingRoutes.get("/shopping/lists", async (c) => {
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const lists = await db.select().from(shoppingLists).where(eq18(shoppingLists.restaurantId, rid)).orderBy(desc10(shoppingLists.lastUsedAt), desc10(shoppingLists.createdAt));
+  return c.json({ lists });
+});
+shoppingRoutes.post("/shopping/lists", async (c) => {
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const body2 = z14.object({ name: z14.string().min(1).max(60), text: z14.string().min(1).max(2e3) }).safeParse(await c.req.json());
+  if (!body2.success) return c.json({ error: "Nom et contenu requis" }, 400);
+  const [list] = await db.insert(shoppingLists).values({ restaurantId: rid, ...body2.data }).returning();
+  return c.json({ list, message: `Liste \xAB ${list.name} \xBB enregistr\xE9e.` }, 201);
+});
+shoppingRoutes.put("/shopping/lists/:id", async (c) => {
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const body2 = z14.object({ name: z14.string().min(1).max(60).optional(), text: z14.string().min(1).max(2e3).optional(), used: z14.boolean().optional() }).safeParse(await c.req.json());
+  if (!body2.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
+  const set = { updatedAt: /* @__PURE__ */ new Date() };
+  if (body2.data.name) set.name = body2.data.name;
+  if (body2.data.text) set.text = body2.data.text;
+  if (body2.data.used) {
+    set.lastUsedAt = /* @__PURE__ */ new Date();
+    set.useCount = sql14`${shoppingLists.useCount} + 1`;
+  }
+  const [list] = await db.update(shoppingLists).set(set).where(and15(eq18(shoppingLists.id, c.req.param("id")), eq18(shoppingLists.restaurantId, rid))).returning();
+  if (!list) return c.json({ error: "Liste introuvable" }, 404);
+  return c.json({ list });
+});
+shoppingRoutes.delete("/shopping/lists/:id", async (c) => {
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const del = await db.delete(shoppingLists).where(and15(eq18(shoppingLists.id, c.req.param("id")), eq18(shoppingLists.restaurantId, rid))).returning({ id: shoppingLists.id });
+  return del.length ? c.json({ ok: true }) : c.json({ error: "Liste introuvable" }, 404);
+});
+shoppingRoutes.get("/shopping/suggestions", async (c) => {
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const inv = await db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq18(products.id, inventoryItems.productId)).where(eq18(inventoryItems.restaurantId, rid));
+  const low = inv.filter(({ item }) => n9(item.quantity) <= n9(item.criticalLevel) || item.targetLevel !== null && n9(item.quantity) < n9(item.targetLevel) * 0.5).map(({ item, product }) => {
+    const target = item.targetLevel !== null ? n9(item.targetLevel) : Math.max(n9(item.criticalLevel) * 2, n9(item.avgDailyUse) * 7);
+    const need = Math.max(0, target - n9(item.quantity));
+    return { name: product.name, unit: product.baseUnit, need: Math.ceil(need * 10) / 10 };
+  }).filter((x) => x.need > 0);
+  const lastOrders = await db.select().from(orders).where(and15(eq18(orders.restaurantId, rid), inArray9(orders.status, ["envoyee", "confirmee", "livree", "livree_partiel"]))).orderBy(desc10(orders.createdAt)).limit(5);
+  let last = null;
+  if (lastOrders.length) {
+    const o = lastOrders[0];
+    const ls = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq18(products.id, orderLines.productId)).where(eq18(orderLines.orderId, o.id));
+    last = { reference: o.reference, date: o.createdAt.toISOString().slice(0, 10), text: ls.map(({ line, product }) => `${fmtQ(n9(line.quantity))} ${product.baseUnit} ${product.name}`).join(", ") };
+  }
+  return c.json({ restock: { count: low.length, text: low.map((x) => `${fmtQ(x.need)} ${x.unit} ${x.name}`).join(", ") }, last });
+});
 
 // apps/api/src/routes/vendor.ts
 init_src();
@@ -5615,7 +5684,7 @@ init_ops();
 init_daily();
 import { Hono as Hono15 } from "hono";
 import { z as z15 } from "zod";
-import { and as and16, desc as desc10, eq as eq19, inArray as inArray10, sql as sql15 } from "drizzle-orm";
+import { and as and16, desc as desc11, eq as eq19, inArray as inArray10, sql as sql15 } from "drizzle-orm";
 var vendorRoutes = new Hono15();
 var n10 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var eur6 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
@@ -5740,7 +5809,7 @@ vendorRoutes.get("/vendor/orders", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const status = c.req.query("status");
-  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address }).from(orders).innerJoin(restaurants, eq19(restaurants.id, orders.restaurantId)).where(status ? and16(eq19(orders.vendorId, vid), eq19(orders.status, status)) : eq19(orders.vendorId, vid)).orderBy(desc10(orders.createdAt)).limit(100);
+  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address }).from(orders).innerJoin(restaurants, eq19(restaurants.id, orders.restaurantId)).where(status ? and16(eq19(orders.vendorId, vid), eq19(orders.status, status)) : eq19(orders.vendorId, vid)).orderBy(desc11(orders.createdAt)).limit(100);
   const ids = rows.map((r) => r.order.id);
   const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq19(products.id, orderLines.productId)).where(inArray10(orderLines.orderId, ids)) : [];
   return c.json({ orders: rows.map((r) => ({ ...r.order, restaurantName: r.restaurantName, city: r.city, address: r.address, lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
@@ -5796,7 +5865,7 @@ vendorRoutes.post("/vendor/orders/:id/shipped", async (c) => {
 vendorRoutes.get("/vendor/group-buys", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const rows = await db.select({ gb: groupBuys, productName: products.name, packLabel: vendorOffers.packLabel }).from(groupBuys).innerJoin(vendorOffers, eq19(vendorOffers.id, groupBuys.vendorOfferId)).innerJoin(products, eq19(products.id, vendorOffers.productId)).where(eq19(groupBuys.vendorId, vid)).orderBy(desc10(groupBuys.createdAt));
+  const rows = await db.select({ gb: groupBuys, productName: products.name, packLabel: vendorOffers.packLabel }).from(groupBuys).innerJoin(vendorOffers, eq19(vendorOffers.id, groupBuys.vendorOfferId)).innerJoin(products, eq19(products.id, vendorOffers.productId)).where(eq19(groupBuys.vendorId, vid)).orderBy(desc11(groupBuys.createdAt));
   const ids = rows.map((r) => r.gb.id);
   const parts = ids.length ? await db.select({ p: groupBuyParticipations, restaurantName: restaurants.name, city: restaurants.city }).from(groupBuyParticipations).innerJoin(restaurants, eq19(restaurants.id, groupBuyParticipations.restaurantId)).where(inArray10(groupBuyParticipations.groupBuyId, ids)) : [];
   return c.json({ groupBuys: rows.map((r) => {
@@ -5853,7 +5922,7 @@ vendorRoutes.post("/vendor/group-buys/:id/close", async (c) => {
 vendorRoutes.get("/vendor/commissions", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const rows = await db.select({ period: commissions.period, orders: sql15`count(*)`, base: sql15`sum(${commissions.orderTotalEur})`, amount: sql15`sum(${commissions.amountEur})`, invoiced: sql15`bool_and(${commissions.invoiced})` }).from(commissions).where(eq19(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc10(commissions.period));
+  const rows = await db.select({ period: commissions.period, orders: sql15`count(*)`, base: sql15`sum(${commissions.orderTotalEur})`, amount: sql15`sum(${commissions.amountEur})`, invoiced: sql15`bool_and(${commissions.invoiced})` }).from(commissions).where(eq19(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc11(commissions.period));
   return c.json({ periods: rows.map((r) => ({ ...r, orders: n10(r.orders), base: n10(r.base), amount: n10(r.amount) })) });
 });
 var vendorAdminRoutes = new Hono15();
@@ -5862,7 +5931,7 @@ vendorAdminRoutes.use("/admin/vendors", requireAuth);
 vendorAdminRoutes.get("/admin/vendors", async (c) => {
   if (!isAdmin4(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
   const db = await getDb();
-  const rows = await db.select({ v: vendors, offerCount: sql15`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orderCount: sql15`(select count(*) from orders o where o.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc10(vendors.createdAt));
+  const rows = await db.select({ v: vendors, offerCount: sql15`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orderCount: sql15`(select count(*) from orders o where o.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc11(vendors.createdAt));
   return c.json({ vendors: rows.map((r) => ({ ...r.v, offerCount: Number(r.offerCount), orderCount: Number(r.orderCount) })) });
 });
 vendorAdminRoutes.put("/admin/vendors/:id", async (c) => {
@@ -5885,7 +5954,7 @@ init_src();
 init_ops();
 init_mailer();
 import { Hono as Hono16 } from "hono";
-import { desc as desc11, eq as eq20, sql as sql16 } from "drizzle-orm";
+import { desc as desc12, eq as eq20, sql as sql16 } from "drizzle-orm";
 var statusRoutes = new Hono16();
 statusRoutes.get("/status", async (c) => {
   const t0 = Date.now();
@@ -5897,7 +5966,7 @@ statusRoutes.get("/status", async (c) => {
     await db.execute(sql16`select 1`);
     dbMs = Date.now() - t0;
     dbOk = true;
-    const [j] = await db.select().from(jobRuns).where(eq20(jobRuns.job, "daily")).orderBy(desc11(jobRuns.startedAt)).limit(1);
+    const [j] = await db.select().from(jobRuns).where(eq20(jobRuns.job, "daily")).orderBy(desc12(jobRuns.startedAt)).limit(1);
     if (j) lastJob = { status: j.status, finishedAt: j.finishedAt, durationMs: j.durationMs, sent: j.summary?.sent, count: j.summary?.count };
   } catch {
     dbOk = false;
@@ -5923,7 +5992,7 @@ statusRoutes.get("/status/jobs", async (c) => {
   const given = c.req.header("x-cron-secret") ?? (auth?.startsWith("Bearer ") ? auth.slice(7) : void 0);
   if (!process.env.CRON_SECRET || given !== process.env.CRON_SECRET) return c.json({ error: "Non autoris\xE9" }, 401);
   const db = await getDb();
-  return c.json({ runs: await db.select().from(jobRuns).orderBy(desc11(jobRuns.startedAt)).limit(Math.min(100, Number(c.req.query("limit") ?? 30))) });
+  return c.json({ runs: await db.select().from(jobRuns).orderBy(desc12(jobRuns.startedAt)).limit(Math.min(100, Number(c.req.query("limit") ?? 30))) });
 });
 
 // apps/api/src/app.ts

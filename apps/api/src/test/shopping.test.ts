@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { runMigrations, getDb, vendors, vendorOffers, products } from '@afrisupply/db';
+import { runMigrations, getDb, vendors, vendorOffers, products, inventoryItems } from '@afrisupply/db';
 import { eq } from 'drizzle-orm';
 import { app } from '../app.js';
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://shopping'; delete process.env.STRIPE_SECRET_KEY;
@@ -52,5 +52,19 @@ describe('classement des produits', () => {
     expect(rankProducts('riz', prods, new Set(), new Set(['b']))[0].id).toBe('b');
     expect(rankProducts('riz', prods, new Set(['c']), new Set())[0].id).toBe('c');
     expect(rankProducts('piment', prods, new Set(), new Set())[0].id).toBe('a');
+  });
+});
+describe('listes enregistrées et suggestions', () => {
+  it('CRUD liste, compteur d’usage, suggestion « dernière commande » et réassort', async () => {
+    const cr = await call('POST', '/api/shopping/lists', { name: 'Liste du lundi', text: '10 kg piment, 25 kg riz' }, H); expect(cr.status).toBe(201);
+    expect((await call('GET', '/api/shopping/lists', undefined, H)).json.lists).toHaveLength(1);
+    const up = await call('PUT', `/api/shopping/lists/${cr.json.list.id}`, { used: true }, H); expect(up.json.list.useCount).toBe(1); expect(up.json.list.lastUsedAt).toBeTruthy();
+    const sg = await call('GET', '/api/shopping/suggestions', undefined, H); expect(sg.status).toBe(200);
+    expect(sg.json.last.text).toContain('Piment frais'); // commande plateforme passée dans le test précédent
+    await call('POST', '/api/catalog/track', { productIds: [piment], criticalLevel: 5 }, H);
+    const db = await getDb(); await db.update(inventoryItems).set({ quantity: '1', criticalLevel: '5', targetLevel: '20' }).where(eq(inventoryItems.productId, piment));
+    const sg2 = await call('GET', '/api/shopping/suggestions', undefined, H); expect(sg2.json.restock.count).toBeGreaterThanOrEqual(1); expect(sg2.json.restock.text).toMatch(/kg Piment frais/);
+    expect((await call('DELETE', `/api/shopping/lists/${cr.json.list.id}`, undefined, H)).json.ok).toBe(true);
+    expect((await call('DELETE', `/api/shopping/lists/${cr.json.list.id}`, undefined, H)).status).toBe(404);
   });
 });

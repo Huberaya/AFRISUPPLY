@@ -576,3 +576,15 @@ export const prospects = pgTable('prospects', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('prospects_kind_idx').on(t.kind, t.status)]);
+
+// ---------- Listes de courses enregistrées (chantier 11) : « ma liste du lundi », rejouée en un clic ----------
+export const shoppingLists = pgTable('shopping_lists', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),                     // « Liste du lundi »
+  text: text('text').notNull(),                     // texte libre tel que saisi/dicté
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  useCount: integer('use_count').default(0).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('shopping_lists_restaurant_idx').on(t.restaurantId)]);

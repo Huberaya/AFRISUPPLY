@@ -1,9 +1,29 @@
 // Liste de courses : « 10 kg piment, 5 kg riz » → produits retrouvés, prix comparés entre tous les fournisseurs, commande en un clic.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ListChecks, ShoppingCart, Sparkles, AlertTriangle } from 'lucide-react';
+import { ListChecks, ShoppingCart, Sparkles, AlertTriangle, Mic, MicOff, Save, Trash2, RotateCcw, PackageOpen } from 'lucide-react';
 import { api, fmtEur } from '../lib/api';
 import { PageTitle, Empty } from '../components/ui';
+import { useApi } from '../lib/useApi';
+
+interface SavedList { id: string; name: string; text: string; useCount: number; lastUsedAt: string | null }
+interface Suggestions { restock: { count: number; text: string }; last: { reference: string; text: string; date: string } | null }
+
+/** Dictée vocale (Web Speech API, Chrome/Safari/Android). Retourne null si non supporté. */
+function useDictation(onText: (t: string) => void) {
+  const recRef = useRef<any>(null); const [on, setOn] = useState(false);
+  const SR = typeof window !== 'undefined' ? ((window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition) : null;
+  const toggle = () => {
+    if (!SR) return;
+    if (on) { recRef.current?.stop(); setOn(false); return; }
+    const rec = new SR(); rec.lang = 'fr-FR'; rec.continuous = true; rec.interimResults = false;
+    rec.onresult = (e: any) => { const t = Array.from(e.results).slice(e.resultIndex).map((r: any) => r[0].transcript).join(' ').trim(); if (t) onText(t.replace(/\s+(virgule|et puis|ensuite|puis)\s+/gi, ', ')); };
+    rec.onend = () => setOn(false); rec.onerror = () => setOn(false);
+    recRef.current = rec; rec.start(); setOn(true);
+  };
+  useEffect(() => () => recRef.current?.stop(), []);
+  return { supported: !!SR, on, toggle };
+}
 
 interface Offer { key: string; kind: 'vendor' | 'supplier'; offerId: string; sellerId: string; sellerName: string; packLabel: string; packQty: number; packPrice: number; unitPrice: number; leadTimeHours: number; minOrderEur: number; deliveryFeeEur: number; packs: number; lineTotal: number; linked: boolean }
 interface Line { raw: string; qty: number; unit?: string; neededQty?: number; product: { id: string; name: string; unit: string; tracked: boolean } | null; candidates: { id: string; name: string; score: number }[]; offers: Offer[]; selected: string | null; savingPct?: number; note?: string }
@@ -15,6 +35,12 @@ export default function ShoppingList() {
   const [text, setText] = useState(''); const [data, setData] = useState<Parsed | null>(null);
   const [sel, setSel] = useState<Record<number, string | null>>({}); const [packs, setPacks] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState<string | null>(null); const nav = useNavigate();
+  const lists = useApi<{ lists: SavedList[] }>('/shopping/lists'); const sugg = useApi<Suggestions>('/shopping/suggestions');
+  const dict = useDictation((t) => setText((prev) => (prev.trim() ? `${prev.trim().replace(/,$/, '')}, ${t}` : t)));
+  const [saveName, setSaveName] = useState(''); const [usedList, setUsedList] = useState<string | null>(null);
+  const saveList = async () => { if (!saveName.trim() || !text.trim()) return; const r = await api<{ message: string }>('/shopping/lists', { method: 'POST', json: { name: saveName.trim(), text } }); setMsg(r.message); setSaveName(''); lists.reload(); };
+  const delList = async (id: string) => { if (!confirm('Supprimer cette liste ?')) return; await api(`/shopping/lists/${id}`, { method: 'DELETE' }); lists.reload(); };
+  const useList = (l: SavedList) => { setText(l.text); setUsedList(l.id); setData(null); };
 
   const search = async () => { if (!text.trim()) return; setBusy(true); setMsg(null); try { const r = await api<Parsed>('/shopping/parse', { method: 'POST', json: { text } }); setData(r); setSel({}); setPacks({}); } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); } };
   const chosen = (i: number, l: Line) => { const k = i in sel ? sel[i] : l.selected; return l.offers.find((o) => o.key === k) ?? null; };
@@ -38,6 +64,7 @@ export default function ShoppingList() {
         if (g.kind === 'vendor') { const r = await api<{ order: { reference: string } }>(`/marketplace/vendors/${g.sellerId}/orders`, { method: 'POST', json: { lines: lines.map((x) => ({ vendorOfferId: x.id, packs: x.packs })), source: 'liste_courses' } }); done.push(`${r.order.reference} → ${g.name}`); }
         else { const r = await api<{ order: { reference: string } }>('/orders', { method: 'POST', json: { supplierId: g.sellerId, lines: lines.map((x) => ({ offerId: x.id, packs: x.packs })), source: 'liste_courses' } }); done.push(`${r.order.reference} → ${g.name} (à envoyer depuis Achats)`); }
       }
+      if (usedList) void api(`/shopping/lists/${usedList}`, { method: 'PUT', json: { used: true } });
       setMsg(`✅ ${done.length} commande${done.length > 1 ? 's' : ''} créée${done.length > 1 ? 's' : ''} : ${done.join(' · ')}`); setTimeout(() => nav('/app/achats'), 2500);
     } catch (e) { setMsg(`${done.length ? done.join(' · ') + ' — puis erreur : ' : ''}${(e as Error).message}`); } finally { setBusy(false); }
   };
@@ -49,10 +76,19 @@ export default function ShoppingList() {
         <textarea className="input min-h-[96px] w-full" placeholder={`Ex. : ${EXAMPLE}`} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void search(); }} />
         <div className="flex flex-wrap items-center gap-2">
           <button className="btn-primary" disabled={busy || !text.trim()} onClick={() => void search()}><Sparkles size={16} /> Trouver les meilleurs prix</button>
+          {dict.supported && <button className={dict.on ? 'btn-primary animate-pulse bg-red-600 hover:bg-red-700' : 'btn-ghost'} onClick={dict.toggle} title="Dicter la liste">{dict.on ? <><MicOff size={16} /> Arrêter</> : <><Mic size={16} /> Dicter</>}</button>}
           <button className="btn-ghost text-sm" onClick={() => setText(EXAMPLE)}>Exemple</button>
+          {text.trim() && <span className="ml-auto flex items-center gap-1"><input className="input w-40 text-sm" placeholder="Nom (ex. Liste du lundi)" value={saveName} onChange={(e) => setSaveName(e.target.value)} /><button className="btn-ghost text-sm" disabled={!saveName.trim()} onClick={() => void saveList()}><Save size={14} /> Enregistrer</button></span>}
           <span className="text-xs text-stone-500">Quantité + produit, séparés par des virgules. Unités : kg, g, L, carton, sac, bidon, pièce.</span>
         </div>
       </div>
+      {(sugg.data || (lists.data && lists.data.lists.length > 0)) && (
+        <div className="flex flex-wrap gap-2">
+          {sugg.data && sugg.data.restock.count > 0 && <button className="pill border border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100" onClick={() => { setText(sugg.data!.restock.text); setUsedList(null); setData(null); }}><PackageOpen size={12} /> Réassort : {sugg.data.restock.count} produit{sugg.data.restock.count > 1 ? 's' : ''} sous le seuil</button>}
+          {sugg.data?.last && <button className="pill border border-stone-200 bg-white text-stone-700 hover:bg-stone-50" onClick={() => { setText(sugg.data!.last!.text); setUsedList(null); setData(null); }}><RotateCcw size={12} /> Refaire la dernière commande ({sugg.data.last.reference})</button>}
+          {lists.data?.lists.map((l) => <span key={l.id} className="pill border border-brand-200 bg-brand-50 text-brand-900"><button onClick={() => useList(l)} title={l.text}><ListChecks size={12} className="mr-1 inline" />{l.name}{l.useCount ? ` · ${l.useCount}×` : ''}</button><button className="ml-1 text-stone-400 hover:text-red-600" onClick={() => void delList(l.id)} title="Supprimer"><Trash2 size={12} /></button></span>)}
+        </div>
+      )}
       {msg && <p className="rounded-xl border border-brand-100 bg-brand-50 p-3 text-sm text-brand-900">{msg}</p>}
       {data && data.lines.length === 0 && <Empty>{data.hint}</Empty>}
       {data && data.lines.length > 0 && (

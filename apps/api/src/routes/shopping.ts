@@ -3,8 +3,8 @@
 // on propose la moins chère par défaut, et on passe les commandes groupées par fournisseur en un clic.
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { getDb, vendors, vendorOffers, suppliers, supplierOffers, products, restaurants, inventoryItems } from '@afrisupply/db';
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { getDb, vendors, vendorOffers, suppliers, supplierOffers, products, restaurants, inventoryItems, shoppingLists, orders, orderLines } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { tokenize, bestMatches, normalize } from '../lib/quick.js';
 import { restaurantZones } from './marketplace.js';
@@ -84,4 +84,53 @@ shoppingRoutes.post('/shopping/parse', async (c) => {
       savingPct: best && worst && worst.unitPrice > 0 ? Math.round(((worst.unitPrice - best.unitPrice) / worst.unitPrice) * 100) : 0, note: offers.length ? conv.note : 'Aucune offre disponible pour ce produit' };
   });
   return c.json({ lines, unmatched: lines.filter((l) => !l.product).map((l) => l.raw), sellers: { vendors: activeVendors.length, suppliers: mySups.length } });
+});
+
+// ---------------- Listes enregistrées + suggestions (chantier 11) ----------------
+const fmtQ = (q: number) => (Number.isInteger(q) ? String(q) : q.toFixed(1).replace('.', ','));
+
+shoppingRoutes.get('/shopping/lists', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const lists = await db.select().from(shoppingLists).where(eq(shoppingLists.restaurantId, rid)).orderBy(desc(shoppingLists.lastUsedAt), desc(shoppingLists.createdAt));
+  return c.json({ lists });
+});
+shoppingRoutes.post('/shopping/lists', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const body = z.object({ name: z.string().min(1).max(60), text: z.string().min(1).max(2000) }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Nom et contenu requis' }, 400);
+  const [list] = await db.insert(shoppingLists).values({ restaurantId: rid, ...body.data }).returning();
+  return c.json({ list, message: `Liste « ${list.name} » enregistrée.` }, 201);
+});
+shoppingRoutes.put('/shopping/lists/:id', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const body = z.object({ name: z.string().min(1).max(60).optional(), text: z.string().min(1).max(2000).optional(), used: z.boolean().optional() }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const set: Record<string, unknown> = { updatedAt: new Date() }; if (body.data.name) set.name = body.data.name; if (body.data.text) set.text = body.data.text;
+  if (body.data.used) { set.lastUsedAt = new Date(); set.useCount = sql`${shoppingLists.useCount} + 1`; }
+  const [list] = await db.update(shoppingLists).set(set).where(and(eq(shoppingLists.id, c.req.param('id')), eq(shoppingLists.restaurantId, rid))).returning();
+  if (!list) return c.json({ error: 'Liste introuvable' }, 404);
+  return c.json({ list });
+});
+shoppingRoutes.delete('/shopping/lists/:id', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const del = await db.delete(shoppingLists).where(and(eq(shoppingLists.id, c.req.param('id')), eq(shoppingLists.restaurantId, rid))).returning({ id: shoppingLists.id });
+  return del.length ? c.json({ ok: true }) : c.json({ error: 'Liste introuvable' }, 404);
+});
+
+/** Suggestions de texte prêtes à l'emploi : réassort (stock sous seuil → compléter au niveau cible) et dernière commande. */
+shoppingRoutes.get('/shopping/suggestions', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const inv = await db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId)).where(eq(inventoryItems.restaurantId, rid));
+  const low = inv.filter(({ item }) => n(item.quantity) <= n(item.criticalLevel) || (item.targetLevel !== null && n(item.quantity) < n(item.targetLevel) * 0.5)).map(({ item, product }) => {
+    const target = item.targetLevel !== null ? n(item.targetLevel) : Math.max(n(item.criticalLevel) * 2, n(item.avgDailyUse) * 7);
+    const need = Math.max(0, target - n(item.quantity)); return { name: product.name, unit: product.baseUnit, need: Math.ceil(need * 10) / 10 };
+  }).filter((x) => x.need > 0);
+  const lastOrders = await db.select().from(orders).where(and(eq(orders.restaurantId, rid), inArray(orders.status, ['envoyee', 'confirmee', 'livree', 'livree_partiel']))).orderBy(desc(orders.createdAt)).limit(5);
+  let last: { reference: string; text: string; date: string } | null = null;
+  if (lastOrders.length) {
+    const o = lastOrders[0];
+    const ls = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(eq(orderLines.orderId, o.id));
+    last = { reference: o.reference, date: o.createdAt.toISOString().slice(0, 10), text: ls.map(({ line, product }) => `${fmtQ(n(line.quantity))} ${product.baseUnit} ${product.name}`).join(', ') };
+  }
+  return c.json({ restock: { count: low.length, text: low.map((x) => `${fmtQ(x.need)} ${x.unit} ${x.name}`).join(', ') }, last });
 });
