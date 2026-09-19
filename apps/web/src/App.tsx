@@ -33,7 +33,11 @@ const Sales = lazy(() => import('./pages/Sales'));
 const Discrepancies = lazy(() => import('./pages/Discrepancies'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Express = lazy(() => import('./pages/Express'));
-const Home = lazy(() => import('./pages/site/Home'));
+const StoreHome = lazy(() => import('./pages/store/StoreHome'));
+const Catalogue = lazy(() => import('./pages/store/Catalogue'));
+const ProductDetail = lazy(() => import('./pages/store/ProductDetail'));
+const Cart = lazy(() => import('./pages/store/Cart'));
+const ForRestaurants = lazy(() => import('./pages/site/ForRestaurants'));
 const Pricing = lazy(() => import('./pages/site/Pricing'));
 const Features = lazy(() => import('./pages/site/Features'));
 const Faq = lazy(() => import('./pages/site/Faq'));
@@ -56,7 +60,11 @@ export default function App() {
         <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader /></div>}>
           <Routes>
             <Route element={<SiteLayout />}>
-              <Route path="/" element={<Home />} />
+              <Route path="/" element={<StoreHome />} />
+              <Route path="/catalogue" element={<Catalogue />} />
+              <Route path="/produit/:id" element={<ProductDetail />} />
+              <Route path="/panier" element={<Cart />} />
+              <Route path="/pour-les-restaurants" element={<ForRestaurants />} />
               <Route path="/tarifs" element={<Pricing />} />
               <Route path="/fonctionnalites" element={<Features />} />
               <Route path="/faq" element={<Faq />} />

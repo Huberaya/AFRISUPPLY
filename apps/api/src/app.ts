@@ -7,6 +7,7 @@ import { catalogRoutes } from './routes/catalog.js';
 import { intelligenceRoutes } from './routes/intelligence.js';
 import { manageRoutes } from './routes/manage.js';
 import { publicRoutes } from './routes/public.js';
+import { storefrontRoutes } from './routes/storefront.js';
 import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
 import { accountRoutes } from './routes/account.js';
@@ -32,6 +33,7 @@ app.get('/api/health', (c) => c.json({ ok: true, service: 'afrisupply-api', db: 
 app.route('/api', statusRoutes);
 app.route('/api', jobsRoutes); // cron (secret propre)
 app.route('/api', publicRoutes);
+app.route('/api', storefrontRoutes); // vitrine publique (chantier 13)
 app.route('/api', billingPublicRoutes);
 app.route('/api', pilotPublicRoutes); // webhook Stripe (signature, pas de JWT) // public en premier : les routeurs suivants imposent l'auth via use('*')
 app.route('/api/auth', authRoutes);
