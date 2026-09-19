@@ -22,6 +22,7 @@ const Import = lazy(() => import('./pages/Import'));
 const Forecast = lazy(() => import('./pages/Forecast'));
 const SmartCart = lazy(() => import('./pages/SmartCart'));
 const Marketplace = lazy(() => import('./pages/Marketplace'));
+const ShoppingList = lazy(() => import('./pages/ShoppingList'));
 const VendorSpace = lazy(() => import('./pages/vendor/VendorSpace'));
 const AdminVendors = lazy(() => import('./pages/admin/AdminVendors'));
 const AdminBilling = lazy(() => import('./pages/admin/AdminBilling'));
@@ -79,6 +80,7 @@ export default function App() {
                 <Route path="ventes" element={<Sales />} />
                 <Route path="fournisseurs" element={<Suppliers />} />
                 <Route path="marketplace" element={<Marketplace />} />
+                <Route path="courses" element={<ShoppingList />} />
                 <Route path="admin/fournisseurs" element={<AdminVendors />} />
                 <Route path="admin/abonnements" element={<AdminBilling />} />
                 <Route path="admin/pilotes" element={<AdminPilots />} />

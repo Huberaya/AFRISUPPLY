@@ -1,7 +1,7 @@
 // Port de ethimarket/src/components/DashboardLayout.tsx — navigation à 6 entrées du concept AFRISUPPLY
 import { useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks } from 'lucide-react';
 import { api } from '../lib/api';
 import { FeedbackWidget, UsageBeacon } from './Pilot';
 import { useAuth } from '../lib/auth';
@@ -16,6 +16,7 @@ const NAV = [
   { to: '/app/achats/panier', icon: Basket, label: 'Panier intelligent' },
   { to: '/app/ventes', icon: Receipt, label: 'Ventes & auto-reorder' },
   { to: '/app/fournisseurs', icon: Truck, label: 'Fournisseurs' },
+  { to: '/app/courses', icon: ListChecks, label: 'Liste de courses' },
   { to: '/app/marketplace', icon: Store, label: 'Marketplace' },
   { to: '/app/recettes', icon: ChefHat, label: 'Recettes' },
   { to: '/app/catalogue', icon: BookOpen, label: 'Catalogue' },

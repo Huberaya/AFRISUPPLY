@@ -15,6 +15,7 @@ import { billingRoutes, billingPublicRoutes, billingAdminRoutes } from './routes
 import { pilotRoutes, pilotPublicRoutes, pilotAdminRoutes } from './routes/pilots.js';
 import { prospectRoutes } from './routes/prospects.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
+import { shoppingRoutes } from './routes/shopping.js';
 import { vendorRoutes, vendorAdminRoutes } from './routes/vendor.js';
 import { statusRoutes } from './routes/status.js';
 import { captureException, securityHeaders, rateLimit, buildInfo } from './lib/ops.js';
@@ -47,6 +48,7 @@ app.route('/api', settingsRoutes);
 app.route('/api', accountRoutes);
 app.route('/api', quickRoutes);
 app.route('/api', marketplaceRoutes);
+app.route('/api', shoppingRoutes);
 app.route('/api', billingRoutes);
 app.route('/api', pilotRoutes);
 
