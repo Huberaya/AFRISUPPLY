@@ -10,6 +10,8 @@ import { requireAuth, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
+import { restaurantZones } from './marketplace.js';
+import { inventoryItems, leads } from '@afrisupply/db';
 import { prospects } from '@afrisupply/db';
 import { APP_URL } from '../jobs/daily.js';
 
@@ -323,3 +325,35 @@ vendorRoutes.post('/vendor/offers/quick', async (c) => {
 function bestMatchesLocal(label: string, ents: { id: string; name: string; aliases: string[] }[], qty?: number) {
   return ents.map((e) => { let s = Math.max(similarity(label, e.name), ...e.aliases.map((a) => similarity(label, a))); if (qty && new RegExp(`\\b${qty}\\b`).test(e.name)) s += 0.1; return { id: e.id, score: s }; }).filter((m) => m.score >= 0.5).sort((a, b) => b.score - a.score);
 }
+
+// ---------------- Chantier 15 (B) : analytics fournisseur ----------------
+/** Ventes par produit, meilleurs clients, tendance 6 mois, demande non couverte dans ma zone, alertes vitrine. */
+vendorRoutes.get('/vendor/analytics', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
+  const okStatus = sql`${orders.status} in ('confirmee','livree','livree_partiel')`;
+  const since = sql`${orders.createdAt} >= now() - interval '90 days'`;
+  const byProduct = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, packs: sql<number>`sum(${orderLines.packs})`, qty: sql<number>`sum(${orderLines.quantity})`, revenue: sql<number>`sum(${orderLines.lineTotalEur})`, orders: sql<number>`count(distinct ${orders.id})`, restaurants: sql<number>`count(distinct ${orders.restaurantId})` })
+    .from(orderLines).innerJoin(orders, eq(orders.id, orderLines.orderId)).innerJoin(products, eq(products.id, orderLines.productId)).where(and(eq(orders.vendorId, vid), okStatus, since)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql`sum(${orderLines.lineTotalEur}) desc`).limit(25);
+  const topCustomers = await db.select({ restaurantId: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql<number>`count(*)`, revenue: sql<number>`sum(${orders.totalEur})`, last: sql<string>`max(${orders.createdAt})` })
+    .from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId)).where(and(eq(orders.vendorId, vid), okStatus)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql`sum(${orders.totalEur}) desc`).limit(10);
+  const monthly = await db.select({ month: sql<string>`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`, revenue: sql<number>`sum(${orders.totalEur})`, orders: sql<number>`count(*)`, restaurants: sql<number>`count(distinct ${orders.restaurantId})` })
+    .from(orders).where(and(eq(orders.vendorId, vid), okStatus, sql`${orders.createdAt} >= date_trunc('month', now()) - interval '5 months'`)).groupBy(sql`1`).orderBy(sql`1`);
+  const [funnel] = await db.select({ total: sql<number>`count(*)`, refused: sql<number>`count(*) filter (where ${orders.status} = 'annulee')`, avgDecisionH: sql<number>`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)` }).from(orders).where(and(eq(orders.vendorId, vid), since));
+  // Demande non couverte : produits suivis en stock par les restaurants de ma zone, que je ne propose pas
+  const allR = await db.select({ id: restaurants.id, city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants);
+  const myZones = v.deliveryZones.map((z) => z.trim().toLowerCase());
+  const inZone = allR.filter((r) => myZones.length === 0 || [...restaurantZones(r)].some((z) => myZones.includes(z.toLowerCase()))).map((r) => r.id);
+  let uncovered: { productId: string; name: string; category: string; unit: string; restaurants: number }[] = [];
+  if (inZone.length) {
+    const mine = new Set((await db.select({ productId: vendorOffers.productId }).from(vendorOffers).where(eq(vendorOffers.vendorId, vid))).map((x) => x.productId));
+    const demand = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, restaurants: sql<number>`count(distinct ${inventoryItems.restaurantId})` })
+      .from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId)).where(and(inArray(inventoryItems.restaurantId, inZone), sql`${products.restaurantId} is null`)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql`count(distinct ${inventoryItems.restaurantId}) desc`).limit(60);
+    uncovered = demand.filter((d) => !mine.has(d.productId) && (v.categories.length === 0 || v.categories.includes(d.category))).slice(0, 20).map((d) => ({ ...d, restaurants: n(d.restaurants) }));
+  }
+  // Alertes vitrine « prévenez-moi » (produits sans offre) — signal de demande publique
+  const alerts = await db.select({ message: leads.message, c: sql<number>`count(*)` }).from(leads).where(and(eq(leads.source, 'vitrine'), sql`${leads.createdAt} >= now() - interval '90 days'`)).groupBy(leads.message).orderBy(sql`count(*) desc`).limit(10);
+  const num = <T extends Record<string, unknown>>(o: T) => Object.fromEntries(Object.entries(o).map(([k, val]) => [k, typeof val === 'string' && /^-?\d+(\.\d+)?$/.test(val) ? Number(val) : val])) as T;
+  return c.json({ period: '90 jours', byProduct: byProduct.map(num), topCustomers: topCustomers.map(num), monthly: monthly.map(num), funnel: num(funnel), uncovered, restaurantsInZone: inZone.length,
+    alerts: alerts.map((a) => ({ product: (a.message ?? '').replace(/^Alerte produit : /, ''), count: n(a.c) })) });
+});

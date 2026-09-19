@@ -5804,6 +5804,8 @@ init_reference();
 init_auth();
 init_mailer();
 init_ops();
+init_marketplace();
+init_src();
 init_src();
 init_daily();
 
@@ -6324,6 +6326,38 @@ function bestMatchesLocal(label, ents, qty3) {
     return { id: e.id, score: s };
   }).filter((m) => m.score >= 0.5).sort((a, b) => b.score - a.score);
 }
+vendorRoutes.get("/vendor/analytics", async (c) => {
+  const db = await getDb();
+  const vid = c.get("vendorId");
+  const [v] = await db.select().from(vendors).where(eq20(vendors.id, vid));
+  const okStatus = sql16`${orders.status} in ('confirmee','livree','livree_partiel')`;
+  const since = sql16`${orders.createdAt} >= now() - interval '90 days'`;
+  const byProduct = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, packs: sql16`sum(${orderLines.packs})`, qty: sql16`sum(${orderLines.quantity})`, revenue: sql16`sum(${orderLines.lineTotalEur})`, orders: sql16`count(distinct ${orders.id})`, restaurants: sql16`count(distinct ${orders.restaurantId})` }).from(orderLines).innerJoin(orders, eq20(orders.id, orderLines.orderId)).innerJoin(products, eq20(products.id, orderLines.productId)).where(and17(eq20(orders.vendorId, vid), okStatus, since)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql16`sum(${orderLines.lineTotalEur}) desc`).limit(25);
+  const topCustomers = await db.select({ restaurantId: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql16`count(*)`, revenue: sql16`sum(${orders.totalEur})`, last: sql16`max(${orders.createdAt})` }).from(orders).innerJoin(restaurants, eq20(restaurants.id, orders.restaurantId)).where(and17(eq20(orders.vendorId, vid), okStatus)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql16`sum(${orders.totalEur}) desc`).limit(10);
+  const monthly = await db.select({ month: sql16`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`, revenue: sql16`sum(${orders.totalEur})`, orders: sql16`count(*)`, restaurants: sql16`count(distinct ${orders.restaurantId})` }).from(orders).where(and17(eq20(orders.vendorId, vid), okStatus, sql16`${orders.createdAt} >= date_trunc('month', now()) - interval '5 months'`)).groupBy(sql16`1`).orderBy(sql16`1`);
+  const [funnel] = await db.select({ total: sql16`count(*)`, refused: sql16`count(*) filter (where ${orders.status} = 'annulee')`, avgDecisionH: sql16`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)` }).from(orders).where(and17(eq20(orders.vendorId, vid), since));
+  const allR = await db.select({ id: restaurants.id, city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants);
+  const myZones = v.deliveryZones.map((z17) => z17.trim().toLowerCase());
+  const inZone = allR.filter((r) => myZones.length === 0 || [...restaurantZones(r)].some((z17) => myZones.includes(z17.toLowerCase()))).map((r) => r.id);
+  let uncovered = [];
+  if (inZone.length) {
+    const mine = new Set((await db.select({ productId: vendorOffers.productId }).from(vendorOffers).where(eq20(vendorOffers.vendorId, vid))).map((x) => x.productId));
+    const demand = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, restaurants: sql16`count(distinct ${inventoryItems.restaurantId})` }).from(inventoryItems).innerJoin(products, eq20(products.id, inventoryItems.productId)).where(and17(inArray10(inventoryItems.restaurantId, inZone), sql16`${products.restaurantId} is null`)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql16`count(distinct ${inventoryItems.restaurantId}) desc`).limit(60);
+    uncovered = demand.filter((d) => !mine.has(d.productId) && (v.categories.length === 0 || v.categories.includes(d.category))).slice(0, 20).map((d) => ({ ...d, restaurants: n11(d.restaurants) }));
+  }
+  const alerts2 = await db.select({ message: leads.message, c: sql16`count(*)` }).from(leads).where(and17(eq20(leads.source, "vitrine"), sql16`${leads.createdAt} >= now() - interval '90 days'`)).groupBy(leads.message).orderBy(sql16`count(*) desc`).limit(10);
+  const num3 = (o) => Object.fromEntries(Object.entries(o).map(([k, val]) => [k, typeof val === "string" && /^-?\d+(\.\d+)?$/.test(val) ? Number(val) : val]));
+  return c.json({
+    period: "90 jours",
+    byProduct: byProduct.map(num3),
+    topCustomers: topCustomers.map(num3),
+    monthly: monthly.map(num3),
+    funnel: num3(funnel),
+    uncovered,
+    restaurantsInZone: inZone.length,
+    alerts: alerts2.map((a) => ({ product: (a.message ?? "").replace(/^Alerte produit : /, ""), count: n11(a.c) }))
+  });
+});
 
 // apps/api/src/routes/status.ts
 init_src();

@@ -2,14 +2,15 @@
 // Volontairement simple et autonome : un grossiste doit pouvoir confirmer une commande depuis son téléphone en 2 taps.
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, LogOut } from 'lucide-react';
+import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, LogOut, BarChart3 } from 'lucide-react';
 import { api, tokenStore, CATEGORY_LABEL } from '../../lib/api';
 import { Field } from '../../components/Modal';
 import { CatalogImport, QuickPrice } from './CatalogImport';
 import { InviteLanding } from './InviteLanding';
+import { Analytics } from './Analytics';
 
 type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
-type Tab = 'dashboard' | 'offers' | 'orders' | 'groupbuys' | 'commissions';
+type Tab = 'dashboard' | 'offers' | 'orders' | 'groupbuys' | 'commissions' | 'analytics';
 const eur = (v: number | string) => `${Number(v).toFixed(2).replace('.', ',')} €`;
 const STATUS: Record<string, string> = { envoyee: '🕒 À confirmer', confirmee: '✅ Confirmée', livree: '📦 Livrée', livree_partiel: '📦 Livrée (écarts)', annulee: '❌ Refusée/annulée' };
 
@@ -27,9 +28,9 @@ export default function VendorSpace() {
     <Shell vendor={v}>
       {v.status !== 'actif' && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{v.status === 'en_attente' ? <>⏳ <b>Espace en cours de validation.</b> Vous pouvez déjà préparer votre catalogue ; les restaurants vous verront dès l’activation (sous 24 h ouvrées).</> : <>⛔ Espace suspendu — contactez bonjour@afrisupply.fr.</>}</div>}
       <nav className="mb-5 flex gap-1 overflow-x-auto rounded-2xl bg-stone-100 p-1 text-sm font-semibold">
-        {([['orders', Inbox, 'Commandes'], ['offers', Package, 'Catalogue'], ['groupbuys', Users, 'Achats groupés'], ['commissions', Receipt, 'Commissions'], ['dashboard', Store, 'Ma fiche']] as const).map(([k, Icon, l]) => <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2 ${tab === k ? 'bg-white text-brand-800 shadow-sm' : 'text-stone-600'}`}><Icon size={16} /> {l}</button>)}
+        {([['orders', Inbox, 'Commandes'], ['offers', Package, 'Catalogue'], ['analytics', BarChart3, 'Analyses'], ['groupbuys', Users, 'Achats groupés'], ['commissions', Receipt, 'Commissions'], ['dashboard', Store, 'Ma fiche']] as const).map(([k, Icon, l]) => <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2 ${tab === k ? 'bg-white text-brand-800 shadow-sm' : 'text-stone-600'}`}><Icon size={16} /> {l}</button>)}
       </nav>
-      {tab === 'orders' && <Orders />}{tab === 'offers' && <Offers />}{tab === 'groupbuys' && <GroupBuys />}{tab === 'commissions' && <Commissions />}{tab === 'dashboard' && <Dashboard />}
+      {tab === 'orders' && <Orders />}{tab === 'offers' && <Offers />}{tab === 'analytics' && <Analytics onAddOffer={(_id, name) => { sessionStorage.setItem('afs_vendor_prefill', name); setTab('offers'); }} />}{tab === 'groupbuys' && <GroupBuys />}{tab === 'commissions' && <Commissions />}{tab === 'dashboard' && <Dashboard />}
     </Shell>
   );
 }
@@ -89,7 +90,7 @@ function Dashboard() {
 
 type Offer = { id: string; productName: string; category: string; unit: string; packLabel: string; packQty: string; packPriceEur: string; unitPrice: number; inStock: boolean };
 function Offers() {
-  const [offers, setOffers] = useState<Offer[]>([]); const [q, setQ] = useState(''); const [cands, setCands] = useState<{ id: string; name: string; baseUnit: string }[]>([]); const [sel, setSel] = useState<{ id: string; name: string; baseUnit: string } | null>(null);
+  const [offers, setOffers] = useState<Offer[]>([]); const [q, setQ] = useState(() => { const p = sessionStorage.getItem('afs_vendor_prefill') ?? ''; sessionStorage.removeItem('afs_vendor_prefill'); return p; }); const [cands, setCands] = useState<{ id: string; name: string; baseUnit: string }[]>([]); const [sel, setSel] = useState<{ id: string; name: string; baseUnit: string } | null>(null);
   const [f, setF] = useState({ packLabel: '', packQty: '', packPrice: '' }); const [msg, setMsg] = useState<string | null>(null);
   const load = () => api<{ offers: Offer[] }>('/vendor/offers').then((r) => setOffers(r.offers));
   useEffect(() => { void load(); }, []);

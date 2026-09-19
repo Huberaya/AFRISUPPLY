@@ -136,6 +136,7 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - Chantier 12 — Import de catalogue fournisseur (texte/Excel/photo) + prix express : `docs/CHANTIER_12_IMPORT_CATALOGUE.md`
 - Chantier 13 — Vitrine publique (catalogue, fiche produit, panier, inscription au moment d’acheter) : `docs/CHANTIER_13_VITRINE.md`
 - Chantier 14 — Invitation fournisseur pré-remplie (e-mail / WhatsApp, activation immédiate) : `docs/CHANTIER_14_INVITATION_FOURNISSEUR.md`
+- Chantier 15 — Tableau de bord fournisseur « Analyses » (ventes, clients, demande non couverte) : `docs/CHANTIER_15_ANALYSES_FOURNISSEUR.md`
 - [x] Admin → Prospection : carnet restaurants / fournisseurs (nom, adresse, téléphone, e-mail, contact, statut, relance, import tableur)
 - [x] Chantier 8 : fiabilité prod (Sentry sans SDK, `/statut`, job_runs, rate-limit, en-têtes, audit, RGPD export/suppression, CGV, migrations au déploiement, 12 tests e2e) — `docs/CHANTIER_8_FIABILITE.md`
 - [x] Chantier 4 bis : e-mail quotidien « Votre matin AFRISUPPLY » + job cron (alertes → auto-reorder → mail) — `docs/CHANTIER_4BIS_NOTIFICATIONS.md`
