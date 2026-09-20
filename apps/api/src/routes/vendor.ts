@@ -10,6 +10,7 @@ import { requireAuth, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { sendMessage, waLink } from '../lib/sms.js';
 import { maybeRemind } from '../jobs/reminders.js';
+import { VENDOR_CGV_VERSION } from '../lib/cgv.js';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
 import { orderPdf } from '../lib/pdf.js';
@@ -31,6 +32,8 @@ async function requireVendor(c: Context<VEnv>, next: Next) {
   const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq(vendorMembers.userId, user.id));
   const vid = wanted && rows.some((r) => r.vendorId === wanted) ? wanted : rows[0]?.vendorId;
   if (!vid) return c.json({ error: 'Aucun espace fournisseur pour ce compte' }, 403);
+  // Chantier 22 : les actions commerciales exigent la version courante des CGV fournisseur (lecture toujours possible)
+  if (c.req.method !== 'GET') { const [v] = await db.select({ cgv: vendors.cgvVersion }).from(vendors).where(eq(vendors.id, vid)); if (v && v.cgv !== VENDOR_CGV_VERSION) return c.json({ error: `Merci d'accepter la nouvelle version (${VENDOR_CGV_VERSION}) des conditions fournisseur pour continuer.`, code: 'cgv_outdated' }, 428); }
   c.set('vendorId', vid); await next();
 }
 
@@ -40,12 +43,13 @@ vendorRoutes.post('/vendor/register', requireAuth, async (c) => {
     name: z.string().min(2), description: z.string().max(500).optional(), city: z.string().optional(), deliveryZones: z.array(z.string().min(1)).max(30).default([]),
     categories: z.array(z.enum(['feculents', 'frais', 'viandes_poissons', 'epicerie', 'boissons', 'emballages'])).default([]),
     leadTimeHours: z.number().int().positive().default(48), minOrderEur: z.number().nonnegative().default(0), deliveryFeeEur: z.number().nonnegative().default(0),
-    contactEmail: z.string().email().optional(), contactPhone: z.string().optional(), whatsapp: z.string().optional(), invite: z.string().optional(),
+    contactEmail: z.string().email().optional(), contactPhone: z.string().optional(), whatsapp: z.string().optional(), invite: z.string().optional(), acceptCgv: z.boolean().optional(),
   }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
-  const db = await getDb(); const user = c.get('user'); const { invite, ...d } = body.data;
+  if (!body.data.acceptCgv) return c.json({ error: 'Vous devez accepter les conditions générales fournisseur.', code: 'cgv_required' }, 400);
+  const db = await getDb(); const user = c.get('user'); const { invite, acceptCgv: _a, ...d } = body.data; void _a;
   const inv = invite ? await readVendorInvite(invite) : null; // invité par l'équipe AFRISUPPLY = déjà vérifié → actif immédiatement
-  const [v] = await db.insert(vendors).values({ ...d, slug: `${slugify(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z) => z.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === 'true' ? 'actif' : 'en_attente' }).returning();
+  const [v] = await db.insert(vendors).values({ ...d, cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: new Date(), cgvAcceptedBy: user.email, slug: `${slugify(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z) => z.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === 'true' ? 'actif' : 'en_attente' }).returning();
   if (inv) await db.update(prospects).set({ status: 'converti', email: user.email, updatedAt: new Date() }).where(eq(prospects.id, inv.pid));
   await db.insert(vendorMembers).values({ vendorId: v.id, userId: user.id, role: 'owner' });
   await audit('vendor.register', { actorEmail: user.email, target: v.id, meta: { name: v.name, invited: !!inv } });
@@ -55,7 +59,16 @@ vendorRoutes.post('/vendor/register', requireAuth, async (c) => {
 vendorRoutes.get('/vendor/me', requireAuth, async (c) => {
   const db = await getDb(); const user = c.get('user');
   const rows = await db.select({ vendor: vendors, role: vendorMembers.role }).from(vendorMembers).innerJoin(vendors, eq(vendors.id, vendorMembers.vendorId)).where(eq(vendorMembers.userId, user.id));
-  return c.json({ vendors: rows.map((r) => ({ ...r.vendor, role: r.role })), isAdmin: isAdmin(user.email) });
+  return c.json({ vendors: rows.map((r) => ({ ...r.vendor, role: r.role, cgvUpToDate: r.vendor.cgvVersion === VENDOR_CGV_VERSION })), isAdmin: isAdmin(user.email), cgvVersion: VENDOR_CGV_VERSION });
+});
+
+/** Chantier 22 : (ré)acceptation des CGV fournisseur (nouvelle version). */
+vendorRoutes.post('/vendor/accept-cgv', requireAuth, async (c) => {
+  const db = await getDb(); const user = c.get('user');
+  const rows = await db.select({ id: vendors.id }).from(vendorMembers).innerJoin(vendors, eq(vendors.id, vendorMembers.vendorId)).where(eq(vendorMembers.userId, user.id));
+  for (const r of rows) await db.update(vendors).set({ cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: new Date(), cgvAcceptedBy: user.email }).where(eq(vendors.id, r.id));
+  await audit('vendor.accept_cgv', { actorEmail: user.email, meta: { version: VENDOR_CGV_VERSION, vendors: rows.length } });
+  return c.json({ ok: true, version: VENDOR_CGV_VERSION });
 });
 
 // ---- tout ce qui suit exige un vendor ----

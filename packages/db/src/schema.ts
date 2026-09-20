@@ -452,6 +452,9 @@ export const vendors = pgTable('vendors', {
   minOrderEur: numeric('min_order_eur', { precision: 10, scale: 2 }).default('0').notNull(),
   deliveryFeeEur: numeric('delivery_fee_eur', { precision: 10, scale: 2 }).default('0').notNull(),
   commissionPct: numeric('commission_pct', { precision: 4, scale: 2 }).default('3.00').notNull(), // 2–5 %
+  cgvVersion: text('cgv_version'),                                   // chantier 22 : version des CGV fournisseur acceptées
+  cgvAcceptedAt: timestamp('cgv_accepted_at', { withTimezone: true }),
+  cgvAcceptedBy: text('cgv_accepted_by'),
   stripeCustomerId: text('stripe_customer_id'),           // facturation mensuelle des commissions
   contactEmail: text('contact_email'),
   contactPhone: text('contact_phone'),

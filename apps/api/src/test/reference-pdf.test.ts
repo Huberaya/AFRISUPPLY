@@ -24,7 +24,7 @@ describe('admin référentiel (chantier 16)', () => {
   it('fusion de doublon', async () => {
     const a = await call('POST', '/api/admin/reference', { name: 'Riz brisé thaï (doublon)', category: 'feculents', baseUnit: 'kg' }, ADM);
     const target = (await call('GET', '/api/public/catalog?q=riz brisé')).json.items.find((x: Json) => x.name === 'Riz brisé');
-    await call('POST', '/api/vendor/register', { name: 'Gros SA' }, V); const o = await call('POST', '/api/vendor/offers', { productId: a.json.product.id, packLabel: 'sac 25 kg', packQty: 25, packPrice: 30 }, V); expect(o.status).toBe(201);
+    await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Gros SA' }, V); const o = await call('POST', '/api/vendor/offers', { productId: a.json.product.id, packLabel: 'sac 25 kg', packQty: 25, packPrice: 30 }, V); expect(o.status).toBe(201);
     const m = await call('POST', `/api/admin/reference/${a.json.product.id}/merge`, { into: target.id }, ADM); expect(m.status).toBe(200);
     const pd = await call('GET', `/api/public/products/${target.id}`); expect(pd.json.offers.length).toBe(1); expect(pd.json.product.aliases).toContain('Riz brisé thaï (doublon)');
   });

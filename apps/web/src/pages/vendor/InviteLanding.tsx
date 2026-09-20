@@ -9,13 +9,13 @@ type Invite = { pid: string; name: string; city: string | null; phone: string | 
 export function InviteLanding({ token, onDone }: { token: string; onDone: () => void }) {
   const { register, login } = useAuth();
   const [inv, setInv] = useState<Invite | null>(null); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false); const [mode, setMode] = useState<'new' | 'login'>('new');
-  const [f, setF] = useState({ fullName: '', email: '', password: '', city: '', deliveryZones: '', categories: ['feculents', 'epicerie'] as string[], minOrderEur: '0', leadTimeHours: '48', contactPhone: '', whatsapp: '' });
+  const [f, setF] = useState({ fullName: '', email: '', password: '', city: '', deliveryZones: '', categories: ['feculents', 'epicerie'] as string[], minOrderEur: '0', leadTimeHours: '48', contactPhone: '', whatsapp: '', acceptCgv: false });
   useEffect(() => { api<{ invite: Invite }>(`/public/vendor-invite/${token}`).then((r) => { setInv(r.invite); setF((x) => ({ ...x, fullName: r.invite.contactName ?? '', email: r.invite.email ?? '', city: r.invite.city ?? '', deliveryZones: r.invite.city ?? '', contactPhone: r.invite.phone ?? '', whatsapp: r.invite.phone ?? '' })); }).catch((e) => setErr((e as Error).message)); }, [token]);
   const go = async () => {
     setBusy(true); setErr(null);
     try {
       if (!tokenStore.get()) { if (mode === 'new') await register({ email: f.email, password: f.password, fullName: f.fullName || inv!.name, restaurantName: inv!.name }); else await login(f.email, f.password); }
-      await api('/vendor/register', { method: 'POST', json: { name: inv!.name, city: f.city || undefined, deliveryZones: f.deliveryZones.split(/[,;]+/).map((s) => s.trim()).filter(Boolean), categories: f.categories, leadTimeHours: Number(f.leadTimeHours) || 48, minOrderEur: Number(f.minOrderEur) || 0, deliveryFeeEur: 0, contactEmail: f.email || undefined, contactPhone: f.contactPhone || undefined, whatsapp: f.whatsapp || undefined, invite: token } });
+      await api('/vendor/register', { method: 'POST', json: { acceptCgv: f.acceptCgv, name: inv!.name, city: f.city || undefined, deliveryZones: f.deliveryZones.split(/[,;]+/).map((s) => s.trim()).filter(Boolean), categories: f.categories, leadTimeHours: Number(f.leadTimeHours) || 48, minOrderEur: Number(f.minOrderEur) || 0, deliveryFeeEur: 0, contactEmail: f.email || undefined, contactPhone: f.contactPhone || undefined, whatsapp: f.whatsapp || undefined, invite: token } });
       history.replaceState(null, '', '/fournisseur'); onDone();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -39,7 +39,8 @@ export function InviteLanding({ token, onDone }: { token: string; onDone: () => 
         <div className="grid gap-3 sm:grid-cols-2"><Field label="E-mail"><input className="input" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field><Field label={mode === 'new' ? 'Choisissez un mot de passe (8 car. min.)' : 'Mot de passe'}><input className="input" type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field></div>
       </div>}
       {err && <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{err}</p>}
-      <button className="btn-primary w-full !py-3 text-base" disabled={busy || (!logged && (!f.email.includes('@') || f.password.length < 8))} onClick={() => void go()}>{busy ? 'Activation…' : 'Activer mon espace et importer mon tarif →'}</button>
+      <label className="flex items-start gap-2 rounded-xl bg-stone-50 p-3 text-sm"><input type="checkbox" className="mt-0.5" checked={f.acceptCgv} onChange={(e) => setF({ ...f, acceptCgv: e.target.checked })} /><span>J’accepte les <a className="font-semibold underline" href="/cgv-fournisseur" target="_blank" rel="noreferrer">conditions générales fournisseur</a> : confirmation sous 24 h, facturation directe au restaurant, commission de 2 à 5 % HT sur les commandes confirmées via la plateforme.</span></label>
+      <button className="btn-primary w-full !py-3 text-base" disabled={busy || !f.acceptCgv || (!logged && (!f.email.includes('@') || f.password.length < 8))} onClick={() => void go()}>{busy ? 'Activation…' : 'Activer mon espace et importer mon tarif →'}</button>
       <p className="text-center text-xs text-stone-500">Espace activé immédiatement (vous avez été vérifié par notre équipe). Étape suivante : coller votre tarif Excel, texte ou photo.</p>
     </div>
   );

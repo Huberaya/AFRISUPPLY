@@ -20,13 +20,13 @@ describe('invitation fournisseur (chantier 14)', () => {
   });
   it('le grossiste invité crée son espace → actif immédiatement, prospect converti', async () => {
     const token = url.split('invite=')[1]; const V = (await reg('diallo@exofoods.fr', 'Exofoods Rungis')).h;
-    const r = await call('POST', '/api/vendor/register', { name: 'Exofoods Rungis', city: 'Rungis', deliveryZones: ['94', 'Paris'], categories: ['frais'], invite: token }, V); expect(r.status).toBe(201); expect(r.json.vendor.status).toBe('actif');
+    const r = await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Exofoods Rungis', city: 'Rungis', deliveryZones: ['94', 'Paris'], categories: ['frais'], invite: token }, V); expect(r.status).toBe(201); expect(r.json.vendor.status).toBe('actif');
     const p = await call('GET', `/api/admin/prospects?kind=fournisseur&q=Exofoods`, undefined, ADM); expect(p.json.prospects[0].status).toBe('converti'); expect(p.json.prospects[0].email).toBe('diallo@exofoods.fr');
     expect((await call('GET', `/api/public/vendor-invite/${token}`)).json.invite.converted).toBe(true);
     const vs = await call('GET', '/api/public/vendors'); expect(vs.json.vendors.some((v: Json) => v.name === 'Exofoods Rungis')).toBe(true);
   });
   it('sans invitation : en_attente', async () => {
-    const V = (await reg('autre@gros.fr', 'Autre')).h; const r = await call('POST', '/api/vendor/register', { name: 'Autre Grossiste' }, V); expect(r.json.vendor.status).toBe('en_attente');
+    const V = (await reg('autre@gros.fr', 'Autre')).h; const r = await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Autre Grossiste' }, V); expect(r.json.vendor.status).toBe('en_attente');
   });
 });
 

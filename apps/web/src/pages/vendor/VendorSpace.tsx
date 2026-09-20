@@ -9,7 +9,7 @@ import { CatalogImport, QuickPrice } from './CatalogImport';
 import { InviteLanding } from './InviteLanding';
 import { Analytics } from './Analytics';
 
-type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
+type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; cgvUpToDate?: boolean; cgvVersion?: string | null; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
 type Tab = 'dashboard' | 'offers' | 'orders' | 'groupbuys' | 'commissions' | 'analytics';
 const eur = (v: number | string) => `${Number(v).toFixed(2).replace('.', ',')} €`;
 const STATUS: Record<string, string> = { envoyee: '🕒 À confirmer', confirmee: '✅ Confirmée', livree: '📦 Livrée', livree_partiel: '📦 Livrée (écarts)', annulee: '❌ Refusée/annulée' };
@@ -26,6 +26,7 @@ export default function VendorSpace() {
   const v = me.vendors[0];
   return (
     <Shell vendor={v}>
+      {v.cgvUpToDate === false && <div className="mb-4 rounded-2xl border border-brand-200 bg-brand-50 p-4 text-sm text-brand-900"><p className="font-bold">📜 Nouvelles conditions générales fournisseur</p><p className="mt-1">Pour continuer à publier des offres et traiter des commandes, merci de lire et d’accepter la nouvelle version des <Link className="underline" to="/cgv-fournisseur" target="_blank">conditions fournisseur</Link>.</p><button className="btn-primary mt-2" onClick={async () => { await api('/vendor/accept-cgv', { method: 'POST', json: {} }); await load(); }}>J’accepte les conditions</button></div>}
       {v.status !== 'actif' && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{v.status === 'en_attente' ? <>⏳ <b>Espace en cours de validation.</b> Vous pouvez déjà préparer votre catalogue ; les restaurants vous verront dès l’activation (sous 24 h ouvrées).</> : <>⛔ Espace suspendu — contactez bonjour@afrisupply.fr.</>}</div>}
       <nav className="mb-5 flex gap-1 overflow-x-auto rounded-2xl bg-stone-100 p-1 text-sm font-semibold">
         {([['orders', Inbox, 'Commandes'], ['offers', Package, 'Catalogue'], ['analytics', BarChart3, 'Analyses'], ['groupbuys', Users, 'Achats groupés'], ['commissions', Receipt, 'Commissions'], ['dashboard', Store, 'Ma fiche']] as const).map(([k, Icon, l]) => <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2 ${tab === k ? 'bg-white text-brand-800 shadow-sm' : 'text-stone-600'}`}><Icon size={16} /> {l}</button>)}
@@ -46,7 +47,7 @@ function Shell({ children, vendor }: { children: React.ReactNode; vendor?: Vendo
 }
 
 function Register({ onDone }: { onDone: () => void }) {
-  const [f, setF] = useState({ name: '', description: '', city: '', deliveryZones: '', categories: [] as string[], leadTimeHours: '48', minOrderEur: '0', deliveryFeeEur: '0', contactEmail: '', contactPhone: '', whatsapp: '' });
+  const [f, setF] = useState({ name: '', description: '', city: '', deliveryZones: '', categories: [] as string[], leadTimeHours: '48', minOrderEur: '0', deliveryFeeEur: '0', acceptCgv: false, contactEmail: '', contactPhone: '', whatsapp: '' });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   const submit = async () => { setBusy(true); setErr(null); try { await api('/vendor/register', { method: 'POST', json: { ...f, deliveryZones: f.deliveryZones.split(/[,;]+/).map((s) => s.trim()).filter(Boolean), leadTimeHours: Number(f.leadTimeHours), minOrderEur: Number(f.minOrderEur), deliveryFeeEur: Number(f.deliveryFeeEur), contactEmail: f.contactEmail || undefined, contactPhone: f.contactPhone || undefined, whatsapp: f.whatsapp || undefined, description: f.description || undefined, city: f.city || undefined } }); onDone(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); } };
   return (
@@ -59,9 +60,10 @@ function Register({ onDone }: { onDone: () => void }) {
         <Field label="Catégories"><div className="flex flex-wrap gap-1.5">{Object.entries(CATEGORY_LABEL).map(([k, l]) => <button type="button" key={k} onClick={() => setF({ ...f, categories: f.categories.includes(k) ? f.categories.filter((x) => x !== k) : [...f.categories, k] })} className={`pill !px-3 !py-1.5 ${f.categories.includes(k) ? 'bg-brand-700 text-white' : 'bg-stone-100 text-stone-700'}`}>{l}</button>)}</div></Field>
         <div className="grid gap-3 sm:grid-cols-3"><Field label="Délai de livraison (h)"><input className="input" type="number" value={f.leadTimeHours} onChange={(e) => setF({ ...f, leadTimeHours: e.target.value })} /></Field><Field label="Minimum de commande (€)"><input className="input" type="number" value={f.minOrderEur} onChange={(e) => setF({ ...f, minOrderEur: e.target.value })} /></Field><Field label="Frais de port (€)"><input className="input" type="number" value={f.deliveryFeeEur} onChange={(e) => setF({ ...f, deliveryFeeEur: e.target.value })} /></Field></div>
         <div className="grid gap-3 sm:grid-cols-3"><Field label="E-mail commandes"><input className="input" type="email" value={f.contactEmail} onChange={(e) => setF({ ...f, contactEmail: e.target.value })} /></Field><Field label="Téléphone"><input className="input" value={f.contactPhone} onChange={(e) => setF({ ...f, contactPhone: e.target.value })} /></Field><Field label="WhatsApp"><input className="input" value={f.whatsapp} onChange={(e) => setF({ ...f, whatsapp: e.target.value })} /></Field></div>
+        <label className="flex items-start gap-2 rounded-xl bg-stone-50 p-3 text-sm"><input type="checkbox" className="mt-0.5" checked={f.acceptCgv} onChange={(e) => setF({ ...f, acceptCgv: e.target.checked })} /><span>J’ai lu et j’accepte les <Link className="font-semibold underline" to="/cgv-fournisseur" target="_blank">conditions générales fournisseur</Link> : confirmation des commandes sous 24 h, facturation et encaissement directs auprès du restaurant, commission de 2 à 5 % HT sur les commandes confirmées via la plateforme.</span></label>
         {err && <p className="text-sm text-red-700">{err}</p>}
-        <button className="btn-primary w-full !py-3" disabled={busy || f.name.length < 2} onClick={() => void submit()}>Créer mon espace fournisseur</button>
-        <p className="text-center text-xs text-stone-500">En créant votre espace vous acceptez les <Link className="underline" to="/cgv">conditions</Link>. Validation manuelle sous 24 h ouvrées.</p>
+        <button className="btn-primary w-full !py-3" disabled={busy || f.name.length < 2 || !f.acceptCgv} onClick={() => void submit()}>Créer mon espace fournisseur</button>
+        <p className="text-center text-xs text-stone-500">Validation manuelle sous 24 h ouvrées.</p>
       </div>
     </div>
   );

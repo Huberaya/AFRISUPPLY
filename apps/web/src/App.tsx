@@ -45,6 +45,7 @@ const Features = lazy(() => import('./pages/site/Features'));
 const Faq = lazy(() => import('./pages/site/Faq'));
 const RequestAccess = lazy(() => import('./pages/site/RequestAccess'));
 const Legal = lazy(() => import('./pages/site/Legal'));
+const VendorTerms = lazy(() => import('./pages/site/VendorTerms'));
 const Terms = lazy(() => import('./pages/site/Terms'));
 const StatusPage = lazy(() => import('./pages/site/Status'));
 
@@ -73,6 +74,7 @@ export default function App() {
               <Route path="/demander-un-acces" element={<RequestAccess />} />
               <Route path="/mentions-legales" element={<Legal />} />
               <Route path="/cgv" element={<Terms />} />
+              <Route path="/cgv-fournisseur" element={<VendorTerms />} />
               <Route path="/statut" element={<StatusPage />} />
             </Route>
             <Route path="/connexion" element={<Login />} />

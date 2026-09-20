@@ -10,7 +10,7 @@ let V: Record<string, string>; let R: Record<string, string>; let ADM: Record<st
 beforeAll(async () => {
   await runMigrations(); V = await reg('g@tropic.fr', 'compte grossiste'); R = await reg('r@resto.fr', 'Chez Resto'); ADM = await reg('admin@afrisupply.fr', 'Admin');
   const t = await call('GET', '/api/onboarding/templates', undefined, R); await call('POST', '/api/onboarding/apply', { templates: t.json.templates.slice(0, 3).map((x: Json) => x.id ?? x.name) }, R); // peuple le référentiel commun
-  vid = (await call('POST', '/api/vendor/register', { name: 'Tropic Test', deliveryZones: ['France'], categories: ['epicerie'] }, V)).json.vendor.id;
+  vid = (await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Tropic Test', deliveryZones: ['France'], categories: ['epicerie'] }, V)).json.vendor.id;
   await call('PUT', `/api/admin/vendors/${vid}`, { status: 'actif' }, ADM);
 }, 60_000);
 

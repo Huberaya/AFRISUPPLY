@@ -502,6 +502,10 @@ var init_schema = __esm({
       deliveryFeeEur: numeric("delivery_fee_eur", { precision: 10, scale: 2 }).default("0").notNull(),
       commissionPct: numeric("commission_pct", { precision: 4, scale: 2 }).default("3.00").notNull(),
       // 2–5 %
+      cgvVersion: text("cgv_version"),
+      // chantier 22 : version des CGV fournisseur acceptées
+      cgvAcceptedAt: timestamp("cgv_accepted_at", { withTimezone: true }),
+      cgvAcceptedBy: text("cgv_accepted_by"),
       stripeCustomerId: text("stripe_customer_id"),
       // facturation mensuelle des commissions
       contactEmail: text("contact_email"),
@@ -5055,6 +5059,11 @@ init_auth();
 init_mailer();
 init_sms();
 init_reminders();
+
+// apps/api/src/lib/cgv.ts
+var VENDOR_CGV_VERSION = "1.0";
+
+// apps/api/src/routes/vendor.ts
 init_ops();
 
 // apps/api/src/routes/prospects.ts
@@ -5502,6 +5511,10 @@ async function requireVendor(c, next) {
   const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq15(vendorMembers.userId, user.id));
   const vid = wanted && rows.some((r) => r.vendorId === wanted) ? wanted : rows[0]?.vendorId;
   if (!vid) return c.json({ error: "Aucun espace fournisseur pour ce compte" }, 403);
+  if (c.req.method !== "GET") {
+    const [v] = await db.select({ cgv: vendors.cgvVersion }).from(vendors).where(eq15(vendors.id, vid));
+    if (v && v.cgv !== VENDOR_CGV_VERSION) return c.json({ error: `Merci d'accepter la nouvelle version (${VENDOR_CGV_VERSION}) des conditions fournisseur pour continuer.`, code: "cgv_outdated" }, 428);
+  }
   c.set("vendorId", vid);
   await next();
 }
@@ -5518,14 +5531,16 @@ vendorRoutes.post("/vendor/register", requireAuth, async (c) => {
     contactEmail: z10.string().email().optional(),
     contactPhone: z10.string().optional(),
     whatsapp: z10.string().optional(),
-    invite: z10.string().optional()
+    invite: z10.string().optional(),
+    acceptCgv: z10.boolean().optional()
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
+  if (!body3.data.acceptCgv) return c.json({ error: "Vous devez accepter les conditions g\xE9n\xE9rales fournisseur.", code: "cgv_required" }, 400);
   const db = await getDb();
   const user = c.get("user");
-  const { invite, ...d } = body3.data;
+  const { invite, acceptCgv: _a, ...d } = body3.data;
   const inv = invite ? await readVendorInvite(invite) : null;
-  const [v] = await db.insert(vendors).values({ ...d, slug: `${slugify2(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z18) => z18.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
+  const [v] = await db.insert(vendors).values({ ...d, cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email, slug: `${slugify2(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z18) => z18.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
   if (inv) await db.update(prospects).set({ status: "converti", email: user.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq15(prospects.id, inv.pid));
   await db.insert(vendorMembers).values({ vendorId: v.id, userId: user.id, role: "owner" });
   await audit("vendor.register", { actorEmail: user.email, target: v.id, meta: { name: v.name, invited: !!inv } });
@@ -5535,7 +5550,15 @@ vendorRoutes.get("/vendor/me", requireAuth, async (c) => {
   const db = await getDb();
   const user = c.get("user");
   const rows = await db.select({ vendor: vendors, role: vendorMembers.role }).from(vendorMembers).innerJoin(vendors, eq15(vendors.id, vendorMembers.vendorId)).where(eq15(vendorMembers.userId, user.id));
-  return c.json({ vendors: rows.map((r) => ({ ...r.vendor, role: r.role })), isAdmin: isAdmin4(user.email) });
+  return c.json({ vendors: rows.map((r) => ({ ...r.vendor, role: r.role, cgvUpToDate: r.vendor.cgvVersion === VENDOR_CGV_VERSION })), isAdmin: isAdmin4(user.email), cgvVersion: VENDOR_CGV_VERSION });
+});
+vendorRoutes.post("/vendor/accept-cgv", requireAuth, async (c) => {
+  const db = await getDb();
+  const user = c.get("user");
+  const rows = await db.select({ id: vendors.id }).from(vendorMembers).innerJoin(vendors, eq15(vendors.id, vendorMembers.vendorId)).where(eq15(vendorMembers.userId, user.id));
+  for (const r of rows) await db.update(vendors).set({ cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email }).where(eq15(vendors.id, r.id));
+  await audit("vendor.accept_cgv", { actorEmail: user.email, meta: { version: VENDOR_CGV_VERSION, vendors: rows.length } });
+  return c.json({ ok: true, version: VENDOR_CGV_VERSION });
 });
 vendorRoutes.use("/vendor/*", requireAuth, requireVendor);
 vendorRoutes.get("/vendor/dashboard", async (c) => {

@@ -19,7 +19,7 @@ describe('vitrine publique', () => {
   });
   it('un grossiste actif fait apparaître un prix « à partir de »', async () => {
     const V = (await reg('gros@vitrine.fr', 'Grossiste')).h; const ADM = (await reg('admin@afrisupply.fr', 'Admin')).h;
-    const v = await call('POST', '/api/vendor/register', { name: 'Sahel Distribution', city: 'Nantes', deliveryZones: ['Nantes'], categories: ['feculents'] }, V); expect([200, 201]).toContain(v.status);
+    const v = await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Sahel Distribution', city: 'Nantes', deliveryZones: ['Nantes'], categories: ['feculents'] }, V); expect([200, 201]).toContain(v.status);
     const act = await call('PUT', `/api/admin/vendors/${v.json.vendor?.id ?? v.json.id}`, { status: 'actif' }, ADM); expect(act.status).toBe(200);
     const id = (await call('GET', '/api/public/catalog?q=riz')).json.items[0].id;
     const o = await call('POST', '/api/vendor/offers', { productId: id, packLabel: 'sac 25 kg', packQty: 25, packPrice: 30 }, V); expect(o.status).toBe(201);

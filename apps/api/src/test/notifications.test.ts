@@ -22,7 +22,7 @@ describe('chantier 18 — WhatsApp / SMS', () => {
     const s = await call('GET', '/api/settings', undefined, R); expect(s.json.settings.notifyPhone).toBe('+33698765432'); expect(s.json.sms.configured).toBe(false);
   });
   it('commande marketplace → notification grossiste, confirmation → notification restaurant, rappel cron', async () => {
-    const v = await call('POST', '/api/vendor/register', { name: 'Gros N', city: 'Rungis', deliveryZones: ['75'], categories: ['epicerie'], contactEmail: 'gros@n.fr', whatsapp: '07 11 22 33 44' }, V); expect(v.json.vendor.status).toBe('actif'); const vid = v.json.vendor.id;
+    const v = await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Gros N', city: 'Rungis', deliveryZones: ['75'], categories: ['epicerie'], contactEmail: 'gros@n.fr', whatsapp: '07 11 22 33 44' }, V); expect(v.json.vendor.status).toBe('actif'); const vid = v.json.vendor.id;
     const t = await call('GET', '/api/onboarding/templates', undefined, R); await call('POST', '/api/onboarding/apply', { templates: t.json.templates.slice(0, 1).map((x: Json) => x.id ?? x.name) }, R);
     const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
     const off = await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Sac 25 kg', packQty: 25, packPrice: 30 }, V); expect(off.json.offer.id).toBeTruthy();
@@ -42,5 +42,20 @@ describe('chantier 18 — WhatsApp / SMS', () => {
     logs = await db.select().from(notifications).where(eq(notifications.orderId, orderId));
     expect(logs.find((l) => l.kind === 'order.confirmed')?.to).toBe('+33698765432');
     const vo = await call('GET', '/api/vendor/orders', undefined, V); expect(vo.json.orders[0].whatsappLink).toContain('wa.me/33698765432');
+  });
+});
+
+describe('chantier 22 — CGV fournisseur', () => {
+  it('inscription refusée sans acceptation, version enregistrée, blocage si obsolète, ré-acceptation', async () => {
+    const W = (await reg('gros2@n.fr', 'Gros 2')).h;
+    const ko = await call('POST', '/api/vendor/register', { name: 'Sans CGV', categories: ['epicerie'] }, W); expect(ko.status).toBe(400); expect(ko.json.code).toBe('cgv_required');
+    const ok = await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Avec CGV', categories: ['epicerie'] }, W); expect(ok.status).toBe(201); expect(ok.json.vendor.cgvVersion).toBe('1.0'); expect(ok.json.vendor.cgvAcceptedBy).toBe('gros2@n.fr');
+    const db = await getDb(); const { vendors } = await import('@afrisupply/db');
+    await db.update(vendors).set({ cgvVersion: '0.9' }).where(eq(vendors.id, ok.json.vendor.id));
+    const me = await call('GET', '/api/vendor/me', undefined, W); expect(me.json.vendors[0].cgvUpToDate).toBe(false);
+    expect((await call('GET', '/api/vendor/orders', undefined, W)).status).toBe(200);
+    const blocked = await call('PUT', '/api/vendor/profile', { city: 'Paris' }, W); expect(blocked.status).toBe(428); expect(blocked.json.code).toBe('cgv_outdated');
+    expect((await call('POST', '/api/vendor/accept-cgv', {}, W)).json.version).toBe('1.0');
+    expect((await call('PUT', '/api/vendor/profile', { city: 'Paris' }, W)).status).toBe(200);
   });
 });

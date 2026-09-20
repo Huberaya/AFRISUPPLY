@@ -64,6 +64,13 @@
       "when": 1789885479210,
       "tag": "0008_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789928429602,
+      "tag": "0009_vendor_cgv",
+      "breakpoints": true
     }
   ]
 }

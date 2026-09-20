@@ -82,7 +82,7 @@ describe('factures de commission', () => {
   it('agrège les commissions du mois par fournisseur, envoie un relevé par e-mail (sans Stripe), marque invoiced, idempotent', async () => {
     const db = await getDb();
     const V = (await reg('gros@sahel.fr', 'Grossiste')).h;
-    const v = (await call('POST', '/api/vendor/register', { name: 'Sahel', deliveryZones: ['France'], categories: ['epicerie'], contactEmail: 'compta@sahel.fr' }, V)).json.vendor;
+    const v = (await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Sahel', deliveryZones: ['France'], categories: ['epicerie'], contactEmail: 'compta@sahel.fr' }, V)).json.vendor;
     expect(v.status).toBe('actif');
     // deux vraies commandes plateforme confirmées (commission 3 %) puis période forcée à 2026-08
     const t0 = await call('GET', '/api/onboarding/templates', undefined, R.h); await call('POST', '/api/onboarding/apply', { templates: t0.json.templates.slice(0, 1).map((x: Json) => x.id ?? x.name) }, R.h);

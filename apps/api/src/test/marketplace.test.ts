@@ -26,7 +26,7 @@ beforeAll(async () => {
 
 describe('marketplace', () => {
   it('inscription fournisseur → en attente → invisible des restaurants → validé par admin', async () => {
-    const r = await call('POST', '/api/vendor/register', { name: 'Sahel Grossiste', city: 'Nantes', deliveryZones: ['nantes', '44'], categories: ['epicerie', 'feculents'], minOrderEur: 50, contactEmail: 'commandes@sahel.fr' }, V);
+    const r = await call('POST', '/api/vendor/register', { acceptCgv: true, name: 'Sahel Grossiste', city: 'Nantes', deliveryZones: ['nantes', '44'], categories: ['epicerie', 'feculents'], minOrderEur: 50, contactEmail: 'commandes@sahel.fr' }, V);
     expect(r.status).toBe(201); expect(r.json.vendor.status).toBe('en_attente'); vendorId = r.json.vendor.id;
     expect((await call('GET', '/api/marketplace/vendors', undefined, R1.h)).json.vendors.length).toBe(0);
     expect((await call('GET', '/api/admin/vendors', undefined, R1.h)).status).toBe(403);
