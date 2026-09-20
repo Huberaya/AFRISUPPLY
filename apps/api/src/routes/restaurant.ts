@@ -6,6 +6,7 @@ import {
   orders, orderLines, deliveries, recipes, recipeIngredients, sales, alerts, restaurants,
 } from '@afrisupply/db';
 import { nextOrderReference } from '../lib/reference.js';
+import { logOrderEvent } from '../lib/order-events.js';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import {
   computeDailyUse, stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, alertsFromOpportunities,
@@ -248,7 +249,7 @@ restaurantRoutes.get('/orders', async (c) => {
     .where(eq(orders.restaurantId, rid)).orderBy(desc(orders.createdAt)).limit(100);
   const ids = rows.map((r) => r.order.id);
   const lines = ids.length ? await db.select({ line: orderLines, productName: products.name }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(inArray(orderLines.orderId, ids)) : [];
-  return c.json({ orders: rows.map((r) => ({ ...r.order, supplierName: r.supplierName, lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName })) })) });
+  return c.json({ orders: rows.map((r) => ({ ...r.order, proofPhoto: undefined, proofSignature: undefined, hasProof: !!(r.order.proofPhoto || r.order.proofSignature || r.order.proofReceiverName), supplierName: r.supplierName, lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName })) })) });
 });
 
 restaurantRoutes.post('/orders', async (c) => {
@@ -331,6 +332,7 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
   }
   const allReceived = discrepancies.every((d) => d.received >= d.ordered);
   await db.update(orders).set({ status: allReceived ? 'livree' : 'livree_partiel', deliveredAt: new Date() }).where(eq(orders.id, order.id));
+  void logOrderEvent(order.id, 'received', allReceived ? 'Réception confirmée par le restaurant' : 'Réception avec écarts signalés', 'restaurant');
   return c.json({ ok: true, isLate, discrepancies, claimMessage });
 });
 

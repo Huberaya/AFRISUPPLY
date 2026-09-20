@@ -8,9 +8,10 @@ import { Field } from '../../components/Modal';
 import { CatalogImport, QuickPrice } from './CatalogImport';
 import { InviteLanding } from './InviteLanding';
 import { Analytics } from './Analytics';
+import { Fulfillment } from './Fulfillment';
 
 type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; cgvUpToDate?: boolean; cgvVersion?: string | null; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
-type Tab = 'dashboard' | 'offers' | 'orders' | 'groupbuys' | 'commissions' | 'analytics';
+type Tab = 'dashboard' | 'offers' | 'orders' | 'fulfillment' | 'groupbuys' | 'commissions' | 'analytics';
 const eur = (v: number | string) => `${Number(v).toFixed(2).replace('.', ',')} €`;
 const STATUS: Record<string, string> = { envoyee: '🕒 À confirmer', confirmee: '✅ Confirmée', livree: '📦 Livrée', livree_partiel: '📦 Livrée (écarts)', annulee: '❌ Refusée/annulée' };
 
@@ -29,9 +30,9 @@ export default function VendorSpace() {
       {v.cgvUpToDate === false && <div className="mb-4 rounded-2xl border border-brand-200 bg-brand-50 p-4 text-sm text-brand-900"><p className="font-bold">📜 Nouvelles conditions générales fournisseur</p><p className="mt-1">Pour continuer à publier des offres et traiter des commandes, merci de lire et d’accepter la nouvelle version des <Link className="underline" to="/cgv-fournisseur" target="_blank">conditions fournisseur</Link>.</p><button className="btn-primary mt-2" onClick={async () => { await api('/vendor/accept-cgv', { method: 'POST', json: {} }); await load(); }}>J’accepte les conditions</button></div>}
       {v.status !== 'actif' && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{v.status === 'en_attente' ? <>⏳ <b>Espace en cours de validation.</b> Vous pouvez déjà préparer votre catalogue ; les restaurants vous verront dès l’activation (sous 24 h ouvrées).</> : <>⛔ Espace suspendu — contactez bonjour@afrisupply.fr.</>}</div>}
       <nav className="mb-5 flex gap-1 overflow-x-auto rounded-2xl bg-stone-100 p-1 text-sm font-semibold">
-        {([['orders', Inbox, 'Commandes'], ['offers', Package, 'Catalogue'], ['analytics', BarChart3, 'Analyses'], ['groupbuys', Users, 'Achats groupés'], ['commissions', Receipt, 'Commissions'], ['dashboard', Store, 'Ma fiche']] as const).map(([k, Icon, l]) => <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2 ${tab === k ? 'bg-white text-brand-800 shadow-sm' : 'text-stone-600'}`}><Icon size={16} /> {l}</button>)}
+        {([['orders', Inbox, 'Commandes'], ['fulfillment', Truck, 'Préparation & livraison'], ['offers', Package, 'Catalogue'], ['analytics', BarChart3, 'Analyses'], ['groupbuys', Users, 'Achats groupés'], ['commissions', Receipt, 'Commissions'], ['dashboard', Store, 'Ma fiche']] as const).map(([k, Icon, l]) => <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2 ${tab === k ? 'bg-white text-brand-800 shadow-sm' : 'text-stone-600'}`}><Icon size={16} /> {l}</button>)}
       </nav>
-      {tab === 'orders' && <Orders />}{tab === 'offers' && <Offers />}{tab === 'analytics' && <Analytics onAddOffer={(_id, name) => { sessionStorage.setItem('afs_vendor_prefill', name); setTab('offers'); }} />}{tab === 'groupbuys' && <GroupBuys />}{tab === 'commissions' && <Commissions />}{tab === 'dashboard' && <Dashboard />}
+      {tab === 'orders' && <Orders />}{tab === 'fulfillment' && <Fulfillment />}{tab === 'offers' && <Offers />}{tab === 'analytics' && <Analytics onAddOffer={(_id, name) => { sessionStorage.setItem('afs_vendor_prefill', name); setTab('offers'); }} />}{tab === 'groupbuys' && <GroupBuys />}{tab === 'commissions' && <Commissions />}{tab === 'dashboard' && <Dashboard />}
     </Shell>
   );
 }
@@ -117,12 +118,12 @@ function Offers() {
   );
 }
 
-type VOrder = { id: string; reference: string; status: string; totalEur: string; expectedAt: string | null; createdAt: string; restaurantName: string; city: string | null; address: string | null; restaurantPhone?: string | null; whatsappLink?: string | null; notes: string | null; vendorNote: string | null; lines: { id: string; productName: string; packLabel: string | null; packs: number; quantity: string; unit: string; lineTotalEur: string }[] };
+type VOrder = { id: string; reference: string; status: string; totalEur: string; expectedAt: string | null; createdAt: string; restaurantName: string; city: string | null; address: string | null; restaurantPhone?: string | null; whatsappLink?: string | null; fulfillment?: string | null; notes: string | null; vendorNote: string | null; lines: { id: string; productName: string; packLabel: string | null; packs: number; quantity: string; unit: string; lineTotalEur: string }[] };
 function Orders() {
   const [orders, setOrders] = useState<VOrder[]>([]); const [filter, setFilter] = useState<'envoyee' | 'confirmee' | ''>('envoyee'); const [reason, setReason] = useState<Record<string, string>>({}); const [date, setDate] = useState<Record<string, string>>({});
   const load = () => api<{ orders: VOrder[] }>(`/vendor/orders${filter ? `?status=${filter}` : ''}`).then((r) => setOrders(r.orders));
   useEffect(() => { void load(); }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
-  const act = async (id: string, a: 'confirm' | 'refuse' | 'shipped') => { await api(`/vendor/orders/${id}/${a}`, { method: 'POST', json: a === 'confirm' ? { expectedAt: date[id] || undefined } : a === 'refuse' ? { reason: reason[id] || 'Indisponible' } : {} }); void load(); };
+  const act = async (id: string, a: 'confirm' | 'refuse') => { await api(`/vendor/orders/${id}/${a}`, { method: 'POST', json: a === 'confirm' ? { expectedAt: date[id] || undefined } : a === 'refuse' ? { reason: reason[id] || 'Indisponible' } : {} }); void load(); };
   return (
     <div className="space-y-3">
       <div className="flex gap-1.5 text-sm">{([['envoyee', 'À confirmer'], ['confirmee', 'Confirmées'], ['', 'Toutes']] as const).map(([k, l]) => <button key={k} onClick={() => setFilter(k)} className={`pill !px-3 !py-1.5 ${filter === k ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-700'}`}>{l}</button>)}</div>
@@ -133,7 +134,7 @@ function Orders() {
           <ul className="text-sm">{o.lines.map((l) => <li key={l.id} className="flex justify-between border-t border-stone-100 py-1"><span>{l.packs} × {l.packLabel ?? l.productName} <span className="text-stone-400">({Number(l.quantity)} {l.unit})</span></span><span>{eur(l.lineTotalEur)}</span></li>)}</ul>
           {o.notes && <p className="rounded-lg bg-stone-50 p-2 text-sm">💬 {o.notes}</p>}{o.vendorNote && <p className="text-xs text-stone-500">Votre note : {o.vendorNote}</p>}
           {o.status === 'envoyee' && <div className="flex flex-wrap items-end gap-2"><Field label="Livraison le"><input type="date" className="input" value={date[o.id] ?? o.expectedAt ?? ''} onChange={(e) => setDate({ ...date, [o.id]: e.target.value })} /></Field><button className="btn-primary !py-3" onClick={() => void act(o.id, 'confirm')}><Check size={18} /> Confirmer</button><div className="flex items-end gap-1"><input className="input" placeholder="Motif de refus" value={reason[o.id] ?? ''} onChange={(e) => setReason({ ...reason, [o.id]: e.target.value })} /><button className="btn-ghost !text-red-700" onClick={() => void act(o.id, 'refuse')}><X size={16} /> Refuser</button></div></div>}
-          <div className="flex flex-wrap gap-2">{o.status === 'confirmee' && !o.vendorNote?.includes('[expédiée]') && <button className="btn-ghost" onClick={() => void act(o.id, 'shipped')}><Truck size={16} /> Marquer expédiée (prévenir le restaurant)</button>}
+          <div className="flex flex-wrap gap-2">{o.status === 'confirmee' && <span className="pill bg-stone-100 text-stone-700">{({ en_preparation: '🧺 En préparation', en_livraison: '🚚 En livraison', livree: '📦 Livrée' } as Record<string, string>)[o.fulfillment ?? ''] ?? '⏳ À préparer'} → onglet Préparation & livraison</span>}
           {o.status !== 'annulee' && <><button className="btn-ghost" onClick={() => void openPdf(`/vendor/orders/${o.id}/pdf`)}><FileText size={16} /> Bon de commande PDF</button><button className="btn-ghost" onClick={() => void openPdf(`/vendor/orders/${o.id}/pdf?type=livraison`)}><FileText size={16} /> Bon de livraison PDF</button></>}</div>
         </div>))}
     </div>

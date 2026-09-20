@@ -202,6 +202,17 @@ export const orders = pgTable('orders', {
   vendorDecisionAt: timestamp('vendor_decision_at', { withTimezone: true }),
   vendorNote: text('vendor_note'),
   vendorRemindedAt: timestamp('vendor_reminded_at', { withTimezone: true }), // chantier 18 : rappel WhatsApp/SMS envoyé au grossiste
+  // chantier 20 : exécution côté grossiste (sous-étapes de 'confirmee')
+  fulfillment: text('fulfillment'),                     // null | en_preparation | en_livraison | livree
+  preparedAt: timestamp('prepared_at', { withTimezone: true }),
+  shippedAt: timestamp('shipped_at', { withTimezone: true }),
+  vendorDeliveredAt: timestamp('vendor_delivered_at', { withTimezone: true }),
+  deliverySlot: text('delivery_slot'),                  // ex. « 7h–9h »
+  driverName: text('driver_name'),
+  proofReceiverName: text('proof_receiver_name'),
+  proofPhoto: text('proof_photo'),                      // data URL jpeg compressée (≤ 400 Ko)
+  proofSignature: text('proof_signature'),              // data URL png
+  proofNote: text('proof_note'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('orders_restaurant_idx').on(t.restaurantId, t.createdAt), uniqueIndex('orders_ref').on(t.reference)]);
 
@@ -609,3 +620,14 @@ export const notifications = pgTable('notifications', {
   providerId: text('provider_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('notif_created_idx').on(t.createdAt), index('notif_order_idx').on(t.orderId)]);
+
+// ---------- Chantier 20/23 : chronologie des commandes ----------
+export const orderEvents = pgTable('order_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orderId: uuid('order_id').notNull().references(() => orders.id, { onDelete: 'cascade' }),
+  at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
+  type: text('type').notNull(),        // sent | confirmed | refused | preparing | shipped | delivered | received | cancelled | note
+  actor: text('actor'),                // restaurant | vendor | system
+  label: text('label').notNull(),
+  meta: jsonb('meta').$type<Record<string, unknown>>(),
+}, (t) => [index('order_events_order_idx').on(t.orderId)]);

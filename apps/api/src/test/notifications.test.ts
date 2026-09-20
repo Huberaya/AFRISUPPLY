@@ -59,3 +59,20 @@ describe('chantier 22 — CGV fournisseur', () => {
     expect((await call('PUT', '/api/vendor/profile', { city: 'Paris' }, W)).status).toBe(200);
   });
 });
+
+describe('chantier 20 — préparation, livraison, preuve, chronologie', () => {
+  it('picking, étapes ordonnées, preuve obligatoire, timeline des deux côtés', async () => {
+    const pk = await call('GET', '/api/vendor/picking', undefined, V); expect(pk.status).toBe(200); expect(pk.json.orders.length).toBe(1); expect(pk.json.products[0].packs).toBe(2);
+    const bad = await call('POST', `/api/vendor/orders/${orderId}/fulfillment`, { step: 'livree' }, V); expect(bad.status).toBe(400); // preuve requise
+    expect((await call('POST', `/api/vendor/orders/${orderId}/fulfillment`, { step: 'en_preparation', deliverySlot: '7h–9h' }, V)).json.order.fulfillment).toBe('en_preparation');
+    expect((await call('POST', `/api/vendor/orders/${orderId}/fulfillment`, { step: 'en_preparation' }, V)).status).toBe(400); // pas de retour arrière
+    const ship = await call('POST', `/api/vendor/orders/${orderId}/fulfillment`, { step: 'en_livraison', driverName: 'Moussa' }, V); expect(ship.json.order.shippedAt).toBeTruthy();
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const del = await call('POST', `/api/vendor/orders/${orderId}/fulfillment`, { step: 'livree', receiverName: 'Awa', signature: png, note: 'RAS' }, V); expect(del.status).toBe(200); expect(del.json.order.fulfillment).toBe('livree'); expect(del.json.order.proofSignature).toBeUndefined();
+    const tl = await call('GET', `/api/orders/${orderId}/timeline`, undefined, R); expect(tl.status).toBe(200);
+    expect(tl.json.events.map((e: Json) => e.type)).toEqual(['sent', 'confirmed', 'preparing', 'shipped', 'delivered']); expect(tl.json.order.proofSignature).toBe(png); expect(tl.json.order.proofReceiverName).toBe('Awa');
+    const list = await call('GET', '/api/orders', undefined, R); const o = list.json.orders.find((x: Json) => x.id === orderId); expect(o.hasProof).toBe(true); expect(o.proofSignature).toBeUndefined(); expect(o.fulfillment).toBe('livree');
+    expect((await call('GET', `/api/vendor/orders/${orderId}/timeline`, undefined, V)).json.events.length).toBe(5);
+    expect((await call('GET', '/api/vendor/picking', undefined, V)).json.orders[0].fulfillment).toBe('livree');
+  });
+});

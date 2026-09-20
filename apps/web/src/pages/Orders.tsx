@@ -7,7 +7,21 @@ import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
 import { Modal } from '../components/Modal';
 
 type Line = { id: string; productName: string; packLabel: string | null; packs: number; quantity: string; unitPriceEur: string; lineTotalEur: string; receivedQty: string | null };
-type O = { id: string; reference: string; supplierName: string; status: string; channel: string; expectedAt: string | null; totalEur: string; source: string; createdAt: string; lines: Line[] };
+type O = { id: string; reference: string; supplierName: string; status: string; channel: string; expectedAt: string | null; totalEur: string; source: string; createdAt: string; lines: Line[]; vendorId?: string | null; fulfillment?: string | null; deliverySlot?: string | null; hasProof?: boolean };
+type TL = { order: { fulfillment: string | null; deliverySlot: string | null; driverName: string | null; proofPhoto: string | null; proofSignature: string | null; proofReceiverName: string | null; proofNote: string | null; vendorDeliveredAt: string | null }; events: { id: string; at: string; type: string; label: string; actor: string | null }[] };
+const STEPS = [['sent', 'Envoyée'], ['confirmed', 'Confirmée'], ['preparing', 'En préparation'], ['shipped', 'En livraison'], ['delivered', 'Livrée'], ['received', 'Réceptionnée']] as const;
+function Timeline({ o }: { o: O }) {
+  const { data } = useApi<TL>(`/orders/${o.id}/timeline`);
+  if (!data) return <p className="text-xs text-stone-400">Chargement du suivi…</p>;
+  const done = new Set(data.events.map((e) => e.type)); const refused = done.has('refused') || done.has('cancelled');
+  return (
+    <div className="mt-3 rounded-xl bg-stone-50 p-3">
+      <div className="flex items-center gap-1 overflow-x-auto">{STEPS.map(([k, l], i) => { const ok = done.has(k); return <div key={k} className="flex items-center gap-1"><div className={`flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${ok ? 'bg-emerald-600 text-white' : refused ? 'bg-stone-200 text-stone-400' : 'bg-white text-stone-500 ring-1 ring-stone-200'}`}>{ok ? '✓' : i + 1} {l}</div>{i < STEPS.length - 1 && <div className={`h-0.5 w-4 ${ok ? 'bg-emerald-600' : 'bg-stone-200'}`} />}</div>; })}</div>
+      <ul className="mt-3 space-y-1 text-xs text-stone-600">{data.events.map((e) => <li key={e.id} className="flex gap-2"><span className="w-28 shrink-0 text-stone-400">{new Date(e.at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span><span className={e.type === 'refused' ? 'text-red-700' : ''}>{e.label}</span></li>)}{!data.events.length && <li className="text-stone-400">Aucun événement enregistré.</li>}</ul>
+      {(data.order.proofReceiverName || data.order.proofSignature || data.order.proofPhoto) && <div className="mt-3 rounded-xl border border-emerald-200 bg-white p-3 text-xs"><p className="font-semibold text-emerald-800">📦 Preuve de livraison du fournisseur{data.order.vendorDeliveredAt ? ` — ${new Date(data.order.vendorDeliveredAt).toLocaleString('fr-FR')}` : ''}</p>{data.order.proofReceiverName && <p className="mt-1">Reçue par : <b>{data.order.proofReceiverName}</b></p>}{data.order.proofNote && <p>Remarque : {data.order.proofNote}</p>}<div className="mt-2 flex flex-wrap gap-3">{data.order.proofSignature && <div><p className="text-stone-500">Signature</p><img src={data.order.proofSignature} alt="Signature" className="h-20 rounded-lg border bg-white" /></div>}{data.order.proofPhoto && <div><p className="text-stone-500">Photo</p><img src={data.order.proofPhoto} alt="Livraison" className="h-32 rounded-lg" /></div>}</div></div>}
+    </div>
+  );
+}
 type Msg = { subject: string; body: string; whatsappUrl: string; mailtoUrl: string; hasWhatsapp: boolean; hasEmail: boolean };
 const STATUS_TONE: Record<string, string> = { preparee: 'bg-sky-100 text-sky-800', envoyee: 'bg-amber-100 text-amber-800', confirmee: 'bg-amber-100 text-amber-800', livree: 'bg-emerald-100 text-emerald-800', livree_partiel: 'bg-orange-100 text-orange-800', annulee: 'bg-stone-100 text-stone-500', brouillon: 'bg-stone-100 text-stone-600' };
 const SOURCE_LABEL: Record<string, string> = { manuel: 'manuelle', comparateur: 'comparateur', panier_ia: '🧺 panier IA', auto_reorder: '🤖 auto-reorder' };
@@ -40,10 +54,11 @@ export default function Orders() {
     <details className="card !p-0 group">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4">
         <div><p className="font-bold">{o.supplierName}</p><p className="text-xs text-stone-500">{o.reference} · {fmtDate(o.createdAt)} · {o.lines.length} ligne{o.lines.length > 1 ? 's' : ''}{o.expectedAt && ` · livraison ${fmtDate(o.expectedAt)}`} · {SOURCE_LABEL[o.source] ?? o.source}</p></div>
-        <div className="flex items-center gap-3"><span className={`pill ${STATUS_TONE[o.status]}`}>{STATUS_LABEL[o.status]}</span><span className="font-extrabold">{fmtEur(o.totalEur)}</span></div>
+        <div className="flex items-center gap-3">{o.fulfillment && o.status === 'confirmee' && <span className="pill bg-sky-100 text-sky-800">{({ en_preparation: '🧺 En préparation', en_livraison: '🚚 En livraison', livree: '📦 Livrée — à réceptionner' } as Record<string, string>)[o.fulfillment]}</span>}<span className={`pill ${STATUS_TONE[o.status]}`}>{STATUS_LABEL[o.status]}</span><span className="font-extrabold">{fmtEur(o.totalEur)}</span></div>
       </summary>
       <div className="border-t border-stone-100 px-5 py-4">
         <table className="w-full text-sm"><tbody className="divide-y divide-stone-100">{o.lines.map((l) => <tr key={l.id}><td className="py-1.5">{l.productName}</td><td className="py-1.5 text-stone-500">{l.packs} × {l.packLabel}</td><td className="py-1.5 text-right">{fmtQty(l.quantity)}{l.receivedQty !== null && Number(l.receivedQty) !== Number(l.quantity) && <span className="ml-1 text-xs text-red-600">(reçu {fmtQty(l.receivedQty)})</span>}</td><td className="py-1.5 text-right font-semibold">{fmtEur(l.lineTotalEur)}</td></tr>)}</tbody></table>
+        {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <Timeline o={o} />}
         <div className="mt-3 flex flex-wrap gap-2">
           {o.status === 'preparee' && <><button onClick={() => void openSend(o)} className="btn-primary !py-1.5"><Send size={14} /> Envoyer au fournisseur</button><button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button></>}
           {['envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void openSend(o)} className="btn-ghost !py-1.5"><Copy size={14} /> Revoir le message</button>}

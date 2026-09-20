@@ -11,6 +11,7 @@ import { sendMail } from '../lib/mailer.js';
 import { sendMessage, waLink } from '../lib/sms.js';
 import { maybeRemind } from '../jobs/reminders.js';
 import { VENDOR_CGV_VERSION } from '../lib/cgv.js';
+import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
 import { orderPdf } from '../lib/pdf.js';
@@ -150,7 +151,7 @@ vendorRoutes.get('/vendor/orders', async (c) => {
     .where(status ? and(eq(orders.vendorId, vid), eq(orders.status, status as typeof orders.status.enumValues[number])) : eq(orders.vendorId, vid)).orderBy(desc(orders.createdAt)).limit(100);
   const ids = rows.map((r) => r.order.id);
   const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(inArray(orderLines.orderId, ids)) : [];
-  return c.json({ orders: rows.map((r) => ({ ...r.order, restaurantName: r.restaurantName, city: r.city, address: r.address, restaurantPhone: r.settings?.notifyPhone ?? null, whatsappLink: waLink(r.settings?.notifyPhone, `Bonjour ${r.restaurantName}, au sujet de votre commande ${r.order.reference} via AFRISUPPLY : `), lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
+  return c.json({ orders: rows.map((r) => ({ ...r.order, proofPhoto: undefined, proofSignature: undefined, restaurantName: r.restaurantName, city: r.city, address: r.address, restaurantPhone: r.settings?.notifyPhone ?? null, whatsappLink: waLink(r.settings?.notifyPhone, `Bonjour ${r.restaurantName}, au sujet de votre commande ${r.order.reference} via AFRISUPPLY : `), lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
 });
 
 async function notifyRestaurant(orderId: string, subject: string, text: string, kind: 'order.confirmed' | 'order.refused' | 'order.shipped' = 'order.confirmed') {
@@ -173,6 +174,7 @@ vendorRoutes.post('/vendor/orders/:id/confirm', async (c) => {
   const [upd] = await db.update(orders).set({ status: 'confirmee', expectedAt: body.data.expectedAt ?? o.expectedAt, vendorDecisionAt: new Date(), vendorNote: body.data.note }).where(eq(orders.id, o.id)).returning();
   const amount = n(o.totalEur) * n(v.commissionPct) / 100;
   await db.insert(commissions).values({ vendorId: vid, orderId: o.id, orderTotalEur: o.totalEur, pct: v.commissionPct, amountEur: amount.toFixed(2), period: new Date().toISOString().slice(0, 7) }).onConflictDoNothing();
+  void logOrderEvent(o.id, 'confirmed', `Confirmée par ${v.name}${upd.expectedAt ? ` — livraison prévue le ${upd.expectedAt}` : ''}`, 'vendor');
   void notifyRestaurant(o.id, `✅ ${v.name} a confirmé votre commande ${o.reference}`, `${v.name} a confirmé la commande ${o.reference} (${eur(n(o.totalEur))}).\nLivraison prévue le ${upd.expectedAt ?? 'à confirmer'}.${body.data.note ? `\nMessage du fournisseur : ${body.data.note}` : ''}`);
   return c.json({ order: upd, commission: Math.round(amount * 100) / 100 });
 });
@@ -184,18 +186,61 @@ vendorRoutes.post('/vendor/orders/:id/refuse', async (c) => {
   if (o.status !== 'envoyee') return c.json({ error: `Commande déjà ${o.status}` }, 400);
   const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, vid));
   const [upd] = await db.update(orders).set({ status: 'annulee', vendorDecisionAt: new Date(), vendorNote: body.data.reason }).where(eq(orders.id, o.id)).returning();
+  void logOrderEvent(o.id, 'refused', `Refusée par ${v.name} : ${body.data.reason}`, 'vendor');
   void notifyRestaurant(o.id, `❌ ${v.name} ne peut pas honorer la commande ${o.reference}`, `${v.name} a refusé la commande ${o.reference}.\nMotif : ${body.data.reason}\n\nLe comparateur AFRISUPPLY vous propose des alternatives dans le panier.`, 'order.refused');
   return c.json({ order: upd });
 });
 
-/** Marquer expédiée/livrée côté fournisseur (le restaurant confirme la réception réelle dans son app). */
-vendorRoutes.post('/vendor/orders/:id/shipped', async (c) => {
-  const db = await getDb(); const vid = c.get('vendorId');
-  const [o] = await db.update(orders).set({ vendorNote: sql`coalesce(${orders.vendorNote}, '') || ' [expédiée]'` }).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid), eq(orders.status, 'confirmee'))).returning();
-  if (!o) return c.json({ error: 'Commande introuvable ou non confirmée' }, 404);
+// ---------------- Chantier 20 : préparation, livraison, preuve ----------------
+const FULFILL_LABEL: Record<string, string> = { en_preparation: 'En préparation', en_livraison: 'En livraison', livree: 'Livrée' };
+
+/** Liste de picking : quantités à préparer par produit pour les commandes confirmées (jour donné ou toutes). */
+vendorRoutes.get('/vendor/picking', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId'); const day = c.req.query('date');
+  const conds = [eq(orders.vendorId, vid), eq(orders.status, 'confirmee')]; if (day) conds.push(eq(orders.expectedAt, day));
+  const rows = await db.select({ orderId: orders.id, reference: orders.reference, restaurant: restaurants.name, city: restaurants.city, address: restaurants.address, expectedAt: orders.expectedAt, fulfillment: orders.fulfillment, deliverySlot: orders.deliverySlot, productId: orderLines.productId, productName: products.name, packLabel: orderLines.packLabel, packs: orderLines.packs })
+    .from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId)).innerJoin(orderLines, eq(orderLines.orderId, orders.id)).innerJoin(products, eq(products.id, orderLines.productId)).where(and(...conds)).orderBy(orders.expectedAt, orders.createdAt);
+  const byProduct = new Map<string, { productId: string; productName: string; packLabel: string | null; packs: number; orders: { reference: string; restaurant: string; packs: number }[] }>();
+  for (const r of rows) { const k = `${r.productId}|${r.packLabel ?? ''}`; const e = byProduct.get(k) ?? { productId: r.productId, productName: r.productName, packLabel: r.packLabel, packs: 0, orders: [] }; e.packs += n(r.packs); e.orders.push({ reference: r.reference, restaurant: r.restaurant, packs: n(r.packs) }); byProduct.set(k, e); }
+  const ordersMap = new Map<string, { id: string; reference: string; restaurant: string; city: string | null; address: string | null; expectedAt: string | null; fulfillment: string | null; deliverySlot: string | null; lines: number; packs: number }>();
+  for (const r of rows) { const e = ordersMap.get(r.orderId) ?? { id: r.orderId, reference: r.reference, restaurant: r.restaurant, city: r.city, address: r.address, expectedAt: r.expectedAt, fulfillment: r.fulfillment, deliverySlot: r.deliverySlot, lines: 0, packs: 0 }; e.lines++; e.packs += n(r.packs); ordersMap.set(r.orderId, e); }
+  const dates = [...new Set(rows.map((r) => r.expectedAt).filter(Boolean))].sort() as string[];
+  return c.json({ date: day ?? null, dates, products: [...byProduct.values()].sort((a, b) => a.productName.localeCompare(b.productName)), orders: [...ordersMap.values()] });
+});
+
+/** Passage d'étape : en_preparation → en_livraison → livree (avec preuve). Notifie le restaurant à chaque étape. */
+vendorRoutes.post('/vendor/orders/:id/fulfillment', async (c) => {
+  const body = z.object({ step: z.enum(['en_preparation', 'en_livraison', 'livree']), deliverySlot: z.string().max(40).optional(), driverName: z.string().max(80).optional(), receiverName: z.string().max(80).optional(), photo: z.string().max(600_000).optional(), signature: z.string().max(200_000).optional(), note: z.string().max(300).optional() }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
+  const db = await getDb(); const vid = c.get('vendorId'); const d = body.data;
+  const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid))); if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  if (o.status !== 'confirmee') return c.json({ error: `Commande ${o.status} : seules les commandes confirmées se préparent/livrent` }, 400);
+  const order = ['en_preparation', 'en_livraison', 'livree']; const cur = o.fulfillment ? order.indexOf(o.fulfillment) : -1; const nxt = order.indexOf(d.step);
+  if (nxt <= cur) return c.json({ error: `Déjà ${FULFILL_LABEL[o.fulfillment!]}` }, 400);
+  if (d.photo && !/^data:image\/(jpeg|png|webp);base64,/.test(d.photo)) return c.json({ error: 'Photo invalide' }, 400);
+  if (d.signature && !/^data:image\/png;base64,/.test(d.signature)) return c.json({ error: 'Signature invalide' }, 400);
+  if (d.step === 'livree' && !d.photo && !d.signature && !d.receiverName) return c.json({ error: 'Preuve de livraison requise : nom du réceptionnaire, signature ou photo' }, 400);
+  const now = new Date();
+  const patch: Partial<typeof orders.$inferInsert> = { fulfillment: d.step, deliverySlot: d.deliverySlot ?? o.deliverySlot, driverName: d.driverName ?? o.driverName };
+  if (d.step === 'en_preparation') patch.preparedAt = now;
+  if (d.step === 'en_livraison') { patch.shippedAt = now; patch.preparedAt = o.preparedAt ?? now; }
+  if (d.step === 'livree') { patch.vendorDeliveredAt = now; patch.shippedAt = o.shippedAt ?? now; patch.preparedAt = o.preparedAt ?? now; patch.proofReceiverName = d.receiverName; patch.proofPhoto = d.photo; patch.proofSignature = d.signature; patch.proofNote = d.note; }
+  const [upd] = await db.update(orders).set(patch).where(eq(orders.id, o.id)).returning();
   const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, vid));
-  void notifyRestaurant(o.id, `🚚 ${v.name} : commande ${o.reference} en route`, `Votre commande ${o.reference} est partie. Pensez à la réceptionner dans AFRISUPPLY pour mettre le stock à jour et signaler tout écart.`, 'order.shipped');
-  return c.json({ order: o });
+  if (d.step === 'en_preparation') { void logOrderEvent(o.id, 'preparing', `${v.name} prépare votre commande${d.deliverySlot ? ` — livraison ${d.deliverySlot}` : ''}`, 'vendor'); }
+  if (d.step === 'en_livraison') { void logOrderEvent(o.id, 'shipped', `En livraison${d.driverName ? ` (${d.driverName})` : ''}${upd.deliverySlot ? ` — ${upd.deliverySlot}` : ''}`, 'vendor'); void notifyRestaurant(o.id, `🚚 ${v.name} : commande ${o.reference} en route`, `Votre commande ${o.reference} est en livraison${upd.deliverySlot ? ` (${upd.deliverySlot})` : ''}${d.driverName ? `, livreur : ${d.driverName}` : ''}. Pensez à la réceptionner dans AFRISUPPLY pour mettre le stock à jour et signaler tout écart.`, 'order.shipped'); }
+  if (d.step === 'livree') { void logOrderEvent(o.id, 'delivered', `Livrée${d.receiverName ? ` — reçue par ${d.receiverName}` : ''}${d.signature ? ' (signature)' : ''}${d.photo ? ' (photo)' : ''}`, 'vendor'); void notifyRestaurant(o.id, `📦 ${v.name} : commande ${o.reference} livrée`, `${v.name} indique avoir livré la commande ${o.reference}${d.receiverName ? ` (reçue par ${d.receiverName})` : ''}. Confirmez la réception dans AFRISUPPLY : le stock sera mis à jour et vous pourrez signaler un écart.`, 'order.shipped'); }
+  return c.json({ order: { ...upd, proofPhoto: undefined, proofSignature: undefined }, message: FULFILL_LABEL[d.step] });
+});
+
+/** Compatibilité : ancien bouton « Marquer expédiée » = étape en_livraison. */
+vendorRoutes.post('/vendor/orders/:id/shipped', async (c) => c.redirect(`/api/vendor/orders/${c.req.param('id')}/fulfillment`, 307));
+
+vendorRoutes.get('/vendor/orders/:id/timeline', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt }).from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid)));
+  if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  return c.json({ order: o, events: await orderTimeline(o.id) });
 });
 
 // ---- achats groupés ----

@@ -10,6 +10,7 @@ import {
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { buildOrderMessage } from '../lib/messages.js';
 import { buildOrderDoc } from './vendor.js';
+import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
 
 export const manageRoutes = new Hono<Env>();
 manageRoutes.use('*', requireAuth, requireRestaurant);
@@ -285,4 +286,12 @@ manageRoutes.post('/discrepancies/:id/resolve', async (c) => {
   await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `${row.d.reason ?? 'ecart'} → ${body.data.resolution}${body.data.note ? ` (${body.data.note})` : ''}` }).where(eq(deliveryDiscrepancies.id, row.d.id));
   await db.update(alerts).set({ isRead: true }).where(and(eq(alerts.restaurantId, rid), eq(alerts.dedupeKey, `ecart:${row.d.deliveryId}`)));
   return c.json({ ok: true });
+});
+
+/** Chantier 23 : chronologie + preuve de livraison d'une commande (côté restaurant). */
+manageRoutes.get('/orders/:id/timeline', async (c) => {
+  const db = await getDb(); const rid = c.get('restaurantId');
+  const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, deliverySlot: orders.deliverySlot, driverName: orders.driverName, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt, shippedAt: orders.shippedAt, preparedAt: orders.preparedAt, expectedAt: orders.expectedAt, status: orders.status }).from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid)));
+  if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  return c.json({ order: o, events: await orderTimeline(o.id) });
 });
