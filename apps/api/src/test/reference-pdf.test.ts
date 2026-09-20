@@ -39,3 +39,12 @@ describe('PDF bon de commande / livraison', () => {
     expect((await call('GET', `/api/vendor/orders/${ord.json.order.id}/pdf`, undefined, ADM)).status).not.toBe(200);
   });
 });
+
+describe('tableau de bord admin (chantier 17)', () => {
+  it('agrégats complets, réservé admin', async () => {
+    expect((await call('GET', '/api/admin/dashboard', undefined, R)).status).toBe(403);
+    const d = await call('GET', '/api/admin/dashboard', undefined, ADM); expect(d.status).toBe(200);
+    expect(d.json.restaurants.total).toBeGreaterThanOrEqual(3); expect(d.json.vendors.actif).toBe(1); expect(d.json.orders.mkt).toBe(1); expect(d.json.offers.productsCovered).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(d.json.weekly)).toBe(true); expect(d.json.topVendors[0].name).toBe('Gros SA'); expect(d.json.recentOrders.length).toBe(1); expect(d.json.env.adminEmails).toBe(true); expect(Array.isArray(d.json.todo)).toBe(true);
+  });
+});
