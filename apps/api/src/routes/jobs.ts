@@ -7,6 +7,8 @@ import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { runDailyForAll, runDailyForRestaurant, buildDigestForRestaurant } from '../jobs/daily.js';
 import { buildDigest } from '../lib/digest.js';
 import { mailerConfig } from '../lib/mailer.js';
+import { remindPendingVendorOrders } from '../jobs/reminders.js';
+import { normalizePhone, sendMessage, smsConfig } from '../lib/sms.js';
 
 export const jobsRoutes = new Hono<Env>();
 
@@ -22,6 +24,14 @@ const runDaily = async (c: Context<Env>) => {
   return c.json(await runDailyForAll({ dryRun }));
 };
 jobsRoutes.post('/jobs/daily', runDaily);
+/** Chantier 18 : rappel aux grossistes qui n'ont pas répondu (> REMINDER_HOURS, défaut 4 h). Vercel Cron toutes les heures. */
+const runReminders = async (c: Context<Env>) => {
+  const secret = process.env.CRON_SECRET; const auth = c.req.header('authorization');
+  const given = c.req.header('x-cron-secret') ?? (auth?.startsWith('Bearer ') ? auth.slice(7) : undefined) ?? c.req.query('secret');
+  if (!secret || given !== secret) return c.json({ error: 'Secret cron invalide' }, 401);
+  return c.json(await remindPendingVendorOrders());
+};
+jobsRoutes.get('/jobs/reminders', runReminders); jobsRoutes.post('/jobs/reminders', runReminders);
 jobsRoutes.get('/jobs/daily', runDaily);
 
 // --- réglages & prévisualisation, côté restaurant connecté (monté séparément, après les routeurs protégés)
@@ -31,19 +41,20 @@ settingsRoutes.use('*', requireAuth, requireRestaurant);
 settingsRoutes.get('/settings', async (c) => {
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.get('restaurantId')));
   const s = r.settings ?? {};
-  return c.json({ restaurant: { id: r.id, name: r.name, city: r.city, coversPerDay: r.coversPerDay, plan: r.plan, trialEndsAt: r.trialEndsAt }, settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [] }, mail: { transport: mailerConfig().transport, from: mailerConfig().from } });
+  return c.json({ restaurant: { id: r.id, name: r.name, city: r.city, coversPerDay: r.coversPerDay, plan: r.plan, trialEndsAt: r.trialEndsAt }, settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, notifyPhone: s.notifyPhone ?? '', digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [] }, mail: { transport: mailerConfig().transport, from: mailerConfig().from }, sms: { configured: smsConfig().enabled, whatsapp: smsConfig().whatsapp } });
 });
 
 settingsRoutes.put('/settings', async (c) => {
   const body = z.object({
     name: z.string().min(2).optional(), city: z.string().nullable().optional(), coversPerDay: z.number().int().positive().nullable().optional(),
     priceIncreaseAlertPct: z.number().min(1).max(50).optional(), forecastHorizonDays: z.number().int().min(3).max(14).optional(),
-    autoReorderEnabled: z.boolean().optional(), dailyDigestEnabled: z.boolean().optional(), digestRecipients: z.array(z.string().email()).max(10).optional(), closedWeekdays: z.array(z.number().int().min(0).max(6)).optional(),
+    autoReorderEnabled: z.boolean().optional(), dailyDigestEnabled: z.boolean().optional(), digestRecipients: z.array(z.string().email()).max(10).optional(), closedWeekdays: z.array(z.number().int().min(0).max(6)).optional(), notifyPhone: z.string().max(30).optional(),
   }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
   const db = await getDb(); const rid = c.get('restaurantId');
   const [r] = await db.select().from(restaurants).where(eq(restaurants.id, rid));
   const { name, city, coversPerDay, ...settingsPatch } = body.data;
+  if (settingsPatch.notifyPhone !== undefined) { const p = normalizePhone(settingsPatch.notifyPhone); if (settingsPatch.notifyPhone && !p) return c.json({ error: 'Numéro de téléphone invalide (ex. 06 12 34 56 78 ou +33612345678)' }, 400); settingsPatch.notifyPhone = p ?? ''; }
   const [row] = await db.update(restaurants).set({ name, city, coversPerDay, settings: { ...(r.settings ?? {}), ...settingsPatch } }).where(eq(restaurants.id, rid)).returning();
   return c.json({ ok: true, settings: row.settings });
 });
@@ -63,3 +74,11 @@ settingsRoutes.post('/digest/send-test', async (c) => {
   return c.json(rest);
 });
 
+
+/** Chantier 18 : test d'envoi WhatsApp/SMS vers le numéro du restaurant. */
+settingsRoutes.post('/settings/test-sms', async (c) => {
+  const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.get('restaurantId')));
+  const to = r.settings?.notifyPhone; if (!to) return c.json({ error: 'Renseignez d’abord un numéro' }, 400);
+  const res = await sendMessage({ to, kind: 'test', restaurantId: r.id, body: `AFRISUPPLY — test : vous recevrez ici le suivi de vos commandes (${r.name}).` });
+  return c.json({ ...res, configured: smsConfig().enabled });
+});

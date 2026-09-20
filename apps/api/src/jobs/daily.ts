@@ -12,6 +12,7 @@ import { sendMail } from '../lib/mailer.js';
 import { sweepTrials, billingEnforced } from '../lib/billing.js';
 import { invoiceCommissions } from '../routes/billing.js';
 import { buildWeeklyPilotReport } from '../routes/pilots.js';
+import { remindPendingVendorOrders } from './reminders.js';
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -128,5 +129,6 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
     try { await db.insert(jobRuns).values({ job: 'daily', status: errors.length === 0 ? 'ok' : errors.length === results.length ? 'error' : 'partial', startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors.map((e) => `${e.name}: ${e.error}`).join(' | ') || null }); } catch (e) { console.error('[jobs] job_runs', e); }
   }
   for (const e of errors) void captureException(new Error(`daily digest failed: ${e.error}`), { route: '/api/jobs/daily', restaurantId: e.restaurantId });
+  try { (summary as Record<string, unknown>).reminders = opts.dryRun ? 'skipped' : (await remindPendingVendorOrders({ now: opts.now })).reminded; } catch (e) { await captureException(e, { route: 'jobs/reminders' }); }
   return summary;
 }

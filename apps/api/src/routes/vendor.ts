@@ -8,6 +8,8 @@ import { similarity } from '../lib/quick.js';
 import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
+import { sendMessage, waLink } from '../lib/sms.js';
+import { maybeRemind } from '../jobs/reminders.js';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
 import { orderPdf } from '../lib/pdf.js';
@@ -128,18 +130,21 @@ vendorRoutes.delete('/vendor/offers/:id', async (c) => {
 
 // ---- commandes reçues ----
 vendorRoutes.get('/vendor/orders', async (c) => {
+  maybeRemind();
   const db = await getDb(); const vid = c.get('vendorId'); const status = c.req.query('status');
-  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address })
+  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings })
     .from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId))
     .where(status ? and(eq(orders.vendorId, vid), eq(orders.status, status as typeof orders.status.enumValues[number])) : eq(orders.vendorId, vid)).orderBy(desc(orders.createdAt)).limit(100);
   const ids = rows.map((r) => r.order.id);
   const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(inArray(orderLines.orderId, ids)) : [];
-  return c.json({ orders: rows.map((r) => ({ ...r.order, restaurantName: r.restaurantName, city: r.city, address: r.address, lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
+  return c.json({ orders: rows.map((r) => ({ ...r.order, restaurantName: r.restaurantName, city: r.city, address: r.address, restaurantPhone: r.settings?.notifyPhone ?? null, whatsappLink: waLink(r.settings?.notifyPhone, `Bonjour ${r.restaurantName}, au sujet de votre commande ${r.order.reference} via AFRISUPPLY : `), lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
 });
 
-async function notifyRestaurant(orderId: string, subject: string, text: string) {
+async function notifyRestaurant(orderId: string, subject: string, text: string, kind: 'order.confirmed' | 'order.refused' | 'order.shipped' = 'order.confirmed') {
   const db = await getDb();
-  const [o] = await db.select({ restaurantId: orders.restaurantId }).from(orders).where(eq(orders.id, orderId));
+  const [o] = await db.select({ restaurantId: orders.restaurantId, vendorId: orders.vendorId }).from(orders).where(eq(orders.id, orderId));
+  const [rest] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq(restaurants.id, o.restaurantId));
+  if (rest?.settings?.notifyPhone) void sendMessage({ to: rest.settings.notifyPhone, body: `AFRISUPPLY — ${subject}\n${text}\nSuivi : ${APP_URL()}/app/achats`, kind, orderId, vendorId: o.vendorId, restaurantId: o.restaurantId });
   const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, o.restaurantId), inArray(restaurantMembers.role, ['owner', 'manager'])));
   for (const r of rcpts) void sendMail({ to: r.email, subject, text, html: `<p>${text.replace(/\n/g, '<br>')}</p><p><a href="${APP_URL()}/app/achats">Voir mes commandes</a></p>`, tags: { type: 'order_status' } });
 }
@@ -166,7 +171,7 @@ vendorRoutes.post('/vendor/orders/:id/refuse', async (c) => {
   if (o.status !== 'envoyee') return c.json({ error: `Commande déjà ${o.status}` }, 400);
   const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, vid));
   const [upd] = await db.update(orders).set({ status: 'annulee', vendorDecisionAt: new Date(), vendorNote: body.data.reason }).where(eq(orders.id, o.id)).returning();
-  void notifyRestaurant(o.id, `❌ ${v.name} ne peut pas honorer la commande ${o.reference}`, `${v.name} a refusé la commande ${o.reference}.\nMotif : ${body.data.reason}\n\nLe comparateur AFRISUPPLY vous propose des alternatives dans le panier.`);
+  void notifyRestaurant(o.id, `❌ ${v.name} ne peut pas honorer la commande ${o.reference}`, `${v.name} a refusé la commande ${o.reference}.\nMotif : ${body.data.reason}\n\nLe comparateur AFRISUPPLY vous propose des alternatives dans le panier.`, 'order.refused');
   return c.json({ order: upd });
 });
 
@@ -176,7 +181,7 @@ vendorRoutes.post('/vendor/orders/:id/shipped', async (c) => {
   const [o] = await db.update(orders).set({ vendorNote: sql`coalesce(${orders.vendorNote}, '') || ' [expédiée]'` }).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid), eq(orders.status, 'confirmee'))).returning();
   if (!o) return c.json({ error: 'Commande introuvable ou non confirmée' }, 404);
   const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, vid));
-  void notifyRestaurant(o.id, `🚚 ${v.name} : commande ${o.reference} en route`, `Votre commande ${o.reference} est partie. Pensez à la réceptionner dans AFRISUPPLY pour mettre le stock à jour et signaler tout écart.`);
+  void notifyRestaurant(o.id, `🚚 ${v.name} : commande ${o.reference} en route`, `Votre commande ${o.reference} est partie. Pensez à la réceptionner dans AFRISUPPLY pour mettre le stock à jour et signaler tout écart.`, 'order.shipped');
   return c.json({ order: o });
 });
 

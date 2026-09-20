@@ -8,6 +8,7 @@ import { getDb, vendors, vendorOffers, suppliers, supplierOffers, priceHistory, 
 import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
+import { sendMessage } from '../lib/sms.js';
 import { APP_URL } from '../jobs/daily.js';
 
 export const marketplaceRoutes = new Hono<Env>();
@@ -94,6 +95,8 @@ marketplaceRoutes.post('/marketplace/vendors/:id/orders', async (c) => {
   await db.insert(orderLines).values(linesData.map((l) => ({ ...l, orderId: order.id, offerId: priv.find((p) => p.productId === l.productId && p.packLabel === l.packLabel)?.id ?? null })));
   const [r] = await db.select({ name: restaurants.name, city: restaurants.city }).from(restaurants).where(eq(restaurants.id, rid));
   if (v.contactEmail) void sendMail({ to: v.contactEmail, subject: `Nouvelle commande ${reference} — ${r.name}${r.city ? ` (${r.city})` : ''} — ${eur(total)}`, text: `Bonjour,\n\n${r.name} vous passe commande via AFRISUPPLY :\n${linesData.map((l) => `• ${l.packs} × ${l.packLabel} — ${eur(Number(l.lineTotalEur))}`).join('\n')}\nTotal : ${eur(total)}\n\nConfirmez ou refusez en un clic : ${APP_URL()}/fournisseur/commandes\n`, html: `<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${linesData.map((l) => `<li>${l.packs} × ${l.packLabel} — ${eur(Number(l.lineTotalEur))}</li>`).join('')}</ul><p><b>Total : ${eur(total)}</b></p><p><a href="${APP_URL()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: 'vendor_new_order' } });
+  const phone = v.whatsapp || v.contactPhone;
+  if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? 'whatsapp' : 'sms', kind: 'order.new', orderId: order.id, vendorId: vid, restaurantId: rid, body: `AFRISUPPLY — Nouvelle commande ${reference}\n${r.name}${r.city ? ` (${r.city})` : ''} — ${eur(total)}\n${linesData.slice(0, 6).map((l) => `• ${l.packs} × ${l.packLabel}`).join('\n')}${linesData.length > 6 ? `\n… +${linesData.length - 6} lignes` : ''}\nConfirmer / refuser : ${APP_URL()}/fournisseur/commandes` });
   return c.json({ order, message: `Commande ${reference} envoyée à ${v.name} (${eur(total)}). Vous serez prévenu dès confirmation.` }, 201);
 });
 

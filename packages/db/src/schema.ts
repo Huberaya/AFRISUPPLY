@@ -73,6 +73,7 @@ export type RestaurantSettings = {
   dailyDigestEnabled?: boolean;     // e-mail « Votre matin AFRISUPPLY » (défaut true)
   digestRecipients?: string[];      // e-mails ; défaut : membres owner/manager
   closedWeekdays?: number[];        // 0=dimanche… pas de mail ces jours-là
+  notifyPhone?: string;             // chantier 18 : WhatsApp/SMS du restaurant pour le suivi de commande
 };
 
 export const restaurantMembers = pgTable('restaurant_members', {
@@ -200,6 +201,7 @@ export const orders = pgTable('orders', {
   vendorId: uuid('vendor_id'),                       // commande « plateforme » (chantier 10)
   vendorDecisionAt: timestamp('vendor_decision_at', { withTimezone: true }),
   vendorNote: text('vendor_note'),
+  vendorRemindedAt: timestamp('vendor_reminded_at', { withTimezone: true }), // chantier 18 : rappel WhatsApp/SMS envoyé au grossiste
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('orders_restaurant_idx').on(t.restaurantId, t.createdAt), uniqueIndex('orders_ref').on(t.reference)]);
 
@@ -588,3 +590,19 @@ export const shoppingLists = pgTable('shopping_lists', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('shopping_lists_restaurant_idx').on(t.restaurantId)]);
+
+// ---------- Chantier 18 : journal des notifications WhatsApp / SMS ----------
+export const notifications = pgTable('notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  channel: text('channel').notNull(),              // whatsapp | sms | log
+  to: text('to').notNull(),
+  kind: text('kind').notNull(),                    // order.new | order.reminder | order.confirmed | order.refused | order.shipped
+  orderId: uuid('order_id'),
+  vendorId: uuid('vendor_id'),
+  restaurantId: uuid('restaurant_id'),
+  body: text('body').notNull(),
+  ok: boolean('ok').notNull(),
+  error: text('error'),
+  providerId: text('provider_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('notif_created_idx').on(t.createdAt), index('notif_order_idx').on(t.orderId)]);
