@@ -625,6 +625,9 @@ export const feedback = pgTable('feedback', {
   message: text('message'),
   page: text('page'),
   status: text('status').default('nouveau').notNull(), // nouveau | traite
+  // Chantier 6 (audit) — preuve sociale : publication sur le site UNIQUEMENT avec accord du pilote
+  // (la case est cochée par l'admin au moment de la collecte). Jamais de témoignage inventé.
+  published: boolean('published').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('feedback_restaurant_idx').on(t.restaurantId, t.createdAt)]);
 

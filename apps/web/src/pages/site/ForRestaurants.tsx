@@ -1,11 +1,12 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight, Boxes, TrendingUp, Scale, Sparkles, ShieldCheck, MessageCircle, Check } from 'lucide-react';
 import { PLANS, FOUNDER } from '../../lib/plans';
+import SocialProof from '../../components/site/SocialProof';
 
 const BENEFITS = [
-  { icon: Boxes, title: 'Zéro rupture surprise', text: 'Chaque produit affiche ses jours de stock restants. Les ruptures sont annoncées 3 jours avant, pas au moment du coup de feu.', kpi: '−80 %', kpiLabel: 'de ruptures constatées chez nos pilotes' },
-  { icon: Scale, title: 'Payez le juste prix', text: 'Le comparateur met vos fournisseurs côte à côte, prix au kilo, délai et fiabilité compris, et vous dit lequel choisir — et pourquoi.', kpi: '8 à 12 %', kpiLabel: 'd’économie sur les achats' },
-  { icon: TrendingUp, title: 'Vos marges, plat par plat', text: 'Coût matière réel du mafé, du thiéb, de l’alloco. Quand l’huile de palme grimpe, vous le savez avant votre comptable.', kpi: '3 h', kpiLabel: 'gagnées par semaine sur les achats' },
+  { icon: Boxes, title: 'Zéro rupture surprise', text: 'Chaque produit affiche ses jours de stock restants. Les ruptures sont annoncées à l’avance, pas au moment du coup de feu.', kpi: '3 jours', kpiLabel: 'd’alerte avant la rupture' },
+  { icon: Scale, title: 'Payez le juste prix', text: 'Le comparateur met vos fournisseurs côte à côte sur le coût total — colis, livraison et minimum de commande compris — et vous dit lequel choisir, et pourquoi.', kpi: 'Coût total', kpiLabel: 'comparé, pas que le prix au kilo' },
+  { icon: TrendingUp, title: 'Vos marges, plat par plat', text: 'Coût matière réel du mafé, du thiéb, de l’alloco. Quand l’huile de palme grimpe, vous le savez avant votre comptable.', kpi: '100 %', kpiLabel: 'des recommandations expliquées' },
 ];
 const STEPS = [
   { n: '1', t: 'Choisissez vos plats', d: 'Parmi 31 recettes types de la cuisine ouest et centre-africaine. L’app en déduit votre liste de produits.' },
@@ -61,9 +62,12 @@ export default function Home() {
           <div className="mt-12 grid gap-6 md:grid-cols-3">
             {BENEFITS.map((b) => <div key={b.title} className="card"><b.icon className="text-brand-600" size={28} /><h3 className="mt-4 text-xl font-bold">{b.title}</h3><p className="mt-2 text-sm text-stone-600">{b.text}</p><p className="mt-6 text-4xl font-extrabold text-brand-700">{b.kpi}</p><p className="text-xs text-stone-500">{b.kpiLabel}*</p></div>)}
           </div>
-          <p className="mt-6 text-center text-xs text-stone-400">* Objectifs mesurés avec nos restaurants pilotes ; vos résultats dépendent de votre carte et de vos fournisseurs.</p>
+          <p className="mt-6 text-center text-xs text-stone-400">* Mécaniques du produit, mesurées dans l’application dès le premier mois (alerte à 3 jours, coût total, explications). Résultats chiffrés en cours de mesure avec les restaurants pilotes — aucun chiffre n’est avancé sans preuve.</p>
         </div>
       </section>
+
+      {/* PREUVE SOCIALE — chiffres réels + témoignages publiés avec accord */}
+      <SocialProof />
 
       {/* ASSISTANT */}
       <section className="mx-auto max-w-6xl px-4 py-20 lg:px-8">

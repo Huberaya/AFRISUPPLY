@@ -2,7 +2,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, sql, desc } from 'drizzle-orm';
-import { getDb, restaurants, billingEvents, commissions, commissionInvoices, vendors, vendorMembers, users, orders } from '@afrisupply/db';
+import { getDb, restaurants, billingEvents, commissions, commissionInvoices, vendors, vendorMembers, restaurantMembers, users, orders } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { applyOrderPayment, createOrderCheckout, paymentAvailability } from '../lib/payments.js';
 import { PLANS, FOUNDER_OFFER } from './public.js';
@@ -29,7 +29,28 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
     } else if (evt.type === 'checkout.session.completed' && o.mode === 'subscription' && typeof o.subscription === 'string') {
       const sub = await stripe<Parameters<typeof applySubscription>[0]>('GET', `/subscriptions/${o.subscription}`); rid = (await applySubscription(sub)).rid;
     } else if (evt.type.startsWith('customer.subscription.')) {
-      rid = (await applySubscription(o as unknown as Parameters<typeof applySubscription>[0])).rid;
+      const sub = o as unknown as Parameters<typeof applySubscription>[0];
+      const metaRid = (sub.metadata as Record<string, string> | undefined)?.restaurantId;
+      const [prev] = metaRid ? await db.select({ subscriptionStatus: restaurants.subscriptionStatus }).from(restaurants).where(eq(restaurants.id, metaRid)) : [];
+      const applied = await applySubscription(sub); rid = applied.rid;
+      // Chantier 6 (audit) — « paie, reçoit ses e-mails » : confirmation à l'activation (transition
+      // vers active uniquement — pas de relance à chaque renouvellement).
+      if (applied.status === 'active' && applied.plan && applied.rid && prev?.subscriptionStatus !== 'active') {
+        const [rr] = await db.select({ name: restaurants.name, currentPeriodEnd: restaurants.currentPeriodEnd }).from(restaurants).where(eq(restaurants.id, applied.rid));
+        const [owner] = await db.select({ email: users.email, fullName: users.fullName }).from(users)
+          .innerJoin(restaurantMembers, eq(restaurantMembers.userId, users.id))
+          .where(and(eq(restaurantMembers.restaurantId, applied.rid), eq(restaurantMembers.role, 'owner'))).limit(1);
+        if (owner) {
+          const first = owner.fullName.split(' ')[0] || 'chef';
+          const when = rr?.currentPeriodEnd ? new Date(rr.currentPeriodEnd).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : 'dans un mois';
+          await sendMail({
+            to: owner.email, subject: `AFRISUPPLY — votre abonnement ${applied.plan} est actif 🎉`,
+            text: `Bonjour ${first},\n\nC'est confirmé : l'abonnement ${applied.plan} d'AFRISUPPLY est actif pour « ${rr?.name ?? 'votre restaurant'} ».\n\nProchain prélèvement le ${when}. Vous gérez tout (factures, carte, résiliation) depuis l'application : Abonnement.\n\nMerci de nous faire confiance — une question, répondez à cet e-mail.\n\nL'équipe AFRISUPPLY`,
+            html: `<p>Bonjour ${first},</p><p>C'est confirmé : l'abonnement <b>${applied.plan}</b> d'AFRISUPPLY est actif pour <b>« ${rr?.name ?? 'votre restaurant'} »</b>.</p><p>Prochain prélèvement le <b>${when}</b>. Factures, carte et résiliation se gèrent depuis <b>Abonnement</b> dans l'application.</p><p>Merci de nous faire confiance — une question, répondez à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`,
+            tags: { type: 'subscription_active' },
+          });
+        }
+      }
     } else if (evt.type === 'invoice.payment_failed' && typeof o.customer === 'string') {
       await db.update(restaurants).set({ subscriptionStatus: 'past_due' }).where(eq(restaurants.stripeCustomerId, o.customer));
     } else if (evt.type === 'invoice.paid' && typeof o.customer === 'string' && o.subscription) {
@@ -77,7 +98,9 @@ billingRoutes.get('/billing', async (c) => {
 });
 
 billingRoutes.post('/billing/checkout', async (c) => {
-  const { plan } = z.object({ plan: z.enum(['starter', 'pro', 'business']) }).parse(await c.req.json());
+  const parsed = z.object({ plan: z.enum(['starter', 'pro', 'business']) }).safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: 'Formule inconnue (starter, pro ou business)' }, 400);
+  const { plan } = parsed.data;
   if (!stripeConfigured()) return c.json({ error: 'Paiement en ligne bientôt disponible — écrivez-nous à bonjour@afrisupply.fr pour activer votre formule.' }, 503);
   try { const s = await createCheckout(c.get('restaurantId'), c.get('user').email, plan); await audit('billing.checkout', { actorEmail: c.get('user').email, target: c.get('restaurantId'), meta: { plan } }); return c.json({ url: s.url }); }
   catch (e) { return c.json({ error: (e as Error).message }, 502); }

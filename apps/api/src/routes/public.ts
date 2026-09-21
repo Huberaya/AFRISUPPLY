@@ -1,8 +1,8 @@
 // Routes publiques (site vitrine) : tarifs, demande d'accès (lead), + admin léger des leads.
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { and, desc, eq, ilike, isNull, sql } from 'drizzle-orm';
-import { getDb, leads, products } from '@afrisupply/db';
+import { and, desc, eq, ilike, isNotNull, isNull, sql } from 'drizzle-orm';
+import { getDb, leads, products, feedback, restaurants, REFERENCE_PRODUCTS, RECIPE_TEMPLATES } from '@afrisupply/db';
 import { requireAuth, type Env } from '../lib/auth.js';
 
 export const publicRoutes = new Hono<Env>();
@@ -20,6 +20,26 @@ export const PLANS = [
 export const FOUNDER_OFFER = { label: 'Offre pilote fondateur', discountPct: 50, seats: 20, trialDays: 30, description: '−50 % à vie pour les 20 premiers restaurants qui nous aident à construire le produit. Essai gratuit 30 jours, sans carte bancaire.' };
 
 publicRoutes.get('/public/plans', (c) => c.json({ plans: PLANS, founderOffer: FOUNDER_OFFER, marketplaceCommissionPct: '2–5' }));
+
+// ---- Chantier 6 (audit) — preuve sociale : chiffres RÉELS + témoignages publiés (accord du pilote) ----
+publicRoutes.get('/public/proof', async (c) => {
+  const db = await getDb();
+  const rows = await db.select({ message: feedback.message, score: feedback.score, restaurantName: restaurants.name, city: restaurants.city })
+    .from(feedback).innerJoin(restaurants, eq(restaurants.id, feedback.restaurantId))
+    .where(and(eq(feedback.published, true), isNotNull(feedback.message)))
+    .orderBy(desc(feedback.createdAt)).limit(6);
+  const npsRows = await db.select({ score: feedback.score }).from(feedback).where(and(eq(feedback.kind, 'nps'), isNotNull(feedback.score)));
+  const npsAvg = npsRows.length ? Math.round((npsRows.reduce((a, r) => a + Number(r.score), 0) / npsRows.length) * 10) / 10 : null;
+  return c.json({
+    testimonials: rows.map((r) => ({ quote: r.message, restaurant: r.restaurantName, city: r.city, score: r.score != null ? Number(r.score) : null })),
+    metrics: {
+      referenceProducts: REFERENCE_PRODUCTS.length,
+      recipeTemplates: RECIPE_TEMPLATES.length,
+      nps: npsAvg, npsResponses: npsRows.length,
+      founderSeats: FOUNDER_OFFER.seats,
+    },
+  });
+});
 
 const leadBody = z.object({
   restaurantName: z.string().min(2).max(120), contactName: z.string().min(2).max(120), email: z.string().email(), phone: z.string().max(40).optional(),
