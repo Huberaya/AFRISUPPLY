@@ -7,6 +7,7 @@ import { Check, CreditCard, FileText, Mail, ShieldCheck, Sparkles } from 'lucide
 import { api, openPdf, fmtEur } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox } from '../components/ui';
+import { SUPPORT_EMAIL, mailtoSupport } from '../lib/support';
 
 type Plan = { id: 'starter' | 'pro' | 'business'; name: string; priceMonthly: number; founderPrice: number; tagline: string; highlight: boolean; features: readonly string[]; available: boolean };
 type Health = { ok: boolean; stripe: boolean; webhookReady: boolean; missing: string[]; mode: string; message: string; webhookUrl: string };
@@ -41,7 +42,7 @@ export default function Billing() {
       {!data.stripe && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-bold">Paiement en ligne pas encore ouvert sur cet environnement</p>
-          <p className="mt-1">Le guichet de paiement par carte n’est pas encore activé ici : aucun prélèvement ne peut être déclenché depuis cette page. Pour activer une formule, répondez simplement à l’e-mail de bienvenue ou écrivez à <a className="underline" href="mailto:bonjour@afrisupply.fr">bonjour@afrisupply.fr</a> — nous vous envoyons la facture (carte, virement ou prélèvement au choix).</p>
+          <p className="mt-1">Le guichet de paiement par carte n’est pas encore activé ici : aucun prélèvement ne peut être déclenché depuis cette page. Pour activer une formule, répondez simplement à l’e-mail de bienvenue ou écrivez à <a className="underline" href={mailtoSupport('AFRISUPPLY — activer ma formule')}>{SUPPORT_EMAIL}</a> — nous vous envoyons la facture (carte, virement ou prélèvement au choix).</p>
           {data.health.missing.length > 0 && <p className="mt-2 text-xs text-amber-800">Configuration à compléter côté AFRISUPPLY : {data.health.missing.join(', ')}.</p>}
         </div>
       )}
@@ -56,7 +57,7 @@ export default function Billing() {
             {current ? <span className="btn-ghost mt-6 justify-center cursor-default">✓ Votre formule</span>
               : data.hasSubscription && data.state !== 'expired' ? <button className="btn-ghost mt-6 justify-center" onClick={() => void go('/billing/portal')}>Changer pour {p.name}</button>
               : data.stripe ? <button className={`mt-6 justify-center ${p.highlight ? 'btn-primary' : 'btn-ghost'}`} disabled={busy !== null} onClick={() => void go('/billing/checkout', { plan: p.id })}><CreditCard size={16} /> {data.state === 'trialing' ? `Choisir ${p.name}` : `Reprendre avec ${p.name}`}</button>
-              : <a className={`mt-6 justify-center ${p.highlight ? 'btn-primary' : 'btn-ghost'}`} href={`mailto:bonjour@afrisupply.fr?subject=${encodeURIComponent(`AFRISUPPLY — activer la formule ${p.name}`)}&body=${encodeURIComponent(`Bonjour, je souhaite activer la formule ${p.name} (${price} € HT/mois) pour mon restaurant. Merci de m'envoyer la facture et les modalités de paiement.`)}`}><Mail size={16} /> Demander l’activation — {p.name}</a>}
+              : <a className={`mt-6 justify-center ${p.highlight ? 'btn-primary' : 'btn-ghost'}`} href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(`AFRISUPPLY — activer la formule ${p.name}`)}&body=${encodeURIComponent(`Bonjour, je souhaite activer la formule ${p.name} (${price} € HT/mois) pour mon restaurant. Merci de m'envoyer la facture et les modalités de paiement.`)}`}><Mail size={16} /> Demander l’activation — {p.name}</a>}
           </div>); })}
       </div>
       {data.hasSubscription && data.stripe && <div className="card flex flex-wrap items-center justify-between gap-3"><div><p className="font-bold">Gérer mon abonnement</p><p className="text-sm text-stone-600">Moyen de paiement, changement de formule, résiliation — dans votre espace sécurisé Stripe. Vos factures AFRISUPPLY restent ici, téléchargeables.</p></div><button className="btn-ghost" onClick={() => void go('/billing/portal')}>Ouvrir mon espace de facturation</button></div>}
@@ -86,7 +87,7 @@ export default function Billing() {
       <div className="grid gap-3 text-sm text-stone-600 md:grid-cols-3">
         <p className="flex gap-2"><ShieldCheck size={18} className="shrink-0 text-emerald-600" /> Vos données restent à vous : export complet à tout moment dans <Link className="underline" to="/app/parametres">Paramètres</Link>.</p>
         <p className="flex gap-2"><ShieldCheck size={18} className="shrink-0 text-emerald-600" /> Sans engagement : résiliez quand vous voulez, l’accès reste actif jusqu’à la fin du mois payé.</p>
-        <p className="flex gap-2"><ShieldCheck size={18} className="shrink-0 text-emerald-600" /> Une question, un budget serré ? <a className="underline" href="mailto:bonjour@afrisupply.fr">bonjour@afrisupply.fr</a> — on trouve une solution.</p>
+        <p className="flex gap-2"><ShieldCheck size={18} className="shrink-0 text-emerald-600" /> Une question, un budget serré ? <a className="underline" href={mailtoSupport('AFRISUPPLY — question')}>{SUPPORT_EMAIL}</a> — on trouve une solution.</p>
       </div>
     </div>
   );

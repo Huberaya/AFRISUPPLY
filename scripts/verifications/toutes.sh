@@ -3,7 +3,8 @@
 #
 # Chaque script interroge une API RÉELLE (aucune valeur inventée) et vérifie ce qui se passe vraiment :
 # parcours d'achat, réception, prix facturé, alertes, e-mails réellement déposés, facturation, paiements
-# fournisseur, prévision, puis expérience réelle (navigation, dialogues, parcours guidé — chantier 11).
+# fournisseur, prévision, expérience réelle (navigation, dialogues, parcours guidé — chantier 11), puis
+# exploitation (sauvegardes réellement restaurées, tâches surveillées, journal d'audit — chantier 12).
 # Les preuves (messages .outbox, PDF, journaux API) restent sur disque.
 #
 # Usage :
@@ -23,7 +24,7 @@ PAUSE="${AFS_PAUSE:-65}"     # espacement entre scripts : limites de débit d'in
 mkdir -p resultats
 SCRIPTS=(
   chantier1_verif.py chantier2_verif.py scenario_tests.py chantier3_verif.py chantier4_verif.py chantier5_verif.py
-  chantier6_verif.py chantier7_verif.py chantier8_verif.py chantier9_verif.py chantier11_verif.py
+  chantier6_verif.py chantier7_verif.py chantier8_verif.py chantier9_verif.py chantier11_verif.py chantier12_verif.py
 )
 
 echo "API : $AFS_API"
@@ -38,16 +39,21 @@ for s in "${SCRIPTS[@]}"; do
   log="resultats/${s%.py}.log"
   echo "=============================================================="
   echo "→ $s"
-  if ! python3 "$s" > "$log" 2>&1; then
+  if python3 "$s" > "$log" 2>&1; then
+    # Résumé extrait du rapport de chaque script (« 40/40 », « 23/23 »…).
+    # Base 10 explicite : un compteur comme « 08 » ou « 09 » était lu comme un nombre octal par bash
+    # (« value too great for base »), ce qui faussait le TOTAL affiché.
+    line=$(grep -Eo '[0-9]+/[0-9]+' "$log" | tail -1)
+    echo "   $(grep -E '[0-9]+/[0-9]+' "$log" | tail -1 | sed 's/^[[:space:]]*//')"
+    if [ -n "$line" ]; then
+      total_ok=$((total_ok + 10#${line%%/*}))
+      total_checks=$((total_checks + 10#${line##*/}))
+    fi
+  else
     echo "   ✗ ÉCHEC — $log"
     failed=$((failed + 1))
-  fi
-  # Résumé extrait du rapport de chaque script (« 40/40 », « 23/23 »…).
-  line=$(grep -Eo '[0-9]+/[0-9]+' "$log" | tail -1)
-  echo "   $(grep -E '[0-9]+/[0-9]+' "$log" | tail -1 | sed 's/^[[:space:]]*//')"
-  if [ -n "$line" ]; then
-    total_ok=$((total_ok + ${line%%/*}))
-    total_checks=$((total_checks + ${line##*/}))
+    # Un script en échec ne compte pas dans le total : annoncer « 21/0 » mentait sur l'état réel.
+    echo "   $(grep -E '[0-9]+/[0-9]+' "$log" | tail -1 | sed 's/^[[:space:]]*//')"
   fi
   if [ "$i" -lt "${#SCRIPTS[@]}" ]; then sleep "$PAUSE"; fi
 done

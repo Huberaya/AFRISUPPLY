@@ -8,3 +8,6 @@ dist
 .DS_Store
 docs_*.png
 .outbox/
+# Chantier 12 — sauvegardes et essais de restauration : des données clients ne se committent jamais.
+.backups/
+*.json.gz

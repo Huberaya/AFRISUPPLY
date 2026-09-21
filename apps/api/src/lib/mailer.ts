@@ -7,6 +7,7 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { alertAdmin } from './ops.js';
+import { SUPPORT } from './ops-health.js';
 
 export interface MailAttachment { filename: string; content: Buffer | string; contentType?: string }
 export interface Mail { to: string; subject: string; text: string; html: string; tags?: Record<string, string>; attachments?: MailAttachment[] }
@@ -19,7 +20,7 @@ export function mailerConfig() {
   return {
     // resend en prod ; fichier en dev ; « log » (console uniquement) sur serverless sans clé
     transport: (process.env.RESEND_API_KEY ? 'resend' : process.env.VERCEL || process.env.NODE_ENV === 'production' ? 'log' : 'file') as Transport,
-    from: process.env.MAIL_FROM ?? 'AFRISUPPLY <bonjour@afrisupply.fr>',
+    from: process.env.MAIL_FROM ?? `AFRISUPPLY <${SUPPORT.email()}>`,
     outbox: process.env.MAIL_OUTBOX_DIR ?? path.resolve(process.cwd(), '.outbox'),
   };
 }

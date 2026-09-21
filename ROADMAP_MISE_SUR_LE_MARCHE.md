@@ -285,13 +285,14 @@ de chantiers, menés **un par un**, chacun avec ses tests, ses vérifications en
 | 9 | Prévision robuste (cascade de sources, relances, saisonnalité) | ✅ livré |
 | 10 | Qualité, CI et dette : rendre le dépôt fiable et vérifiable | ✅ livré |
 | 11 | UX : recentrer le produit sur le parcours d'achat (navigation, dialogues intégrés, parcours guidé) | ✅ livré |
-| 12 | Exploitation : sauvegardes, supervision, support | ⏳ à venir |
+| 12 | Exploitation : sauvegardes réellement restaurées, supervision des tâches, journal d'audit, support | ✅ livré |
 
 ## Les 30 prochains jours (révisé après audit)
 
 1. ~~**Semaine 1** — Chantier UX : navigation par tâches, plus aucun `alert()`/`confirm()` natif, parcours guidé
    « Rupture → Commander → Recevoir », barre d'onglets mobile.~~ **Fait** (chantier 11).
-2. **Semaine 2** — Chantier Exploitation : sauvegarde/restauration **testées**, supervision branchée, journal d'audit consultable,
-   canal de support, puis test à blanc avec 3 restaurateurs qui n'ont jamais vu le produit.
+2. ~~**Semaine 2** — Chantier Exploitation : sauvegarde/restauration **testées**, supervision branchée, journal d'audit consultable,
+   canal de support.~~ **Fait** (chantier 12) — reste le test à blanc avec 3 restaurateurs qui n'ont jamais vu le produit
+   (protocole : `docs/CHANTIER_11_RECETTE_MANUELLE.md`).
 3. **Semaine 3** — Brancher les clés réelles (Stripe, Resend) sur un environnement de recette, rejouer la CI sur les deux
    environnements, puis ouvrir le pilote fondateur aux premiers restaurants.

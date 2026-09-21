@@ -16,6 +16,9 @@ import { remindPendingVendorOrders } from './reminders.js';
 import { runRecurringOrders } from '../routes/marketplace.js';
 import { recipientsFor as recipientsFrom } from '../lib/recipients.js';
 import { notifyCriticalAlerts, pendingImmediateAlerts, markAlertsNotified } from '../lib/notify.js';
+import { backupAllRestaurants } from '../lib/backup.js';
+import { recordJobRun, statusFrom } from '../lib/job-runs.js';
+import { watchdog } from '../lib/ops-health.js';
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -195,12 +198,36 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
     const now = opts.now ?? new Date(); const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     if (now.getUTCDay() === 1 && admins.length && !opts.dryRun) { const rep = await buildWeeklyPilotReport(now); for (const to of admins) await sendMail({ to, subject: `📊 Pilotes AFRISUPPLY — ${rep.pilots} restaurants, semaine du ${now.toLocaleDateString('fr-FR')}`, text: rep.text, html: rep.html, tags: { type: 'pilot-report' } }); (summary as Record<string, unknown>).pilotReport = rep.pilots; }
   } catch (e) { void captureException(e as Error, { route: '/api/jobs/daily#pilots' }); }
+  for (const e of errors) void captureException(new Error(`daily digest failed: ${e.error}`), { route: '/api/jobs/daily', restaurantId: e.restaurantId });
+  try { if (!opts.dryRun) (summary as Record<string, unknown>).recurring = (await runRecurringOrders(opts.now)).results.length; } catch (e) { await captureException(e, { route: 'jobs/recurring' }); }
+  try { (summary as Record<string, unknown>).reminders = opts.dryRun ? 'skipped' : (await remindPendingVendorOrders({ now: opts.now })).reminded; } catch (e) { await captureException(e, { route: 'jobs/reminders' }); }
+  // Chantier 12 : sauvegarde quotidienne de chaque restaurant (fichier vérifiable + rotation).
+  // Une sauvegarde n'est utile que si elle existe vraiment : on l'écrit, on note sa taille, et
+  // l'échec d'écriture est signalé (jamais avalé).
+  try {
+    if (!opts.dryRun) {
+      const b = await backupAllRestaurants();
+      (summary as Record<string, unknown>).backup = { written: b.written.length, errors: b.errors.length, removed: b.removed.length, keep: b.keep, dir: b.dir, files: b.written.map((w) => ({ name: w.name, rows: w.rows, sizeBytes: w.sizeBytes })) };
+      if (b.errors.length) void captureException(new Error(`Backup échouée : ${b.errors.map((e) => e.error).join(' | ')}`), { route: 'jobs/backup' });
+      // Trace supervisée : sans passage enregistré, /status et le watchdog ne peuvent pas savoir
+      // que les sauvegardes ont réellement lieu (et un disque plein resterait invisible).
+      await recordJobRun({
+        job: 'backup', startedAt, status: statusFrom(b.written.length, b.errors.length),
+        summary: { count: b.written.length, keep: b.keep, dir: b.dir, removed: b.removed.length, bytes: b.written.reduce((a, w) => a + w.sizeBytes, 0) },
+        error: b.errors.length ? b.errors.map((e) => e.error).join(' | ') : null,
+      });
+    } else (summary as Record<string, unknown>).backup = 'skipped';
+  } catch (e) { (summary as Record<string, unknown>).backup = { error: (e as Error).message }; void captureException(e as Error, { route: 'jobs/backup' }); }
+  // Chantier 12 : surveillance croisée — un cron quotidien ne peut pas signaler sa propre absence,
+  // la passe horaire le fait (et inversement).
+  try { (summary as Record<string, unknown>).watchdog = await watchdog({ self: 'daily', now: opts.now }); }
+  catch (e) { void captureException(e as Error, { route: 'jobs/watchdog' }); }
+  // La ligne de supervision est écrite EN DERNIER : elle décrit la passe complète (digest, essais,
+  // relances, sauvegarde, surveillance), pas seulement son début. Sinon un job « ok » cacherait
+  // une sauvegarde ratée.
   const finishedAt = new Date();
   if (!opts.dryRun) {
     try { await db.insert(jobRuns).values({ job: 'daily', status: errors.length === 0 ? 'ok' : errors.length === results.length ? 'error' : 'partial', startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors.map((e) => `${e.name}: ${e.error}`).join(' | ') || null }); } catch (e) { console.error('[jobs] job_runs', e); }
   }
-  for (const e of errors) void captureException(new Error(`daily digest failed: ${e.error}`), { route: '/api/jobs/daily', restaurantId: e.restaurantId });
-  try { if (!opts.dryRun) (summary as Record<string, unknown>).recurring = (await runRecurringOrders(opts.now)).results.length; } catch (e) { await captureException(e, { route: 'jobs/recurring' }); }
-  try { (summary as Record<string, unknown>).reminders = opts.dryRun ? 'skipped' : (await remindPendingVendorOrders({ now: opts.now })).reminded; } catch (e) { await captureException(e, { route: 'jobs/reminders' }); }
   return summary;
 }

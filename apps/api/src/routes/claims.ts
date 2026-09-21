@@ -1,6 +1,7 @@
 // Chantier 26 — Litiges & avoirs : le restaurant réclame (depuis un écart de réception ou librement),
 // le grossiste répond (avoir / relivraison / refus), le restaurant clôt ou escalade vers AFRISUPPLY.
 import { Hono } from 'hono';
+import { syncSequenceToMax } from '../lib/reference.js';
 import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb, claims, orders, orderLines, products, deliveryDiscrepancies, deliveries, vendors, vendorMembers, restaurants, restaurantMembers, users, alerts } from '@afrisupply/db';
@@ -16,7 +17,15 @@ const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
 const KIND: Record<string, string> = { manquant: 'Manquant', abime: 'Abîmé / casse', erreur_produit: 'Erreur de produit', qualite: 'Qualité / DLC', autre: 'Autre' };
 const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 
-async function nextClaimRef() { const db = await getDb(); await db.execute(sql`create sequence if not exists claim_ref_seq`); const res = await db.execute(sql`select nextval('claim_ref_seq') as v`); const rows = (res as unknown as { rows?: { v: string | number }[] }).rows ?? (res as unknown as { v: string | number }[]); return `LIT-${new Date().getFullYear()}-${String(Number((Array.isArray(rows) ? rows[0] : rows).v)).padStart(4, '0')}`; }
+// Numéro de litige `LIT-AAAA-NNNN` : même rattrapage de séquence que les commandes et les factures
+// (une base restaurée contient déjà des LIT-… et la séquence repartirait de 1).
+async function nextClaimRef() {
+  const db = await getDb();
+  await syncSequenceToMax({ sequence: 'claim_ref_seq', table: 'claims', column: 'reference', digitsFrom: 10, pattern: '^LIT-[0-9]{4}-[0-9]+$' });
+  const res = await db.execute(sql`select nextval('claim_ref_seq') as v`);
+  const rows = (res as unknown as { rows?: { v: string | number }[] }).rows ?? (res as unknown as { v: string | number }[]);
+  return `LIT-${new Date().getFullYear()}-${String(Number((Array.isArray(rows) ? rows[0] : rows).v)).padStart(4, '0')}`;
+}
 async function notifyVendor(vendorId: string, subject: string, text: string, kind: 'order.confirmed' = 'order.confirmed') {
   const db = await getDb(); const [v] = await db.select().from(vendors).where(eq(vendors.id, vendorId)); if (!v) return;
   if (v.contactEmail) void sendMail({ to: v.contactEmail, subject, text, html: `<p>${text.replace(/\n/g, '<br>')}</p><p><a href="${APP_URL()}/fournisseur">Ouvrir mon espace</a></p>`, tags: { type: 'claim' } });

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CreditCard, FileText, RefreshCw, ShieldCheck } from 'lucide-react';
 import { api, openPdf } from '../../lib/api';
+import { SUPPORT_EMAIL, mailtoSupport } from '../../lib/support';
 
 type Payment = { stripe: boolean; customer: string | null; card: { id: string; brand: string | null; last4: string | null } | null; mode: 'prelevement' | 'releve_mail'; message: string };
 type Billing = {
@@ -30,7 +31,7 @@ export function Commissions() {
     if (p === 'ok') {
       setMsg('Carte enregistrée — activation du prélèvement en cours…');
       api<{ synced: boolean; payment?: Payment }>('/vendor/billing/sync', { method: 'POST', json: { sessionId: sp.get('session_id') ?? undefined } })
-        .then(async (r) => { await load(); setMsg(r.synced ? '✅ Prélèvement automatique activé : vos commissions seront réglées automatiquement chaque mois.' : 'Carte non confirmée (session incomplète) — réessayez ou écrivez à bonjour@afrisupply.fr.'); })
+        .then(async (r) => { await load(); setMsg(r.synced ? '✅ Prélèvement automatique activé : vos commissions seront réglées automatiquement chaque mois.' : `Carte non confirmée (session incomplète) — réessayez ou écrivez à ${SUPPORT_EMAIL}.`); })
         .catch(async () => { await load(); setMsg('Paiement reçu — l’activation prend quelques secondes, rechargez la page.'); });
     }
     if (p === 'annule') setMsg('Enregistrement de carte annulé — vous pouvez réessayer quand vous voulez.');
@@ -59,7 +60,7 @@ export function Commissions() {
         <p className="mt-1 text-xs text-stone-600">Commission actuelle : <b>{b.commissionPct.toFixed(2).replace('.', ',')} %</b> sur les commandes confirmées. Factures envoyées à <b>{b.recipient ?? '—'}</b> (modifiable dans « Ma fiche »).</p>
         <div className="mt-2 flex flex-wrap gap-2">
           {p.stripe && <button className="btn-primary items-center !text-sm" disabled={busy} onClick={() => void setup()}><CreditCard size={16} /> {p.card ? 'Remplacer ma carte' : 'Activer le prélèvement automatique'}</button>}
-          {!p.stripe && <a className="btn-ghost !text-sm" href="mailto:bonjour@afrisupply.fr?subject=AFRISUPPLY%20%E2%80%94%20r%C3%A8glement%20des%20commissions">Une question ? Écrire à AFRISUPPLY</a>}
+          {!p.stripe && <a className="btn-ghost !text-sm" href={mailtoSupport('AFRISUPPLY — règlement des commissions')}>Une question ? Écrire à AFRISUPPLY</a>}
         </div>
         <p className="mt-2 text-xs text-stone-500">Vous ne payez que sur ce que vous vendez : aucune commission si aucune commande confirmée.</p>
       </div>

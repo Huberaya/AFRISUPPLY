@@ -2,7 +2,7 @@
 #
 # Deux niveaux :
 #   1. « qualite »       : lint + types + tests + build + contrôle du bundle committé (rapide, quelques minutes) ;
-#   2. « verifications » : les 9 scripts de bout en bout contre une API réellement démarrée (PGlite + seed),
+#   2. « verifications » : les 12 scripts de bout en bout contre une API réellement démarrée (PGlite + seed),
 #      avec le serveur web de développement (certains scripts lisent les sources web servies par Vite).
 #
 # Une erreur volontairement introduite (type, lint, test, ou bundle non régénéré) fait échouer la CI.
@@ -84,7 +84,7 @@ jobs:
           curl -sf http://localhost:8787/api/health || (tail -50 /tmp/api.log && exit 1)
           curl -sf -o /dev/null http://localhost:3000/ || (tail -50 /tmp/web.log && exit 1)
 
-      - name: Vérifications de bout en bout (9 scripts)
+      - name: Vérifications de bout en bout (12 scripts)
         env:
           AFS_API: http://localhost:8787/api
           AFS_WEB: http://localhost:3000

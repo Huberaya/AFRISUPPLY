@@ -1,5 +1,7 @@
 // Générateur PDF minimal (sans dépendance) : texte Helvetica, lignes, tableau. Suffisant pour un bon de commande / bon de livraison.
 // Encodage WinAnsi : les caractères accentués français passent ; le reste est remplacé.
+import { SUPPORT } from './ops-health.js';
+
 type Op = string;
 export class Pdf {
   private ops: Op[] = []; private pages: Op[][] = []; private y = 800; readonly w = 595; readonly h = 842; readonly margin = 40;
@@ -74,7 +76,7 @@ export const emitter = () => ({
   address: process.env.INVOICE_ADDRESS ?? '1 rue des Halles, 44000 Nantes',
   siret: process.env.INVOICE_SIRET ?? '',
   vat: process.env.INVOICE_VAT ?? '',
-  email: process.env.INVOICE_EMAIL ?? 'bonjour@afrisupply.fr',
+  email: process.env.INVOICE_EMAIL ?? SUPPORT.email(),
   iban: process.env.INVOICE_IBAN ?? '',
 });
 /** Les mentions obligatoires sont-elles complètes ? Sinon la facture le dit explicitement. */

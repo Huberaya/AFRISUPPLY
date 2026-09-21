@@ -5,9 +5,11 @@
 //   • quantité reçue absurde (1e12) → 500 base de données (BUG-3) ;
 //   • commande à 999 999 colis = 42 M€ acceptée (BUG-4).
 import { describe, it, expect, beforeAll } from 'vitest';
-import { runMigrations } from '@afrisupply/db';
+import { sql } from 'drizzle-orm';
+import { getDb, runMigrations, restaurants, orders } from '@afrisupply/db';
 import { app } from '../app.js';
 import { checkReceive, checkSend, checkStatusChange, checkLineEdit } from '../lib/orders.js';
+import { nextOrderReference, syncOrderReferenceSequence } from '../lib/reference.js';
 
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.CRON_SECRET = 'cron-test'; process.env.PGLITE_DIR = 'memory://order-integrity';
 
@@ -193,4 +195,31 @@ describe('3. Écarts de livraison : le cas 50 kg commandés / 45 reçus', () => 
     const alerts = await call('GET', '/api/alerts', undefined, auth);
     expect(JSON.stringify(alerts.json)).toContain('Écart sur la livraison');
   });
+});
+
+describe('8. Références de commande — une base DÉJÀ REMPLIE (jeu de démonstration, RESTAURATION) ne bloque plus la prise de commande', () => {
+  // Bug réel constaté en vérification de bout en bout : la base contenait des commandes jusqu'à
+  // AFS-…-000103 alors que la séquence `order_ref_seq`, créée par `create sequence if not exists`,
+  // repartait de 1. Résultat : chaque nouvelle commande entrait en collision et l'API répondait 500
+  // — un restaurant dans cet état ne pouvait plus COMMANDER DU TOUT (et une base restaurée depuis une
+  // sauvegarde retombe exactement dans ce cas : les commandes reviennent, pas la séquence).
+  it('la séquence rattrape les références existantes, et la commande passe (201)', async () => {
+    const db = await getDb();
+    const year = new Date().getFullYear();
+    const [resto] = await db.select({ id: restaurants.id }).from(restaurants).limit(1);
+    // 1) l'existant est TRÈS en avance sur le compteur…
+    await db.insert(orders).values({ restaurantId: resto!.id, supplierId, reference: `AFS-${year}-900001`, status: 'brouillon', totalEur: '0.00' });
+    await db.execute(sql`select setval('order_ref_seq', 1, true)`);
+    // 2) …et pourtant la prise de commande doit aboutir, avec une référence neuve.
+    const offer = await offerFor(productA, 25);
+    const r = await newOrder(offer, 1);
+    expect({ status: r.status, error: r.json.error }).toMatchObject({ status: 201 });
+    expect(r.json.order.reference).not.toBe(`AFS-${year}-900001`);
+    expect(r.json.order.reference > `AFS-${year}-900001`).toBe(true);
+    // 3) le rattrapage est vérifiable, et ne recule jamais (la séquence reste au-dessus de l'existant).
+    expect(await syncOrderReferenceSequence()).toBeGreaterThanOrEqual(900001);
+    expect((await nextOrderReference()) > r.json.order.reference).toBe(true);
+    const doublons = await db.execute(sql`select reference, count(*)::int as n from orders group by reference having count(*) > 1`);
+    expect((doublons as unknown as { rows: unknown[] }).rows ?? []).toEqual([]);
+  }, 60_000);
 });

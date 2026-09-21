@@ -6,7 +6,7 @@ import {
   orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, restaurants,
   quantityCeiling,
 } from '@afrisupply/db';
-import { nextOrderReference } from '../lib/reference.js';
+import { insertWithFreshReference } from '../lib/reference.js';
 import { logOrderEvent } from '../lib/order-events.js';
 import { notifyCriticalAlerts } from '../lib/notify.js';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
@@ -341,7 +341,6 @@ restaurantRoutes.post('/orders', async (c) => {
   }), { override: d.override });
   if (outOfRange) return c.json(outOfRange, 400);
 
-  const reference = await nextOrderReference();
   const linesData = d.lines.map((l) => {
     const o = offers.find((x) => x.offer.id === l.offerId)!.offer;
     const qty = l.packs * n(o.packQty); const unit = n(o.packPriceEur) / n(o.packQty);
@@ -349,10 +348,13 @@ restaurantRoutes.post('/orders', async (c) => {
   });
   const total = linesData.reduce((a, l) => a + Number(l.lineTotalEur), 0);
   const expected = new Date(Date.now() + sup.leadTimeHours * 3_600_000).toISOString().slice(0, 10);
-  const [order] = await db.insert(orders).values({
+  // Chantier 12 (suite) : une collision de référence (base semée ou RESTAURÉE) ne doit jamais
+  // empêcher un restaurant de commander — l'insertion retente avec la référence suivante.
+  const [order] = await insertWithFreshReference((reference) => db.insert(orders).values({
     restaurantId: rid, supplierId: sup.id, reference, status: 'preparee', channel: d.channel ?? sup.preferredChannel, expectedAt: expected,
     totalEur: total.toFixed(2), deliveryFeeEur: sup.deliveryFeeEur, source: d.source ?? 'manuel', notes: d.notes, createdBy: user.id,
-  }).returning();
+  }).returning());
+  const reference = order.reference;
   await db.insert(orderLines).values(linesData.map((l) => ({ ...l, orderId: order.id })));
   return c.json({ order, message: `Commande ${reference} préparée chez ${sup.name} pour ${total.toFixed(2).replace('.', ',')} €.` }, 201);
 });

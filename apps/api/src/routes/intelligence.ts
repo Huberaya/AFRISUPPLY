@@ -10,7 +10,7 @@ import {
   recipes, recipeIngredients, sales, forecasts, reorderRules, alerts, restaurants,
 } from '@afrisupply/db';
 
-import { nextOrderReference, insertWithFreshReference } from '../lib/reference.js';
+import { insertWithFreshReference } from '../lib/reference.js';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { forecastRecipes, forecastProducts, buildSmartCart, type CartOffer } from '../lib/forecast.js';
 import { compareOffers, recipeCost, marginAnalysis, supplierReliability, daysOfStock, stockStatus } from '../lib/engines.js';
@@ -106,10 +106,10 @@ intelligenceRoutes.post('/smart-cart/checkout', async (c) => {
     const [sup] = await db.select().from(suppliers).where(and(eq(suppliers.id, s.supplierId), eq(suppliers.restaurantId, rid)));
     if (!sup) continue;
     const offs = await db.select().from(supplierOffers).where(and(eq(supplierOffers.supplierId, sup.id), inArray(supplierOffers.id, s.lines.map((l) => l.offerId))));
-    const reference = await nextOrderReference();
     const lines = s.lines.flatMap((l) => { const o = offs.find((x) => x.id === l.offerId); if (!o) return []; const unit = n(o.packPriceEur) / n(o.packQty); return [{ productId: o.productId, offerId: o.id, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n(o.packQty)).toFixed(3), unitPriceEur: unit.toFixed(4), lineTotalEur: (l.packs * n(o.packPriceEur)).toFixed(2) }]; });
     const total = lines.reduce((a, l) => a + Number(l.lineTotalEur), 0);
-    const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: sup.id, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + sup.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: sup.deliveryFeeEur, source: body.data.source, createdBy: user.id }).returning();
+    const [order] = await insertWithFreshReference((reference) => db.insert(orders).values({ restaurantId: rid, supplierId: sup.id, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + sup.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: sup.deliveryFeeEur, source: body.data.source, createdBy: user.id }).returning());
+    const reference = order.reference;
     await db.insert(orderLines).values(lines.map((l) => ({ ...l, orderId: order.id })));
     created.push({ reference, supplierName: sup.name, total });
   }

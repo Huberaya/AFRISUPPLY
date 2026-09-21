@@ -3,6 +3,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { getDb, restaurants, restaurantMembers, subscriptionInvoices, users, vendors, vendorMembers, commissionInvoices } from '@afrisupply/db';
+import { isUniqueViolation } from './orders.js';
+import { syncSequenceToMax } from './reference.js';
 
 export type PlanId = 'starter' | 'pro' | 'business';
 export const PLAN_RANK: Record<string, number> = { trial: 2, starter: 1, pro: 2, business: 3 }; // l'essai donne les fonctions Pro
@@ -126,10 +128,21 @@ export async function sweepTrials(now = new Date()) {
 
 // ---------- Factures d'abonnement AFRISUPPLY (chantier 7 de l'audit 2) ----------
 
+/**
+ * Rattrapage de la séquence des FACTURES — même classe de bug que les références de commande, mais
+ * aux conséquences comptables : une base qui contient déjà des factures AFR-AAAA-NNNN (restauration
+ * d'une sauvegarde, migration, réimport) voyait la séquence repartir de 1 et le numéro suivant
+ * entrait en collision — or un numéro de facture ne doit JAMAIS être réutilisé.
+ * On aligne la séquence sur le plus grand numéro réellement émis (jamais en arrière).
+ */
+/** Factures d'abonnement `AFR-AAAA-NNNN` : même rattrapage que les références de commande. */
+export const syncInvoiceSequence = () =>
+  syncSequenceToMax({ sequence: 'subscription_invoice_seq', table: 'subscription_invoices', column: 'number', digitsFrom: 10, pattern: '^AFR-[0-9]{4}-[0-9]+$' });
+
 /** Numéro de facture séquentiel : AFR-AAAA-NNNN (même mécanisme que les références de commande). */
 export async function nextInvoiceNumber(now = new Date()): Promise<string> {
   const db = await getDb();
-  await db.execute(sql`create sequence if not exists subscription_invoice_seq`);
+  await syncInvoiceSequence();
   const res = await db.execute(sql`select nextval('subscription_invoice_seq') as v`);
   const rows = (res as unknown as { rows?: { v: string | number }[] }).rows ?? (res as unknown as { v: string | number }[]);
   const v = Number((Array.isArray(rows) ? rows[0] : rows).v);
@@ -153,14 +166,25 @@ export async function recordSubscriptionInvoice(input: InvoiceInput) {
     const [seen] = await db.select().from(subscriptionInvoices).where(eq(subscriptionInvoices.stripeInvoiceId, input.stripeInvoiceId));
     if (seen) return { created: false as const, invoice: seen };
   }
-  const number = await nextInvoiceNumber(input.periodStart);
-  const [row] = await db.insert(subscriptionInvoices).values({
-    restaurantId: input.restaurantId, number, plan: input.plan, founder: !!input.founder,
-    amountEur: input.amountEur.toFixed(2), vatRate: (input.vatRate ?? 20).toFixed(2),
-    periodStart: input.periodStart, periodEnd: input.periodEnd, source: input.source ?? 'stripe',
-    status: input.status ?? 'payee', stripeInvoiceId: input.stripeInvoiceId ?? null, hostedUrl: input.hostedUrl ?? null,
-    paidAt: input.paidAt ?? (input.status && input.status !== 'payee' ? null : new Date()), createdBy: input.createdBy ?? null, note: input.note ?? null,
-  }).returning();
+  // Un numéro de facture ne peut pas être réutilisé : si la séquence est en retard sur l'existant
+  // (base restaurée), on réaligne et on retente — on n'échoue pas, et on ne duplique jamais un numéro.
+  let row: typeof subscriptionInvoices.$inferSelect | undefined;
+  for (let essai = 0; essai < 4 && !row; essai += 1) {
+    const number = await nextInvoiceNumber(input.periodStart);
+    try {
+      [row] = await db.insert(subscriptionInvoices).values({
+        restaurantId: input.restaurantId, number, plan: input.plan, founder: !!input.founder,
+        amountEur: input.amountEur.toFixed(2), vatRate: (input.vatRate ?? 20).toFixed(2),
+        periodStart: input.periodStart, periodEnd: input.periodEnd, source: input.source ?? 'stripe',
+        status: input.status ?? 'payee', stripeInvoiceId: input.stripeInvoiceId ?? null, hostedUrl: input.hostedUrl ?? null,
+        paidAt: input.paidAt ?? (input.status && input.status !== 'payee' ? null : new Date()), createdBy: input.createdBy ?? null, note: input.note ?? null,
+      }).returning();
+    } catch (e) {
+      if (!isUniqueViolation(e, 'number')) throw e;
+      await syncInvoiceSequence();
+    }
+  }
+  if (!row) throw new Error('Numéro de facture introuvable après plusieurs essais : vérifiez la séquence subscription_invoice_seq.');
   return { created: true as const, invoice: row };
 }
 

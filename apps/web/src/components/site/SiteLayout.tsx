@@ -4,6 +4,7 @@ import { Menu, X, ShoppingCart } from 'lucide-react';
 import { useCart } from '../../lib/cart';
 import { useAuth } from '../../lib/auth';
 import { Logo } from '../AppLayout';
+import { SUPPORT_EMAIL, mailtoSupport } from '../../lib/support';
 
 const NAV = [{ to: '/catalogue', label: 'Catalogue' }, { to: '/pour-les-restaurants', label: 'Pour les restaurants' }, { to: '/fournisseur', label: 'Grossistes' }, { to: '/tarifs', label: 'Tarifs' }];
 
@@ -24,9 +25,9 @@ export default function SiteLayout() {
       <main><Outlet /></main>
       <footer className="border-t border-stone-100 bg-stone-50">
         <div className="mx-auto grid max-w-6xl gap-8 px-4 py-12 md:grid-cols-4 lg:px-8">
-          <div className="md:col-span-2"><Logo to="/" /><p className="mt-3 max-w-sm text-sm text-stone-600">L’assistant d’approvisionnement intelligent des restaurants africains. Achetez mieux. Gaspillez moins. Gagnez plus.</p><p className="mt-3 text-xs text-stone-500">Nantes, France · bonjour@afrisupply.fr</p></div>
+          <div className="md:col-span-2"><Logo to="/" /><p className="mt-3 max-w-sm text-sm text-stone-600">L’assistant d’approvisionnement intelligent des restaurants africains. Achetez mieux. Gaspillez moins. Gagnez plus.</p><p className="mt-3 text-xs text-stone-500">Nantes, France · {SUPPORT_EMAIL}</p></div>
           <div className="text-sm"><p className="font-bold">Produit</p><ul className="mt-2 space-y-1 text-stone-600"><li><Link to="/fonctionnalites">Fonctionnalités</Link></li><li><Link to="/tarifs">Tarifs</Link></li><li><Link to="/faq">FAQ</Link></li><li><Link to="/connexion">Connexion</Link></li></ul></div>
-          <div className="text-sm"><p className="font-bold">Entreprise</p><ul className="mt-2 space-y-1 text-stone-600"><li><Link to="/demander-un-acces">Devenir restaurant pilote</Link></li><li><Link to="/fournisseur">Vous êtes grossiste ? Vendre sur AFRISUPPLY</Link></li><li><a href="mailto:bonjour@afrisupply.fr">Contact</a></li><li><Link to="/mentions-legales">Mentions légales & confidentialité</Link></li><li><Link to="/cgv">CGV / CGU</Link></li><li><Link to="/cgv-fournisseur">Conditions fournisseur</Link></li><li><Link to="/statut">État de la plateforme</Link></li></ul></div>
+          <div className="text-sm"><p className="font-bold">Entreprise</p><ul className="mt-2 space-y-1 text-stone-600"><li><Link to="/demander-un-acces">Devenir restaurant pilote</Link></li><li><Link to="/fournisseur">Vous êtes grossiste ? Vendre sur AFRISUPPLY</Link></li><li><a href={mailtoSupport('AFRISUPPLY — contact')}>Contact</a></li><li><Link to="/mentions-legales">Mentions légales & confidentialité</Link></li><li><Link to="/cgv">CGV / CGU</Link></li><li><Link to="/cgv-fournisseur">Conditions fournisseur</Link></li><li><Link to="/statut">État de la plateforme</Link></li></ul></div>
         </div>
         <p className="pb-8 text-center text-xs text-stone-400">© {new Date().getFullYear()} AFRISUPPLY — Fait avec ❤️ pour les cuisines africaines de France.</p>
       </footer>

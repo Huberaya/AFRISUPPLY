@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Check, Minus } from 'lucide-react';
 import { PLANS, FOUNDER } from '../../lib/plans';
+import { SUPPORT_EMAIL, mailtoSupport } from '../../lib/support';
 
 const MATRIX: { group: string; rows: { label: string; starter: boolean | string; pro: boolean | string; business: boolean | string }[] }[] = [
   { group: 'Achats au quotidien', rows: [
@@ -46,7 +47,7 @@ export default function Pricing() {
       </div>
       <div className="mt-12 grid gap-6 md:grid-cols-2">
         <div className="card"><h3 className="font-bold">Marketplace fournisseurs (bientôt)</h3><p className="mt-2 text-sm text-stone-600">Commandez chez des fournisseurs partenaires directement dans l’app. Gratuit pour vous : une commission de 2 à 5 % est prise côté fournisseur.</p></div>
-        <div className="card"><h3 className="font-bold">Une question sur les tarifs ?</h3><p className="mt-2 text-sm text-stone-600">Écrivez-nous à <a className="underline" href="mailto:bonjour@afrisupply.fr">bonjour@afrisupply.fr</a> ou demandez une démo de 20 minutes.</p><Link to="/demander-un-acces" className="btn-primary mt-4">Demander une démo</Link></div>
+        <div className="card"><h3 className="font-bold">Une question sur les tarifs ?</h3><p className="mt-2 text-sm text-stone-600">Écrivez-nous à <a className="underline" href={mailtoSupport('AFRISUPPLY — question sur les tarifs')}>{SUPPORT_EMAIL}</a> ou demandez une démo de 20 minutes.</p><Link to="/demander-un-acces" className="btn-primary mt-4">Demander une démo</Link></div>
         <div className="card md:col-span-2"><h3 className="font-bold">Comment ça se passe concrètement ?</h3>
           <ul className="mt-2 space-y-2 text-sm text-stone-600">
             <li><b>Essai :</b> {FOUNDER.trialDays} jours, toutes les fonctions Pro, sans carte bancaire. Aucun prélèvement automatique à la fin : nous vous demandons confirmation.</li>

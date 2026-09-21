@@ -19,7 +19,7 @@ le serveur web doit donc tourner aussi. Les variables `AFS_API` et `AFS_WEB` per
 ## Exécution
 
 ```bash
-npm run verifs:e2e                 # les 11 scripts d'affilée (~25 min : pauses anti-limitation de débit)
+npm run verifs:e2e                 # les 12 scripts d'affilée (~30 min : pauses anti-limitation de débit)
 AFS_PAUSE=0 npm run verifs:e2e     # sans pauses (comptes de test déjà espacés)
 python3 scripts/verifications/chantier9_verif.py   # un seul script
 ```
@@ -41,6 +41,7 @@ Le lanceur sort en **erreur** si un script échoue.
 | `chantier7_verif.py` | Encaissement : essai, formules, factures (PDF réellement joint), santé de la facturation, bascule admin |
 | `chantier8_verif.py` | Parcours client et paiements fournisseur : carte enregistrée, commissions calculées et facturées, isolation entre vendeurs |
 | `chantier9_verif.py` | Prévision : cascade de sources (ventes 28 j → 7 j → couverts → seuils), jours fermés, saisonnalité, relances graduées, lot d'alertes complet |
+| `chantier12_verif.py` | Exploitation : export réel des données du restaurant, **restauration prouvée dans une base neuve**, détection d'altération, refus d'écraser une base non vide, rotation des fichiers, supervision des tâches (cron muet détecté), journal d'audit + CSV, canal de support unique |
 | `chantier11_verif.py` | Expérience réelle : plus aucune boîte de dialogue du navigateur, confirmations accessibles, notifications, menu par tâche, recherche d'écran, parcours « Rupture → Commander → Recevoir », erreurs avec « Réessayer » — et les écrans du parcours répondent sur l'API |
 
-Dernier relevé complet : **437 vérifications**, 11 scripts sur 11 (voir le rapport de fin de chantier 11).
+Dernier relevé complet : **507 vérifications**, 12 scripts sur 12 (voir le rapport de fin de chantier 12).

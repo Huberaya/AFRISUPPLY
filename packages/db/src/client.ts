@@ -44,3 +44,14 @@ export async function getDb(): Promise<Db> {
   }
   return _db;
 }
+
+/**
+ * Ouvre une base INDÉPENDANTE du singleton applicatif (fichier ou `memory://nom`).
+ * Sert à une seule chose, mais essentielle : prouver qu'une sauvegarde se restaure vraiment —
+ * on la restaure dans une base NEUVE, on compte les lignes, puis on jette cette base.
+ */
+export async function openDatabase(dataDir: string): Promise<Db> {
+  const { PGlite } = await import('@electric-sql/pglite');
+  const { drizzle } = await import('drizzle-orm/pglite');
+  return drizzle(new PGlite(dataDir), { schema }) as unknown as Db;
+}

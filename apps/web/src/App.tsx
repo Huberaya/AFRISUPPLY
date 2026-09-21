@@ -27,6 +27,8 @@ const VendorSpace = lazy(() => import('./pages/vendor/VendorSpace'));
 const AdminVendors = lazy(() => import('./pages/admin/AdminVendors'));
 const AdminBilling = lazy(() => import('./pages/admin/AdminBilling'));
 const AdminPilots = lazy(() => import('./pages/admin/AdminPilots'));
+const AdminOps = lazy(() => import('./pages/admin/AdminOps'));
+const MesDonnees = lazy(() => import('./pages/MesDonnees'));
 const AdminProspects = lazy(() => import('./pages/admin/AdminProspects'));
 const AdminReference = lazy(() => import('./pages/admin/AdminReference'));
 const AdminClaims = lazy(() => import('./pages/admin/AdminClaims'));
@@ -110,6 +112,8 @@ export default function App() {
                 <Route path="admin/referentiel" element={<AdminReference />} />
                 <Route path="admin" element={<AdminDashboard />} />
                 <Route path="admin/litiges" element={<AdminClaims />} />
+                <Route path="admin/exploitation" element={<AdminOps />} />
+                <Route path="mes-donnees" element={<MesDonnees />} />
                 <Route path="abonnement" element={<Billing />} />
                 <Route path="etablissements" element={<Establishments />} />
                 <Route path="fournisseurs/:id" element={<SupplierDetail />} />

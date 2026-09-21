@@ -46,6 +46,18 @@ export const fmtDate = (iso: string | null | undefined) => iso ? new Date(iso).t
 export const CATEGORY_LABEL: Record<string, string> = { feculents: '🌾 Féculents', frais: '🥬 Frais', viandes_poissons: '🥩 Viandes & poissons', epicerie: '🫙 Épicerie', boissons: '🥤 Boissons', emballages: '📦 Emballages' };
 export const STATUS_LABEL: Record<string, string> = { brouillon: 'Brouillon', preparee: 'Préparée', envoyee: 'Envoyée', confirmee: 'Confirmée', livree_partiel: 'Livrée (écart)', livree: 'Livrée', annulee: 'Annulée' };
 
+/** Télécharge un fichier protégé par JWT (export de mes données, journal d'audit, sauvegarde). */
+export async function downloadFile(path: string, filename: string) {
+  const headers: Record<string, string> = {};
+  const t = tokenStore.get(); if (t) headers.Authorization = `Bearer ${t}`;
+  const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
+  const res = await fetch(`/api${path}`, { headers });
+  if (!res.ok) throw new ApiError(res.status, 'Téléchargement impossible');
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 /** Ouvre un PDF protégé par JWT dans un nouvel onglet (chantier 16). */
 export async function openPdf(path: string) {
   const headers: Record<string, string> = {}; const t = tokenStore.get(); if (t) headers.Authorization = `Bearer ${t}`; const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;

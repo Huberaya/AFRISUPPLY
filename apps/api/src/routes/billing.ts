@@ -5,6 +5,7 @@ import { and, eq, sql, desc } from 'drizzle-orm';
 import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { PLANS, FOUNDER_OFFER } from './public.js';
+import { SUPPORT } from '../lib/ops-health.js';
 import {
   accessState, applySubscription, createCheckout, createPortal, stripe, stripeConfigured, verifyStripeSignature,
   priceIdFor, billingEnforced, billingHealth, seatsFor, planPrice, billingRecipient, effectivePrice, mrr, recentInvoices,
@@ -206,7 +207,7 @@ billingRoutes.post('/billing/invoices/:id/send', async (c) => {
 
 billingRoutes.post('/billing/checkout', async (c) => {
   const { plan } = z.object({ plan: z.enum(['starter', 'pro', 'business']) }).parse(await c.req.json());
-  if (!stripeConfigured()) return c.json({ error: 'Paiement en ligne bientôt disponible — écrivez-nous à bonjour@afrisupply.fr pour activer votre formule.' }, 503);
+  if (!stripeConfigured()) return c.json({ error: `Paiement en ligne bientôt disponible — écrivez-nous à ${SUPPORT.email()} pour activer votre formule.` }, 503);
   try { const s = await createCheckout(c.get('restaurantId'), c.get('user').email, plan); await audit('billing.checkout', { actorEmail: c.get('user').email, target: c.get('restaurantId'), meta: { plan } }); return c.json({ url: s.url }); }
   catch (e) { return c.json({ error: (e as Error).message }, 502); }
 });

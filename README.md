@@ -20,10 +20,10 @@ Tout ce qui suit est exécuté par la CI (`.github/workflows/ci.yml`) **et** dis
 |---|---|---|
 | `npm run lint` | ESLint (flat config, plugin `react-hooks` inclus) | **0 erreur, 0 avertissement** |
 | `npm run typecheck` | `tsc` sur `packages/db`, `apps/api`, `apps/web` (séquentiel) | ✅ |
-| `npm test` | Vitest : base de données 5 · API 273 · web 53 | **331 tests** |
+| `npm test` | Vitest : base de données 5 · API 305 · web 67 | **377 tests** |
 | `npm run build` | Bundle web (`vite build`) | ✅ |
 | `npm run check:bundle` | `api/index.js` (bundle Vercel **committé**) correspond-il aux sources ? | ✅ |
-| `npm run verifs:e2e` | 11 scripts de vérification **contre une API réelle** (parcours, réception, prix, alertes, e-mail, facturation, paiements, prévision, expérience) | **437 vérifications** |
+| `npm run verifs:e2e` | 12 scripts de vérification **contre une API réelle** (parcours, réception, prix, alertes, e-mail, facturation, paiements, prévision, expérience, exploitation) | **507 vérifications** |
 
 `npm run verify` enchaîne lint → typecheck → tests → build → bundle. Les scripts de bout en bout
 (`scripts/verifications/`) démarrent leur propre API (PGlite) et écrivent leurs preuves dans
@@ -35,7 +35,7 @@ Tout ce qui suit est exécuté par la CI (`.github/workflows/ci.yml`) **et** dis
 - **Paiement en ligne** : sans `STRIPE_SECRET_KEY` / `STRIPE_PRICE_*`, `/billing/checkout` répond 503 et le web l'affiche honnêtement ; le passage d'un client en formule payante se fait à la main par l'admin, en attendant la clé.
 - **E-mail** : avec `RESEND_API_KEY` les mails partent réellement ; sans clé, ils sont écrits dans `.outbox` (dev) et **refusés** en production (jamais de « envoyé » mensonger).
 - **WhatsApp / SMS** : nécessite Twilio ; sans configuration, l'écran Réglages dit que rien n'a été envoyé.
-- **Sauvegardes / supervision** : `/api/status` expose l'état réel, mais aucune procédure de sauvegarde/restauration n'est encore documentée ni testée (chantier « Exploitation » à venir).
+- **Sauvegardes / supervision** : chantier 12 livré — sauvegarde quotidienne par restaurant (fichier gzip + empreinte SHA-256), **essai de restauration réel dans une base neuve** (`POST /api/admin/backups/drill`), refus d'écraser une base non vide, rotation, journal d'audit exportable, écran « Mes données » côté restaurant et écran « Exploitation » côté plateforme. Ce qui reste : la sauvegarde ne quitte pas encore la machine (pas de copie hors site S3 — V2) et la restauration en production est une procédure manuelle documentée.
 
 ---
 
@@ -138,7 +138,7 @@ Fonctions pures, testées (`npm test`), portées d'ethimarket (`alertsEngine`, `
 | `npm run verify` | **Porte de sortie** : lint → typecheck → tests → build → contrôle du bundle |
 | `npm run typecheck` / `npm test` / `npm run lint` | Qualité (un workspace à la fois, séquentiel) |
 | `npm run check:bundle` | Échoue si `api/index.js` n'est plus le bundle des sources |
-| `npm run verifs:e2e` | 11 scripts de vérification sur API réelle (~25 min, nécessite l'API sur :8787) |
+| `npm run verifs:e2e` | 12 scripts de vérification sur API réelle (~30 min, nécessite l'API sur :8787) |
 | `npm run db:generate` | Génère une migration SQL après modification de `schema.ts` |
 | `npm run db:migrate` / `npm run db:seed` | Applique / seed (PGlite ou Neon selon `DATABASE_URL`) |
 | `npm run build` | Typecheck des workspaces + build web (`apps/web/dist`) |

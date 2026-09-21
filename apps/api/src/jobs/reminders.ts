@@ -5,6 +5,7 @@ import { sendMail } from '../lib/mailer.js';
 import { sendMessage } from '../lib/sms.js';
 import { recordJobRun, statusFrom } from '../lib/job-runs.js';
 import { notifyAllRestaurants } from '../lib/notify.js';
+import { watchdog } from '../lib/ops-health.js';
 
 const APP_URL = () => process.env.APP_URL ?? 'http://localhost:5173';
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
@@ -25,9 +26,12 @@ export async function remindPendingVendorOrders(opts: { hours?: number; now?: Da
     out.push({ reference: o.reference, vendor: v.name, channel, ok });
   }
   // Chantier 6 (audit) : chaque passage de job laisse une trace supervisable (qui a été relancé, par quel canal).
+  // Chantier 12 : la passe horaire surveille le job quotidien (et réciproquement) — un cron
+  // arrêté ne doit pas rester invisible des semaines.
+  const watch = await watchdog({ self: 'reminders', now });
   await recordJobRun({
     job: 'reminders', startedAt, status: statusFrom(out.filter((o) => o.ok).length, out.filter((o) => !o.ok).length),
-    summary: { hours, candidates: rows.length, reminded: out.length, channels: out.map((o) => o.channel) },
+    summary: { hours, candidates: rows.length, reminded: out.length, channels: out.map((o) => o.channel), watchdog: watch },
     error: out.some((o) => !o.ok) ? `${out.filter((o) => !o.ok).length} relance(s) sans canal réel` : null,
   });
   return { ranAt: now.toISOString(), hours, reminded: out.length, details: out };

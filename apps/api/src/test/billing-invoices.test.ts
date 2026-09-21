@@ -9,10 +9,10 @@ import { createServer, type Server } from 'node:http';
 import { readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { runMigrations, getDb, restaurants, subscriptionInvoices, billingEvents, jobRuns } from '@afrisupply/db';
 import { app } from '../app.js';
-import { billingHealth, nextInvoiceNumber, recordSubscriptionInvoice, billingRecipient } from '../lib/billing.js';
+import { billingHealth, nextInvoiceNumber, recordSubscriptionInvoice, billingRecipient, syncInvoiceSequence } from '../lib/billing.js';
 import { emitterComplete } from '../lib/pdf.js';
 
 process.env.NODE_ENV = 'test';
@@ -299,4 +299,38 @@ describe('admin : bascule manuelle, encaissement, absence de bouton trompeur', (
     expect(h.status).toBe(200);
     expect(JSON.stringify(h.json)).not.toMatch(/cus_fake|sk_test|in_fake/);
   });
+});
+
+describe('numérotation des factures après RESTAURATION d’une sauvegarde (même bug que les références de commande)', () => {
+  // Une base restaurée (chantier 12) contient déjà ses factures AFR-AAAA-NNNN, mais la séquence
+  // `subscription_invoice_seq` repart de 1 : sans rattrapage, le numéro suivant entre en collision.
+  // Or un numéro de facture ne doit JAMAIS être réutilisé (obligation comptable, pas confort).
+  it('la séquence rattrape les factures existantes et le prochain numéro reste unique', async () => {
+    const db = await getDb();
+    const year = new Date().getFullYear();
+    const [r] = await db.select().from(restaurants).limit(1);
+    const existantes = await db.select().from(subscriptionInvoices);
+    // 1) on simule l'état « base restaurée » : une facture très en avance + séquence remise à 1
+    await db.insert(subscriptionInvoices).values({
+      restaurantId: r!.id, number: `AFR-${year}-7001`, plan: 'pro', amountEur: '54.00', vatRate: '20.00',
+      periodStart: new Date(), periodEnd: new Date(), source: 'manuel', status: 'payee',
+    });
+    await db.execute(sql`select setval('subscription_invoice_seq', 1, true)`);
+
+    const rattrapage = await syncInvoiceSequence();
+    expect(rattrapage).toBeGreaterThanOrEqual(7001);
+
+    const numero = await nextInvoiceNumber();
+    expect(numero > `AFR-${year}-7001`).toBe(true);
+    expect(existantes.map((e) => e.number)).not.toContain(numero);
+
+    // 2) la facture suivante s'enregistre réellement, sans doublon de numéro en base
+    const rec = await recordSubscriptionInvoice({
+      restaurantId: r!.id, plan: 'pro', amountEur: 54, periodStart: new Date(), periodEnd: new Date(),
+      source: 'manuel', stripeInvoiceId: `manual-test-${Date.now()}`,
+    });
+    expect(rec.created).toBe(true);
+    const doublons = await db.execute(sql`select number, count(*)::int as n from subscription_invoices group by number having count(*) > 1`);
+    expect((doublons as unknown as { rows: unknown[] }).rows ?? []).toEqual([]);
+  }, 30_000);
 });

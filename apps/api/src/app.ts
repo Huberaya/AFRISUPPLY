@@ -25,6 +25,7 @@ import { marketplaceRoutes } from './routes/marketplace.js';
 import { shoppingRoutes } from './routes/shopping.js';
 import { vendorRoutes, vendorAdminRoutes } from './routes/vendor.js';
 import { statusRoutes } from './routes/status.js';
+import { opsRoutes, adminOpsRoutes } from './routes/ops.js'; // chantier 12 : sauvegardes, supervision, journal d'audit
 import { captureException, securityHeaders, rateLimit, buildInfo } from './lib/ops.js';
 import { resolveCorsOrigin, setKnownRoutes } from './lib/security.js';
 
@@ -48,6 +49,8 @@ app.use('/api/*', cors({ origin: (o) => resolveCorsOrigin(o), credentials: true 
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'afrisupply-api', db: isNeon() ? 'neon' : 'pglite-local', time: new Date().toISOString(), ...buildInfo() }));
 app.route('/api', statusRoutes);
+app.route('/api', opsRoutes);        // chantier 12 : export des données du restaurant (propriétaire)
+app.route('/api', adminOpsRoutes);   // chantier 12 : exploitation (jobs, sauvegardes, audit) — admin uniquement
 app.route('/api', jobsRoutes); // cron (secret propre)
 app.route('/api', publicRoutes);
 app.route('/api', storefrontRoutes); // vitrine publique (chantier 13)

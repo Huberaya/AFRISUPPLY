@@ -5,8 +5,9 @@ import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, commissionInvoices, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
 import { similarity } from '../lib/quick.js';
-import { nextOrderReference } from '../lib/reference.js';
+import { insertWithFreshReference } from '../lib/reference.js';
 import { requireAuth, type Env } from '../lib/auth.js';
+import { SUPPORT } from '../lib/ops-health.js';
 import { sendMail } from '../lib/mailer.js';
 import { sendMessage, waLink } from '../lib/sms.js';
 import { maybeRemind } from '../jobs/reminders.js';
@@ -359,7 +360,7 @@ vendorRoutes.post('/vendor/group-buys/:id/close', async (c) => {
     if (p.packs <= 0 || p.orderId) continue;
     const link = await linkVendor(p.restaurantId, vid); if (!link) continue;
     const total = p.packs * packPrice;
-    const [order] = await db.insert(orders).values({ restaurantId: p.restaurantId, supplierId: link.supplier.id, vendorId: vid, reference: await nextOrderReference(), status: 'confirmee', channel: 'plateforme', sentAt: new Date(), vendorDecisionAt: new Date(), expectedAt: gb.deliveryDate ?? new Date(Date.now() + v.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: '0', source: 'achat_groupe', notes: `Achat groupé « ${gb.title} » : −${n(gb.discountPct)} %` }).returning();
+    const [order] = await insertWithFreshReference((reference) => db.insert(orders).values({ restaurantId: p.restaurantId, supplierId: link.supplier.id, vendorId: vid, reference, status: 'confirmee', channel: 'plateforme', sentAt: new Date(), vendorDecisionAt: new Date(), expectedAt: gb.deliveryDate ?? new Date(Date.now() + v.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: '0', source: 'achat_groupe', notes: `Achat groupé « ${gb.title} » : −${n(gb.discountPct)} %` }).returning());
     await db.insert(orderLines).values({ orderId: order.id, productId: offer.productId, packLabel: offer.packLabel, packs: p.packs, quantity: (p.packs * n(offer.packQty)).toFixed(3), unitPriceEur: (packPrice / n(offer.packQty)).toFixed(4), lineTotalEur: total.toFixed(2) });
     await db.insert(commissions).values({ vendorId: vid, orderId: order.id, orderTotalEur: total.toFixed(2), pct: v.commissionPct, amountEur: (total * n(v.commissionPct) / 100).toFixed(2), period: new Date().toISOString().slice(0, 7) }).onConflictDoNothing();
     await db.update(groupBuyParticipations).set({ orderId: order.id }).where(eq(groupBuyParticipations.id, p.id));
@@ -390,7 +391,7 @@ vendorRoutes.get('/vendor/billing', async (c) => {
 
 /** Enregistrer une carte (Stripe Checkout en mode « setup ») : aucun débit à cette étape. */
 vendorRoutes.post('/vendor/billing/setup', async (c) => {
-  if (!stripeConfigured()) return c.json({ error: 'Enregistrement de carte indisponible sur cette installation — vos commissions sont facturées par e-mail, à régler par virement. Écrivez à bonjour@afrisupply.fr pour toute question.' }, 503);
+  if (!stripeConfigured()) return c.json({ error: `Enregistrement de carte indisponible sur cette installation — vos commissions sont facturées par e-mail, à régler par virement. Écrivez à ${SUPPORT.email()} pour toute question.` }, 503);
   try {
     const session = await createVendorSetupSession(c.get('vendorId'), c.get('user').email);
     await audit('vendor.billing.setup', { actorEmail: c.get('user').email, target: c.get('vendorId') });

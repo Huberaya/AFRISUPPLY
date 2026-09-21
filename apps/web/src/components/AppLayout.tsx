@@ -63,6 +63,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { to: '/app/equipe', icon: Users, label: 'Équipe & sécurité', hint: 'membres, rôles, mot de passe' },
       { to: '/app/parametres', icon: SettingsIcon, label: 'Paramètres', hint: 'alertes, seuils, envois', minRole: 'manager' },
       { to: '/app/abonnement', icon: CreditCard, label: 'Abonnement', hint: 'formule, factures, paiement' },
+      { to: '/app/mes-donnees', icon: ShieldCheck, label: 'Mes données', hint: 'export, sauvegardes, support', minRole: 'owner' },
     ],
   },
 ];
@@ -169,7 +170,7 @@ export default function AppLayout() {
           <div>
             <p className="px-3 pb-1 text-[11px] font-bold uppercase tracking-wide text-stone-500">Admin AFRISUPPLY</p>
             <div className="space-y-1">
-              {[['/app/admin', 'Tableau de bord'], ['/app/admin/pilotes', 'Cockpit pilotes'], ['/app/admin/prospection', 'Prospection'], ['/app/admin/abonnements', 'Abonnements'], ['/app/admin/fournisseurs', 'Fournisseurs plateforme'], ['/app/admin/referentiel', 'Référentiel produits'], ['/app/admin/litiges', 'Litiges']].map(([to, label]) => <NavLink key={to} to={to} end={to === '/app/admin'} onClick={() => setOpen(false)} className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${isActive ? 'bg-brand-700 text-white' : 'hover:bg-stone-800 text-stone-300'}`}><ShieldCheck size={18} /> {label}</NavLink>)}
+              {[['/app/admin', 'Tableau de bord'], ['/app/admin/pilotes', 'Cockpit pilotes'], ['/app/admin/prospection', 'Prospection'], ['/app/admin/abonnements', 'Abonnements'], ['/app/admin/fournisseurs', 'Fournisseurs plateforme'], ['/app/admin/referentiel', 'Référentiel produits'], ['/app/admin/litiges', 'Litiges'], ['/app/admin/exploitation', 'Exploitation']].map(([to, label]) => <NavLink key={to} to={to} end={to === '/app/admin'} onClick={() => setOpen(false)} className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${isActive ? 'bg-brand-700 text-white' : 'hover:bg-stone-800 text-stone-300'}`}><ShieldCheck size={18} /> {label}</NavLink>)}
             </div>
           </div>
         )}
