@@ -37,12 +37,31 @@ export async function loadContext(rid: string) {
   ]);
   const stats = new Map(statRows.map((r) => [r.supplierId, { delivered: n(r.delivered), late: n(r.late), discrepancies: n(r.disc), spent: n(r.spent), reliability: supplierReliability({ delivered: n(r.delivered), late: n(r.late), discrepancies: n(r.disc) }) }]));
   const offers: CartOffer[] = offerRows.map(({ offer, supplier }) => ({ offerId: offer.id, supplierId: supplier.id, supplierName: supplier.name, productId: offer.productId, packLabel: offer.packLabel, packQty: n(offer.packQty), packPrice: n(offer.packPriceEur), unitPrice: n(offer.packPriceEur) / n(offer.packQty), inStock: offer.inStock, leadTimeHours: supplier.leadTimeHours, deliveryFee: n(supplier.deliveryFeeEur), minOrder: n(supplier.minOrderEur), reliabilityPct: stats.get(supplier.id)?.reliability ?? 85 }));
-  const stocks = inv.map(({ item, product }) => ({ productId: product.id, productName: product.name, unit: product.baseUnit, quantity: n(item.quantity), criticalLevel: n(item.criticalLevel), targetLevel: item.targetLevel ? n(item.targetLevel) : null, shelfLifeDays: product.shelfLifeDays, preferredSupplierId: item.preferredSupplierId, inventoryItemId: item.id }));
+  const stocks = inv.map(({ item, product }) => ({ productId: product.id, productName: product.name, unit: product.baseUnit, quantity: n(item.quantity), criticalLevel: n(item.criticalLevel), targetLevel: item.targetLevel ? n(item.targetLevel) : null, shelfLifeDays: product.shelfLifeDays, seasonality: product.seasonality, preferredSupplierId: item.preferredSupplierId, inventoryItemId: item.id }));
   const ingredients = ingRows.map((i) => ({ ...i, quantity: n(i.quantity) }));
-  const horizon = restaurant.settings?.forecastHorizonDays ?? 7;
-  const rf = forecastRecipes(salesRows, recs.map((r) => r.id), { horizonDays: horizon });
-  const pf = forecastProducts(rf, ingredients, stocks, { horizonDays: horizon });
-  return { restaurant, stocks, offers, stats, recipes: recs, ingredients, sales: salesRows, recipeForecasts: rf, productForecasts: pf, horizon };
+  // Chantier 9 (audit 2) : la prévision ne s'arrête plus quand les ventes manquent — elle descend
+  // la cascade ventes 28 j → ventes 7 j → couverts → seuils, en excluant les jours de fermeture
+  // et en appliquant la saisonnalité. La source utilisée est renvoyée avec chaque ligne.
+  const cfg = restaurant.settings ?? {};
+  const horizon = cfg.forecastHorizonDays ?? 7;
+  const forecastOpts = {
+    horizonDays: horizon, coversPerDay: restaurant.coversPerDay ?? null,
+    closedWeekdays: cfg.closedWeekdays ?? [], peakMonths: cfg.peakMonths ?? [], peakCoef: cfg.peakCoef ?? 1.2,
+  };
+  const rf = forecastRecipes(salesRows, recs.map((r) => r.id), forecastOpts);
+  const pf = forecastProducts(rf, ingredients, stocks, forecastOpts);
+  const days = [...new Set(salesRows.map((s2) => s2.day))].sort();
+  const lastSaleDay = days.length ? days[days.length - 1] : null;
+  const dataQuality = {
+    salesDays: days.length,
+    lastSaleDay,
+    daysSinceLastSale: lastSaleDay ? Math.floor((Date.now() - new Date(`${lastSaleDay}T00:00:00Z`).getTime()) / 86_400_000) : null,
+    coversPerDay: restaurant.coversPerDay ?? null,
+    closedWeekdays: cfg.closedWeekdays ?? [],
+    peakMonths: cfg.peakMonths ?? [], peakCoef: cfg.peakCoef ?? 1.2,
+    sources: (['ventes_28j', 'ventes_7j', 'couverts', 'seuils'] as const).reduce((acc, k) => ({ ...acc, [k]: pf.filter((f) => f.basis === k).length }), {} as Record<string, number>),
+  };
+  return { restaurant, stocks, offers, stats, recipes: recs, ingredients, sales: salesRows, recipeForecasts: rf, productForecasts: pf, horizon, dataQuality };
 }
 
 // -------------------------------------------------------------
@@ -51,7 +70,10 @@ export async function loadContext(rid: string) {
 intelligenceRoutes.get('/forecast', async (c) => {
   const rid = c.get('restaurantId'); const ctx = await loadContext(rid);
   const recipeView = ctx.recipes.map((r) => ({ id: r.id, name: r.name, ...(ctx.recipeForecasts.get(r.id) ?? { perDay: [], total: 0, confidence: 0 }) }));
-  return c.json({ horizonDays: ctx.horizon, generatedAt: new Date().toISOString(), products: ctx.productForecasts, recipes: recipeView, salesDays: new Set(ctx.sales.map((s) => s.day)).size });
+  return c.json({
+    horizonDays: ctx.horizon, generatedAt: new Date().toISOString(), products: ctx.productForecasts, recipes: recipeView,
+    salesDays: ctx.dataQuality.salesDays, dataQuality: ctx.dataQuality,
+  });
 });
 
 /** Persiste un instantané (pour suivre la précision dans le temps). */

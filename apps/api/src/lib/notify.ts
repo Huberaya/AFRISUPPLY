@@ -14,6 +14,8 @@ import { recipientsFor } from './recipients.js';
 
 /** Genres d'alerte qui partent par e-mail tout de suite (le reste attend le mail du matin). */
 export const IMMEDIATE_KINDS = ['rupture', 'ecart_livraison', 'saisie'] as const;
+/** Une alerte « blue » est une information (rappel doux) : elle reste dans la cloche et le mail du matin. */
+const IMMEDIATE_SEVERITIES = ['red', 'orange'] as const;
 
 /**
  * Une alerte n'est « immédiate » que si elle est récente : on n'envoie pas par e-mail une rupture
@@ -26,14 +28,19 @@ const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/
 export interface PendingAlert { id: string; kind: string; severity: string; title: string; message: string; actionUrl: string | null }
 
 /** Alertes urgentes pas encore notifiées par e-mail (une charge utile de facturation compte comme urgente). */
-export async function pendingImmediateAlerts(rid: string, limit = 8): Promise<PendingAlert[]> {
+export async function pendingImmediateAlerts(rid: string, limit = 50): Promise<PendingAlert[]> {
   const db = await getDb();
   const cutoff = new Date(Date.now() - IMMEDIATE_WINDOW_HOURS() * 3_600_000);
   const rows = await db.select({ id: alerts.id, kind: alerts.kind, severity: alerts.severity, title: alerts.title, message: alerts.message, actionUrl: alerts.actionUrl, createdAt: alerts.createdAt })
     .from(alerts)
     .where(and(eq(alerts.restaurantId, rid), isNull(alerts.notifiedAt), eq(alerts.isRead, false), gte(alerts.createdAt, cutoff),
-      or(inArray(alerts.kind, [...IMMEDIATE_KINDS]), sql`${alerts.payload} ? 'surchargeEur'`)))
-    .orderBy(desc(alerts.createdAt)).limit(limit);
+      // Chantier 9 : un rappel doux (severity « blue ») ne part pas par e-mail — il serait quotidien
+      // et deviendrait du bruit. Les alertes graves partent immédiatement, comme avant.
+      or(and(inArray(alerts.kind, [...IMMEDIATE_KINDS]), inArray(alerts.severity, [...IMMEDIATE_SEVERITIES])), sql`${alerts.payload} ? 'surchargeEur'`)))
+    // Chantier 9 (audit 2) : l'ordre est stable (le plus ancien d'abord) et la limite est large.
+    // Avec une limite de 8 et un tri arbitraire, une rupture réelle pouvait ne JAMAIS figurer dans
+    // l'e-mail alors que les autres partaient (cas reproduit : 9 produits à zéro d'un compte neuf).
+    .orderBy(asc(alerts.createdAt)).limit(limit);
   return rows.map((r) => ({ id: r.id, kind: r.kind, severity: r.severity, title: r.title, message: r.message, actionUrl: r.actionUrl }));
 }
 

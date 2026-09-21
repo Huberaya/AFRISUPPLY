@@ -9,12 +9,14 @@ import { Field } from '../components/Modal';
 
 type S = {
   restaurant: { name: string; city: string | null; coversPerDay: number | null; plan: string; trialEndsAt: string | null };
-  settings: { priceIncreaseAlertPct: number; forecastHorizonDays: number; autoReorderEnabled: boolean; dailyDigestEnabled: boolean; immediateAlertEmails: boolean; digestRecipients: string[]; closedWeekdays: number[]; notifyPhone: string; billingEmail?: string };
+  settings: { priceIncreaseAlertPct: number; forecastHorizonDays: number; autoReorderEnabled: boolean; dailyDigestEnabled: boolean; immediateAlertEmails: boolean; digestRecipients: string[]; closedWeekdays: number[]; notifyPhone: string; billingEmail?: string; peakMonths?: number[]; peakCoef?: number };
   mail: { transport: 'resend' | 'file' | 'log'; from: string; configured: boolean; delivered: boolean };
   sms?: { configured: boolean; whatsapp: boolean; delivered: boolean };
 };
 type MailTest = { ok: boolean; delivered: boolean; transport: string; to: string; message: string; code?: string };
 const DAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+// Chantier 9 : mois de pleine activité (saisonnalité réellement appliquée à la prévision).
+const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
 
 export default function Settings() {
   const { data, loading, error, reload } = useApi<S>('/settings');
@@ -25,13 +27,13 @@ export default function Settings() {
   const [mailTest, setMailTest] = useState<MailTest | null>(null); const [testing, setTesting] = useState(false);
   const [smsMsg, setSmsMsg] = useState<string | null>(null); const [del, setDel] = useState(false); const [delPw, setDelPw] = useState(''); const [delConfirm, setDelConfirm] = useState('');
   const [preview, setPreview] = useState<{ subject: string; text: string; html: string } | null>(null);
-  useEffect(() => { if (data) setF({ ...data.settings, billingEmail: data.settings.billingEmail ?? '', name: data.restaurant.name, city: data.restaurant.city ?? '', coversPerDay: data.restaurant.coversPerDay ? String(data.restaurant.coversPerDay) : '', recipientsText: data.settings.digestRecipients.join(', ') }); }, [data]);
+  useEffect(() => { if (data) setF({ ...data.settings, peakMonths: data.settings.peakMonths ?? [], peakCoef: data.settings.peakCoef ?? 1.2, billingEmail: data.settings.billingEmail ?? '', name: data.restaurant.name, city: data.restaurant.city ?? '', coversPerDay: data.restaurant.coversPerDay ? String(data.restaurant.coversPerDay) : '', recipientsText: data.settings.digestRecipients.join(', ') }); }, [data]);
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data || !f) return null;
   const save = async () => {
     setBusy(true); setMsg(null);
     try {
       const recipients = f.recipientsText.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
-      await api('/settings', { method: 'PUT', json: { name: f.name, city: f.city || null, coversPerDay: f.coversPerDay ? Number(f.coversPerDay) : null, priceIncreaseAlertPct: f.priceIncreaseAlertPct, forecastHorizonDays: f.forecastHorizonDays, autoReorderEnabled: f.autoReorderEnabled, dailyDigestEnabled: f.dailyDigestEnabled, immediateAlertEmails: f.immediateAlertEmails, digestRecipients: recipients, closedWeekdays: f.closedWeekdays, notifyPhone: f.notifyPhone ?? '', billingEmail: f.billingEmail ?? '' } });
+      await api('/settings', { method: 'PUT', json: { name: f.name, city: f.city || null, coversPerDay: f.coversPerDay ? Number(f.coversPerDay) : null, priceIncreaseAlertPct: f.priceIncreaseAlertPct, forecastHorizonDays: f.forecastHorizonDays, autoReorderEnabled: f.autoReorderEnabled, dailyDigestEnabled: f.dailyDigestEnabled, immediateAlertEmails: f.immediateAlertEmails, digestRecipients: recipients, closedWeekdays: f.closedWeekdays, notifyPhone: f.notifyPhone ?? '', billingEmail: f.billingEmail ?? '', peakMonths: f.peakMonths ?? [], peakCoef: f.peakCoef ?? 1.2 } });
       setMsg('Réglages enregistrés.'); await reload();
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
   };
@@ -65,7 +67,7 @@ export default function Settings() {
           <Field label="Ville"><input className="input" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} /></Field>
           <Field label="Couverts / jour"><input className="input" type="number" value={f.coversPerDay} onChange={(e) => setF({ ...f, coversPerDay: e.target.value })} /></Field>
         </div>
-        <Field label="Jours de fermeture" hint="Pas de mail du matin ces jours-là"><div className="flex gap-1.5">{DAYS.map((d, i) => <button type="button" key={d} onClick={() => setF({ ...f, closedWeekdays: f.closedWeekdays.includes(i) ? f.closedWeekdays.filter((x) => x !== i) : [...f.closedWeekdays, i] })} className={`pill !px-3 !py-1.5 ${f.closedWeekdays.includes(i) ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-700'}`}>{d}</button>)}</div></Field>
+        <Field label="Jours de fermeture" hint="Pas de mail du matin ces jours-là (et aucun besoin prévu ce jour-là)"><div className="flex gap-1.5">{DAYS.map((d, i) => <button type="button" key={d} onClick={() => setF({ ...f, closedWeekdays: f.closedWeekdays.includes(i) ? f.closedWeekdays.filter((x) => x !== i) : [...f.closedWeekdays, i] })} className={`pill !px-3 !py-1.5 ${f.closedWeekdays.includes(i) ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-700'}`}>{d}</button>)}</div></Field>
       </section>
       <section className="card space-y-3">
         <h2 className="font-bold">🧾 Facturation</h2>
@@ -81,6 +83,15 @@ export default function Settings() {
           <Field label="Horizon de prévision (jours)"><input className="input" type="number" min={3} max={14} value={f.forecastHorizonDays} onChange={(e) => setF({ ...f, forecastHorizonDays: Number(e.target.value) })} /></Field>
         </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.autoReorderEnabled} onChange={(e) => setF({ ...f, autoReorderEnabled: e.target.checked })} /> Exécuter mes règles d’auto-reorder chaque matin (commandes préparées, jamais envoyées)</label>
+        {/* Chantier 9 : saisonnalité — la prévision grossit les besoins des mois de pleine activité. */}
+        <Field label="Mois de pleine activité" hint="Ex. Ramadan, fêtes de fin d’année : la prévision majore les besoins de ces mois-là (vous pouvez en choisir plusieurs)">
+          <div className="flex flex-wrap gap-1.5">{MONTHS.map((m, i) => <button type="button" key={m}
+            onClick={() => setF({ ...f, peakMonths: (f.peakMonths ?? []).includes(i + 1) ? (f.peakMonths ?? []).filter((x) => x !== i + 1) : [...(f.peakMonths ?? []), i + 1] })}
+            className={`pill !px-2.5 !py-1 ${(f.peakMonths ?? []).includes(i + 1) ? 'bg-brand-600 text-white' : 'bg-stone-100 text-stone-700'}`}>{m}</button>)}</div>
+        </Field>
+        {(f.peakMonths ?? []).length > 0 && <Field label="Majoration appliquée ces mois-là" hint="1,2 = +20 % de besoin prévu">
+          <input className="input max-w-32" type="number" step="0.05" min={1} max={2} value={f.peakCoef ?? 1.2} onChange={(e) => setF({ ...f, peakCoef: Number(e.target.value) })} />
+        </Field>}
       </section>
       <section className="card space-y-3">
         <h2 className="font-bold flex items-center gap-2"><Mail size={18} /> « Votre matin AFRISUPPLY »</h2>

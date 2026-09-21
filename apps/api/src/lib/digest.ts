@@ -10,6 +10,9 @@ export interface DigestInput {
   discrepancies: { count: number; openValue: number };
   pendingOrders: { reference: string; supplierName: string; status: string; expectedAt: string | null }[];
   salesYesterday: number | null;  // portions saisies hier, null si rien
+  /** Chantier 9 : relance « ventes non saisies » en attente — annoncée dans le mail du matin,
+   *  sinon elle resterait marquée « déjà prévenu » sans jamais avoir été lue. */
+  salesReminder?: { title: string; message: string } | null;
   spend: { thisMonth: number; evolutionPct: number | null };
 }
 
@@ -25,6 +28,9 @@ export function digestHeadline(d: DigestInput): string {
   if (d.stock.urgent.length) { const f = d.stock.urgent[0]; return `${d.stock.urgent.length} produit${d.stock.urgent.length > 1 ? 's' : ''} à commander aujourd’hui — ${f.productName} en premier`; }
   if (d.priceAlerts.length) return `${d.priceAlerts.length} hausse${d.priceAlerts.length > 1 ? 's' : ''} de prix à regarder`;
   if (d.discrepancies.count) return `${eur(d.discrepancies.openValue)} à récupérer sur des livraisons incomplètes`;
+  // Chantier 9 : ne pas annoncer « tout est sous contrôle » dans l'objet quand on demande
+  // justement au restaurateur de saisir ses ventes (sinon l'objet contredit le mail).
+  if (d.salesReminder) return 'pensez à saisir vos ventes (30 secondes)';
   return 'Tout est sous contrôle — bonne journée en cuisine';
 }
 
@@ -48,6 +54,10 @@ export function buildDigest(d: DigestInput): { subject: string; text: string; ht
     emoji: '🤖', title: 'Commandes préparées automatiquement (à valider)',
     lines: d.autoReorder.map((a) => `${a.productName} chez ${a.supplierName} — ${eur(a.total)} (${a.reference})`),
     cta: { label: 'Voir mes achats', path: '/app/achats' },
+  });
+  if (d.salesReminder) sections.push({
+    emoji: '📝', title: d.salesReminder.title.replace(/^[^\p{L}]*(?=\p{L})/u, '') || 'Saisie des ventes',
+    lines: [d.salesReminder.message], cta: { label: 'Saisir mes ventes (30 secondes)', path: '/app/ventes' },
   });
   if (d.priceAlerts.length) sections.push({ emoji: '📈', title: 'Prix en hausse', lines: d.priceAlerts.slice(0, 5).map((a) => a.message), cta: { label: 'Comparer les fournisseurs', path: '/app/stock' } });
   if (d.opportunities.length) sections.push({ emoji: '🟢', title: 'Moins cher ailleurs', lines: d.opportunities.slice(0, 4).map((a) => a.message) });

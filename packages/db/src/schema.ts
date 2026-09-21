@@ -111,7 +111,9 @@ export type RestaurantSettings = {
   dailyDigestEnabled?: boolean;     // e-mail « Votre matin AFRISUPPLY » (défaut true)
   immediateAlertEmails?: boolean;   // chantier 6 : e-mail immédiat sur rupture / écart de livraison / surfacturation (défaut true)
   digestRecipients?: string[];      // e-mails ; défaut : membres owner/manager
-  closedWeekdays?: number[];        // 0=dimanche… pas de mail ces jours-là
+  closedWeekdays?: number[];        // 0=dimanche… pas de mail ces jours-là (et jours de fermeture pour la prévision)
+  peakMonths?: number[];            // chantier 9 de l'audit 2 : mois de pleine activité (1=janvier)
+  peakCoef?: number;                // coefficient appliqué ces mois-là (défaut 1,2)
   notifyPhone?: string;             // chantier 18 : WhatsApp/SMS du restaurant pour le suivi de commande
   billingEmail?: string;            // chantier 7 de l'audit 2 : destinataire des factures (défaut : propriétaire)
 };

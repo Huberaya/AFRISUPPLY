@@ -3062,8 +3062,8 @@ var init_recipients = __esm({
 });
 
 // apps/api/src/lib/notify.ts
-import { and as and6, asc as asc2, desc as desc2, eq as eq9, gte, inArray, isNull as isNull4, lt, or, sql as sql5 } from "drizzle-orm";
-async function pendingImmediateAlerts(rid, limit = 8) {
+import { and as and6, asc as asc2, eq as eq9, gte, inArray, isNull as isNull4, lt, or, sql as sql5 } from "drizzle-orm";
+async function pendingImmediateAlerts(rid, limit = 50) {
   const db = await getDb();
   const cutoff = new Date(Date.now() - IMMEDIATE_WINDOW_HOURS() * 36e5);
   const rows = await db.select({ id: alerts.id, kind: alerts.kind, severity: alerts.severity, title: alerts.title, message: alerts.message, actionUrl: alerts.actionUrl, createdAt: alerts.createdAt }).from(alerts).where(and6(
@@ -3071,8 +3071,10 @@ async function pendingImmediateAlerts(rid, limit = 8) {
     isNull4(alerts.notifiedAt),
     eq9(alerts.isRead, false),
     gte(alerts.createdAt, cutoff),
-    or(inArray(alerts.kind, [...IMMEDIATE_KINDS]), sql5`${alerts.payload} ? 'surchargeEur'`)
-  )).orderBy(desc2(alerts.createdAt)).limit(limit);
+    // Chantier 9 : un rappel doux (severity « blue ») ne part pas par e-mail — il serait quotidien
+    // et deviendrait du bruit. Les alertes graves partent immédiatement, comme avant.
+    or(and6(inArray(alerts.kind, [...IMMEDIATE_KINDS]), inArray(alerts.severity, [...IMMEDIATE_SEVERITIES])), sql5`${alerts.payload} ? 'surchargeEur'`)
+  )).orderBy(asc2(alerts.createdAt)).limit(limit);
   return rows.map((r) => ({ id: r.id, kind: r.kind, severity: r.severity, title: r.title, message: r.message, actionUrl: r.actionUrl }));
 }
 async function retireStaleAlerts(rid, now = /* @__PURE__ */ new Date()) {
@@ -3181,7 +3183,7 @@ async function notifyAllRestaurants(opts = {}) {
   });
   return { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), restaurants: all.length, withAlerts: details.length, emails: sent, failed, details };
 }
-var IMMEDIATE_KINDS, IMMEDIATE_WINDOW_HOURS, APP_URL, escapeHtml;
+var IMMEDIATE_KINDS, IMMEDIATE_SEVERITIES, IMMEDIATE_WINDOW_HOURS, APP_URL, escapeHtml;
 var init_notify = __esm({
   "apps/api/src/lib/notify.ts"() {
     "use strict";
@@ -3190,6 +3192,7 @@ var init_notify = __esm({
     init_job_runs();
     init_recipients();
     IMMEDIATE_KINDS = ["rupture", "ecart_livraison", "saisie"];
+    IMMEDIATE_SEVERITIES = ["red", "orange"];
     IMMEDIATE_WINDOW_HOURS = () => Math.max(1, Number(process.env.IMMEDIATE_ALERT_WINDOW_HOURS ?? 48));
     APP_URL = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -4032,9 +4035,31 @@ ${user.fullName}`;
 });
 
 // apps/api/src/lib/forecast.ts
+function parseSeasonality(text2) {
+  if (!text2) return null;
+  const t = text2.trim();
+  try {
+    const v = JSON.parse(t);
+    if (Array.isArray(v)) {
+      const months = v.map((x) => Number(x)).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12);
+      return months.length ? { months, coef: 1.3 } : null;
+    }
+    if (v && typeof v === "object") {
+      const months = Array.isArray(v.months) ? v.months.map((x) => Number(x)).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12) : [];
+      const coef = Number(v.coef);
+      if (months.length) return { months, coef: Number.isFinite(coef) && coef > 1 && coef <= 3 ? coef : 1.3 };
+    }
+  } catch {
+  }
+  return null;
+}
 function forecastRecipes(sales2, recipeIds, opts = {}) {
   const horizon = opts.horizonDays ?? 7;
   const today = opts.today ?? /* @__PURE__ */ new Date();
+  const closed = new Set(opts.closedWeekdays ?? []);
+  const peakMonths = opts.peakMonths ?? [];
+  const peakCoef = opts.peakCoef ?? 1.2;
+  const covers = opts.coversPerDay ?? 0;
   const out = /* @__PURE__ */ new Map();
   const byRecipe = /* @__PURE__ */ new Map();
   for (const s of sales2) {
@@ -4042,44 +4067,89 @@ function forecastRecipes(sales2, recipeIds, opts = {}) {
     byRecipe.get(s.recipeId).set(s.day, s.portions);
   }
   const WEIGHTS = [0.4, 0.3, 0.2, 0.1];
+  const dowSum = new Array(7).fill(0);
+  const dowCount = new Array(7).fill(0);
+  for (const s of sales2) {
+    const dow = new Date(dayToTime(s.day)).getUTCDay();
+    dowSum[dow] += s.portions;
+    dowCount[dow] += 1;
+  }
+  const grandMean = dowSum.reduce((a, b) => a + b, 0) / Math.max(1, dowCount.reduce((a, b) => a + b, 0));
+  const dowFactor = (dow) => dowCount[dow] >= 2 && grandMean > 0 ? dowSum[dow] / dowCount[dow] / grandMean : 1;
+  const totals28 = /* @__PURE__ */ new Map();
+  let grand28 = 0;
+  for (const s of sales2) {
+    const age = (today.getTime() - dayToTime(s.day)) / DAY_MS;
+    if (age >= 0 && age <= 28) {
+      totals28.set(s.recipeId, (totals28.get(s.recipeId) ?? 0) + s.portions);
+      grand28 += s.portions;
+    }
+  }
+  const shareOf = (rid) => grand28 > 0 ? (totals28.get(rid) ?? 0) / grand28 : 1 / Math.max(1, recipeIds.length);
   for (const rid of recipeIds) {
     const hist = byRecipe.get(rid) ?? /* @__PURE__ */ new Map();
     const daysWithData = hist.size;
-    let recent = 0, previous = 0;
+    let days28 = 0;
+    let days7 = 0;
+    let sum7 = 0;
+    let recent = 0;
+    let previous = 0;
     for (const [day, p] of hist) {
-      const age = (today.getTime() - new Date(day).getTime()) / DAY_MS;
-      if (age > 0 && age <= 28) recent += p;
-      else if (age > 28 && age <= 56) previous += p;
+      const age = (today.getTime() - dayToTime(day)) / DAY_MS;
+      if (age > 0 && age <= 28) {
+        days28++;
+        recent += p;
+      } else if (age > 28 && age <= 56) previous += p;
+      if (age > 0 && age <= 7) {
+        days7++;
+        sum7 += p;
+      }
     }
     const trend = previous > 0 && recent > 0 ? Math.min(1.3, Math.max(0.7, recent / previous)) : 1;
+    const basis = days28 >= 4 ? "ventes_28j" : days7 >= 1 ? "ventes_7j" : covers > 0 ? "couverts" : "seuils";
+    const mean7 = days7 > 0 ? sum7 / days7 : 0;
+    const recipeMean = daysWithData ? [...hist.values()].reduce((a, b) => a + b, 0) / daysWithData : 0;
     const perDay = [];
+    const closedPerDay = [];
     for (let d = 1; d <= horizon; d++) {
       const target = new Date(today.getTime() + d * DAY_MS);
-      let num3 = 0, den = 0;
-      for (let k = 1; k <= 4; k++) {
-        const past = isoDay2(new Date(target.getTime() - k * 7 * DAY_MS));
-        const v = hist.get(past);
-        if (v !== void 0) {
-          num3 += v * WEIGHTS[k - 1];
-          den += WEIGHTS[k - 1];
-        }
+      const dow = target.getUTCDay();
+      if (closed.has(dow)) {
+        perDay.push(0);
+        closedPerDay.push(true);
+        continue;
       }
-      let base;
-      const closedDow = den === 0 && [1, 2, 3].every((k) => {
-        const before = hist.has(isoDay2(new Date(target.getTime() - (k * 7 + 1) * DAY_MS)));
-        const after = hist.has(isoDay2(new Date(target.getTime() - (k * 7 - 1) * DAY_MS)));
-        return before || after;
-      });
-      if (den > 0) base = num3 / den;
-      else if (closedDow) base = 0;
-      else if (daysWithData) base = [...hist.values()].reduce((a, b) => a + b, 0) / Math.max(daysWithData, 1) * 0.8;
-      else base = 0;
+      const seasonal = peakMonths.includes(target.getUTCMonth() + 1) ? peakCoef : 1;
+      let base = 0;
+      if (basis === "ventes_28j" || basis === "ventes_7j") {
+        let num3 = 0, den = 0;
+        for (let k = 1; k <= 4; k++) {
+          const past = isoDay2(new Date(target.getTime() - k * 7 * DAY_MS));
+          const v = hist.get(past);
+          if (v !== void 0) {
+            num3 += v * WEIGHTS[k - 1];
+            den += WEIGHTS[k - 1];
+          }
+        }
+        if (den > 0) base = num3 / den;
+        else {
+          const closedDow = [1, 2, 3].every((k) => {
+            const before = hist.has(isoDay2(new Date(target.getTime() - (k * 7 + 1) * DAY_MS)));
+            const after = hist.has(isoDay2(new Date(target.getTime() - (k * 7 - 1) * DAY_MS)));
+            return before || after;
+          });
+          base = closedDow ? 0 : (basis === "ventes_7j" ? mean7 : recipeMean) * dowFactor(dow);
+        }
+      } else if (basis === "couverts") {
+        base = covers * shareOf(rid) * dowFactor(dow);
+      }
       const ev = opts.eventMultipliers?.[isoDay2(target)] ?? 1;
-      perDay.push(Math.round(base * trend * ev * 100) / 100);
+      perDay.push(Math.round(base * trend * ev * seasonal * 100) / 100);
+      closedPerDay.push(false);
     }
     const total = perDay.reduce((a, b) => a + b, 0);
-    const confidence = daysWithData >= 28 ? 0.85 : daysWithData >= 14 ? 0.7 : daysWithData >= 7 ? 0.55 : daysWithData > 0 ? 0.4 : 0.2;
-    out.set(rid, { recipeId: rid, perDay, total: Math.round(total * 10) / 10, confidence });
+    const confidence = basis === "ventes_28j" ? daysWithData >= 28 ? 0.85 : daysWithData >= 14 ? 0.7 : 0.55 : BASIS_CONFIDENCE[basis];
+    out.set(rid, { recipeId: rid, perDay, total: Math.round(total * 10) / 10, confidence, basis, closedPerDay });
   }
   return out;
 }
@@ -4087,25 +4157,35 @@ function forecastProducts(recipeForecasts, ingredients, stocks, opts = {}) {
   const horizon = opts.horizonDays ?? 7;
   const safetyDays = opts.safetyDays ?? 2;
   const today = opts.today ?? /* @__PURE__ */ new Date();
+  const closed = new Set(opts.closedWeekdays ?? []);
   const perProduct = /* @__PURE__ */ new Map();
   for (const ing of ingredients) {
     const rf = recipeForecasts.get(ing.recipeId);
     if (!rf) continue;
-    const acc = perProduct.get(ing.productId) ?? { perDay: new Array(horizon).fill(0), conf: [], recipes: 0 };
+    const acc = perProduct.get(ing.productId) ?? { perDay: new Array(horizon).fill(0), conf: [], recipes: 0, basis: "ventes_28j", usedCovers: false };
     rf.perDay.forEach((p, i) => {
       acc.perDay[i] += p * ing.quantity;
     });
     acc.conf.push(rf.confidence);
     acc.recipes++;
+    acc.basis = acc.recipes === 1 ? rf.basis : weakestBasis(acc.basis, rf.basis);
+    if (rf.basis === "couverts") acc.usedCovers = true;
     perProduct.set(ing.productId, acc);
   }
   const out = [];
   for (const s of stocks) {
     const acc = perProduct.get(s.productId);
     const perDay = acc ? acc.perDay.map((v) => Math.round(v * 1e3) / 1e3) : new Array(horizon).fill(0);
+    const season = parseSeasonality(s.seasonality);
+    if (season) perDay.forEach((v, i) => {
+      const month = new Date(today.getTime() + (i + 1) * DAY_MS).getUTCMonth() + 1;
+      if (season.months.includes(month)) perDay[i] = Math.round(v * season.coef * 1e3) / 1e3;
+    });
+    for (let i = 0; i < perDay.length; i++) if (closed.has(new Date(today.getTime() + (i + 1) * DAY_MS).getUTCDay())) perDay[i] = 0;
     const need = perDay.reduce((a, b) => a + b, 0);
     const avg = need / horizon;
-    const confidence = acc && acc.conf.length ? Math.round(acc.conf.reduce((a, b) => a + b, 0) / acc.conf.length * 100) / 100 : 0.2;
+    const basis = acc ? acc.basis : "seuils";
+    const confidence = acc && acc.conf.length ? Math.round(acc.conf.reduce((a, b) => a + b, 0) / acc.conf.length * 100) / 100 : BASIS_CONFIDENCE.seuils;
     let cum = 0;
     let stockoutIdx = null;
     for (let i = 0; i < perDay.length; i++) {
@@ -4122,12 +4202,16 @@ function forecastProducts(recipeForecasts, ingredients, stocks, opts = {}) {
     if (s.shelfLifeDays && s.shelfLifeDays < horizon && avg > 0) recommended = Math.min(recommended, Math.max(0, avg * s.shelfLifeDays + safety - s.quantity));
     recommended = Math.round(recommended * 10) / 10;
     const fmt = (v) => `${Number.isInteger(v) ? v : v.toFixed(1)} ${s.unit}`;
+    const source = BASIS_LABEL[basis];
     let explanation;
-    if (!acc) explanation = `${s.productName} n'entre dans aucune recette : pr\xE9vision bas\xE9e uniquement sur votre seuil critique (${fmt(s.criticalLevel)}).`;
-    else {
+    if (!acc) {
+      explanation = `${s.productName} n'entre dans aucune recette : besoin estim\xE9 \xE0 partir de votre seuil critique uniquement (${fmt(s.criticalLevel)}). ` + (recommended > 0 ? `Commande recommand\xE9e : ${fmt(recommended)}.` : "Rien \xE0 commander pour l\u2019instant.");
+    } else {
       const peak = perDay.indexOf(Math.max(...perDay));
       const peakDay = DOW_FR[new Date(today.getTime() + (peak + 1) * DAY_MS).getDay()];
-      explanation = `Besoin estim\xE9 de ${fmt(Math.round(need * 10) / 10)} sur ${horizon} jours, calcul\xE9 \xE0 partir de ${acc.recipes} recette${acc.recipes > 1 ? "s" : ""} et de vos ventes des 4 derni\xE8res semaines (pic ${peakDay}). Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null ? ` \u2192 rupture pr\xE9vue ${DOW_FR[new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ", suffisant sur la p\xE9riode.") + (recommended > 0 ? ` Commande recommand\xE9e : ${fmt(recommended)} (inclut ${safetyDays} j de s\xE9curit\xE9).` : "");
+      const base = `Besoin estim\xE9 de ${fmt(Math.round(need * 10) / 10)} sur ${horizon} jours, calcul\xE9 \xE0 partir de ${acc.recipes} recette${acc.recipes > 1 ? "s" : ""} et de ${source}`;
+      const degraded = basis === "couverts" || basis === "seuils";
+      explanation = base + (basis === "ventes_28j" ? ` (pic ${peakDay})` : "") + ". " + (basis === "seuils" ? `Aucune vente ni couvert renseign\xE9 : la commande recommand\xE9e vient uniquement de votre seuil critique. ` : basis === "couverts" ? `Estimation de repli \xE0 partir de vos couverts : saisissez vos ventes pour l\u2019affiner jour par jour. ` : "") + `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null ? ` \u2192 rupture pr\xE9vue ${DOW_FR[new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ", suffisant sur la p\xE9riode.") + (season ? ` Coefficient de saisonnalit\xE9 ${season.coef} appliqu\xE9 (mois ${season.months.join(", ")}).` : "") + (recommended > 0 ? ` Commande recommand\xE9e : ${fmt(recommended)} (inclut ${safetyDays} j de s\xE9curit\xE9).` : "");
     }
     out.push({
       productId: s.productId,
@@ -4143,7 +4227,9 @@ function forecastProducts(recipeForecasts, ingredients, stocks, opts = {}) {
       confidence,
       explanation,
       avgDailyNeed: Math.round(avg * 1e3) / 1e3,
-      perDay
+      perDay,
+      basis,
+      seasonCoef: season ? season.coef : 1
     });
   }
   return out.sort((a, b) => (a.stockoutDay ?? "9").localeCompare(b.stockoutDay ?? "9") || b.recommendedOrder - a.recommendedOrder);
@@ -4218,13 +4304,23 @@ function buildSmartCart(needs, offers) {
   const total = Math.round(suppliers3.reduce((a, g) => a + g.total, 0) * 100) / 100;
   return { suppliers: suppliers3, total, baselineTotal: Math.round(baseline * 100) / 100, saving: Math.round(Math.max(0, baseline - suppliers3.reduce((a, g) => a + g.subtotal, 0)) * 100) / 100, unavailable, notes };
 }
-var DAY_MS, DOW_FR, isoDay2;
+var BASIS_LABEL, BASIS_CONFIDENCE, BASIS_ORDER, weakestBasis, DAY_MS, DOW_FR, isoDay2, dayToTime;
 var init_forecast = __esm({
   "apps/api/src/lib/forecast.ts"() {
     "use strict";
+    BASIS_LABEL = {
+      ventes_28j: "vos ventes des 4 derni\xE8res semaines",
+      ventes_7j: "vos ventes de la semaine \xE9coul\xE9e",
+      couverts: "votre nombre de couverts",
+      seuils: "vos seuils critiques"
+    };
+    BASIS_CONFIDENCE = { ventes_28j: 0.85, ventes_7j: 0.45, couverts: 0.3, seuils: 0.15 };
+    BASIS_ORDER = ["ventes_28j", "ventes_7j", "couverts", "seuils"];
+    weakestBasis = (a, b) => BASIS_ORDER.indexOf(a) >= BASIS_ORDER.indexOf(b) ? a : b;
     DAY_MS = 864e5;
     DOW_FR = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
     isoDay2 = (d) => d.toISOString().slice(0, 10);
+    dayToTime = (day) => (/* @__PURE__ */ new Date(`${day}T00:00:00Z`)).getTime();
   }
 });
 
@@ -4336,12 +4432,32 @@ async function loadContext(rid) {
   ]);
   const stats3 = new Map(statRows.map((r) => [r.supplierId, { delivered: n3(r.delivered), late: n3(r.late), discrepancies: n3(r.disc), spent: n3(r.spent), reliability: supplierReliability({ delivered: n3(r.delivered), late: n3(r.late), discrepancies: n3(r.disc) }) }]));
   const offers = offerRows.map(({ offer, supplier }) => ({ offerId: offer.id, supplierId: supplier.id, supplierName: supplier.name, productId: offer.productId, packLabel: offer.packLabel, packQty: n3(offer.packQty), packPrice: n3(offer.packPriceEur), unitPrice: n3(offer.packPriceEur) / n3(offer.packQty), inStock: offer.inStock, leadTimeHours: supplier.leadTimeHours, deliveryFee: n3(supplier.deliveryFeeEur), minOrder: n3(supplier.minOrderEur), reliabilityPct: stats3.get(supplier.id)?.reliability ?? 85 }));
-  const stocks = inv.map(({ item, product }) => ({ productId: product.id, productName: product.name, unit: product.baseUnit, quantity: n3(item.quantity), criticalLevel: n3(item.criticalLevel), targetLevel: item.targetLevel ? n3(item.targetLevel) : null, shelfLifeDays: product.shelfLifeDays, preferredSupplierId: item.preferredSupplierId, inventoryItemId: item.id }));
+  const stocks = inv.map(({ item, product }) => ({ productId: product.id, productName: product.name, unit: product.baseUnit, quantity: n3(item.quantity), criticalLevel: n3(item.criticalLevel), targetLevel: item.targetLevel ? n3(item.targetLevel) : null, shelfLifeDays: product.shelfLifeDays, seasonality: product.seasonality, preferredSupplierId: item.preferredSupplierId, inventoryItemId: item.id }));
   const ingredients = ingRows.map((i) => ({ ...i, quantity: n3(i.quantity) }));
-  const horizon = restaurant.settings?.forecastHorizonDays ?? 7;
-  const rf = forecastRecipes(salesRows, recs.map((r) => r.id), { horizonDays: horizon });
-  const pf = forecastProducts(rf, ingredients, stocks, { horizonDays: horizon });
-  return { restaurant, stocks, offers, stats: stats3, recipes: recs, ingredients, sales: salesRows, recipeForecasts: rf, productForecasts: pf, horizon };
+  const cfg = restaurant.settings ?? {};
+  const horizon = cfg.forecastHorizonDays ?? 7;
+  const forecastOpts = {
+    horizonDays: horizon,
+    coversPerDay: restaurant.coversPerDay ?? null,
+    closedWeekdays: cfg.closedWeekdays ?? [],
+    peakMonths: cfg.peakMonths ?? [],
+    peakCoef: cfg.peakCoef ?? 1.2
+  };
+  const rf = forecastRecipes(salesRows, recs.map((r) => r.id), forecastOpts);
+  const pf = forecastProducts(rf, ingredients, stocks, forecastOpts);
+  const days2 = [...new Set(salesRows.map((s2) => s2.day))].sort();
+  const lastSaleDay = days2.length ? days2[days2.length - 1] : null;
+  const dataQuality = {
+    salesDays: days2.length,
+    lastSaleDay,
+    daysSinceLastSale: lastSaleDay ? Math.floor((Date.now() - (/* @__PURE__ */ new Date(`${lastSaleDay}T00:00:00Z`)).getTime()) / 864e5) : null,
+    coversPerDay: restaurant.coversPerDay ?? null,
+    closedWeekdays: cfg.closedWeekdays ?? [],
+    peakMonths: cfg.peakMonths ?? [],
+    peakCoef: cfg.peakCoef ?? 1.2,
+    sources: ["ventes_28j", "ventes_7j", "couverts", "seuils"].reduce((acc, k) => ({ ...acc, [k]: pf.filter((f) => f.basis === k).length }), {})
+  };
+  return { restaurant, stocks, offers, stats: stats3, recipes: recs, ingredients, sales: salesRows, recipeForecasts: rf, productForecasts: pf, horizon, dataQuality };
 }
 async function runAutoReorder(rid, userId = null) {
   const db = await getDb();
@@ -4402,7 +4518,14 @@ var init_intelligence = __esm({
       const rid = c.get("restaurantId");
       const ctx = await loadContext(rid);
       const recipeView = ctx.recipes.map((r) => ({ id: r.id, name: r.name, ...ctx.recipeForecasts.get(r.id) ?? { perDay: [], total: 0, confidence: 0 } }));
-      return c.json({ horizonDays: ctx.horizon, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), products: ctx.productForecasts, recipes: recipeView, salesDays: new Set(ctx.sales.map((s) => s.day)).size });
+      return c.json({
+        horizonDays: ctx.horizon,
+        generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        products: ctx.productForecasts,
+        recipes: recipeView,
+        salesDays: ctx.dataQuality.salesDays,
+        dataQuality: ctx.dataQuality
+      });
     });
     intelligenceRoutes.post("/forecast/snapshot", async (c) => {
       const rid = c.get("restaurantId");
@@ -4799,6 +4922,7 @@ function digestHeadline(d) {
   }
   if (d.priceAlerts.length) return `${d.priceAlerts.length} hausse${d.priceAlerts.length > 1 ? "s" : ""} de prix \xE0 regarder`;
   if (d.discrepancies.count) return `${eur5(d.discrepancies.openValue)} \xE0 r\xE9cup\xE9rer sur des livraisons incompl\xE8tes`;
+  if (d.salesReminder) return "pensez \xE0 saisir vos ventes (30 secondes)";
   return "Tout est sous contr\xF4le \u2014 bonne journ\xE9e en cuisine";
 }
 function buildDigest(d) {
@@ -4823,6 +4947,12 @@ function buildDigest(d) {
     title: "Commandes pr\xE9par\xE9es automatiquement (\xE0 valider)",
     lines: d.autoReorder.map((a) => `${a.productName} chez ${a.supplierName} \u2014 ${eur5(a.total)} (${a.reference})`),
     cta: { label: "Voir mes achats", path: "/app/achats" }
+  });
+  if (d.salesReminder) sections.push({
+    emoji: "\u{1F4DD}",
+    title: d.salesReminder.title.replace(new RegExp("^[^\\p{L}]*(?=\\p{L})", "u"), "") || "Saisie des ventes",
+    lines: [d.salesReminder.message],
+    cta: { label: "Saisir mes ventes (30 secondes)", path: "/app/ventes" }
   });
   if (d.priceAlerts.length) sections.push({ emoji: "\u{1F4C8}", title: "Prix en hausse", lines: d.priceAlerts.slice(0, 5).map((a) => a.message), cta: { label: "Comparer les fournisseurs", path: "/app/stock" } });
   if (d.opportunities.length) sections.push({ emoji: "\u{1F7E2}", title: "Moins cher ailleurs", lines: d.opportunities.slice(0, 4).map((a) => a.message) });
@@ -6452,6 +6582,12 @@ async function buildDigestForRestaurant(rid, opts = {}) {
     discrepancies: { count: n8(disc.count), openValue: Math.round(n8(disc.value) * 100) / 100 },
     pendingOrders: pending,
     salesYesterday: n8(ys.c) > 0 ? n8(ys.p) : null,
+    // Chantier 9 : la relance « ventes non saisies » en attente est réellement affichée dans le mail du matin
+    // (elle est marquée « annoncée » ensuite : jamais annoncée dans le vide).
+    salesReminder: (() => {
+      const a = recentAlerts.find((x) => x.kind === "saisie");
+      return a ? { title: a.title, message: a.message } : null;
+    })(),
     spend: { thisMonth: n8(sp.thisMonth), evolutionPct }
   };
   return { input, ctx };
@@ -6468,7 +6604,22 @@ async function checkMissingSales(rid, now = /* @__PURE__ */ new Date()) {
   const db = await getDb();
   const [last] = await db.select({ day: sales.day }).from(sales).where(eq21(sales.restaurantId, rid)).orderBy(desc9(sales.day)).limit(1);
   const gapDays = last?.day ? Math.floor((now.getTime() - (/* @__PURE__ */ new Date(`${last.day}T00:00:00Z`)).getTime()) / 864e5) : null;
-  if (last && gapDays !== null && gapDays < SALES_GAP_DAYS()) return { created: false, gapDays };
+  const gentleKey = `ventes_non_saisies:j${now.toISOString().slice(0, 10)}`;
+  let gentle = false;
+  if (gapDays !== null && gapDays >= 2 && gapDays < SALES_GAP_DAYS()) {
+    const res2 = await db.insert(alerts).values({
+      restaurantId: rid,
+      dedupeKey: gentleKey,
+      kind: "saisie",
+      severity: "blue",
+      title: "\u{1F4DD} Pensez \xE0 saisir vos ventes",
+      message: `Derni\xE8re saisie : ${last?.day}. Sans vos ventes, la pr\xE9vision se rabat sur vos couverts et vos seuils. 30 secondes suffisent pour la remettre au juste.`,
+      actionUrl: "/app/ventes",
+      payload: { gapDays, lastDay: last?.day ?? null, reminder: "sales", gentle: true }
+    }).onConflictDoNothing().returning({ id: alerts.id });
+    gentle = res2.length > 0;
+  }
+  if (last && gapDays !== null && gapDays < SALES_GAP_DAYS()) return { created: false, gentle, gapDays };
   const key = `ventes_non_saisies:${weekKey(now)}`;
   const res = await db.insert(alerts).values({
     restaurantId: rid,
@@ -6480,7 +6631,7 @@ async function checkMissingSales(rid, now = /* @__PURE__ */ new Date()) {
     actionUrl: "/app/ventes",
     payload: { gapDays, lastDay: last?.day ?? null, reminder: "sales" }
   }).onConflictDoNothing().returning({ id: alerts.id });
-  return { created: res.length > 0, gapDays };
+  return { created: res.length > 0, gentle, gapDays };
 }
 async function notifyInsteadOfDigest(base, rid, opts) {
   if (opts.dryRun) return base;
@@ -9739,7 +9890,20 @@ settingsRoutes.get("/settings", async (c) => {
   const mc = mailerConfig();
   return c.json({
     restaurant: { id: r.id, name: r.name, city: r.city, coversPerDay: r.coversPerDay, plan: r.plan, trialEndsAt: r.trialEndsAt },
-    settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, immediateAlertEmails: s.immediateAlertEmails ?? true, notifyPhone: s.notifyPhone ?? "", digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [], billingEmail: s.billingEmail ?? "" },
+    settings: {
+      priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8,
+      forecastHorizonDays: s.forecastHorizonDays ?? 7,
+      autoReorderEnabled: s.autoReorderEnabled ?? true,
+      dailyDigestEnabled: s.dailyDigestEnabled ?? true,
+      immediateAlertEmails: s.immediateAlertEmails ?? true,
+      notifyPhone: s.notifyPhone ?? "",
+      digestRecipients: s.digestRecipients ?? [],
+      closedWeekdays: s.closedWeekdays ?? [],
+      billingEmail: s.billingEmail ?? "",
+      // Chantier 9 de l'audit 2 : saisonnalité (mois de pleine activité) utilisée par la prévision.
+      peakMonths: s.peakMonths ?? [],
+      peakCoef: s.peakCoef ?? 1.2
+    },
     // Chantier 6 : on annonce ce qui est réellement possible, pas ce qu'on aimerait faire.
     mail: { transport: mc.transport, from: mc.from, configured: mc.transport === "resend", delivered: mc.transport !== "log", stats: mailStats() },
     sms: { configured: smsConfig().enabled, whatsapp: smsConfig().whatsapp, delivered: smsConfig().enabled, stats: smsStats() },
@@ -9759,6 +9923,8 @@ settingsRoutes.put("/settings", async (c) => {
     digestRecipients: z16.array(z16.string().email()).max(10).optional(),
     closedWeekdays: z16.array(z16.number().int().min(0).max(6)).optional(),
     notifyPhone: z16.string().max(30).optional(),
+    peakMonths: z16.array(z16.number().int().min(1).max(12)).max(12).optional(),
+    peakCoef: z16.number().min(1).max(2).optional(),
     // Chantier 7 de l'audit 2 : adresse qui reçoit les factures AFRISUPPLY (vide = propriétaire du compte).
     billingEmail: z16.union([z16.string().email(), z16.literal("")]).optional()
   }).safeParse(await c.req.json());

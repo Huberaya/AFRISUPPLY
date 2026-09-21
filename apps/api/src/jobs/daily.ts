@@ -20,7 +20,7 @@ import { notifyCriticalAlerts, pendingImmediateAlerts, markAlertsNotified } from
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 
-export interface DailyResult { restaurantId: string; name: string; alerts: number; autoReorder: number; digest: 'sent' | 'skipped_disabled' | 'skipped_closed' | 'skipped_no_recipient' | 'error'; recipients: string[]; transport?: string; error?: string; immediate?: { alerts: number; sent: boolean; status: string }; missingSales?: { created: boolean; gapDays: number | null }; autoReorderError?: string; autoReorderSkipped?: string[] }
+export interface DailyResult { restaurantId: string; name: string; alerts: number; autoReorder: number; digest: 'sent' | 'skipped_disabled' | 'skipped_closed' | 'skipped_no_recipient' | 'error'; recipients: string[]; transport?: string; error?: string; immediate?: { alerts: number; sent: boolean; status: string }; missingSales?: { created: boolean; gentle?: boolean; gapDays: number | null }; autoReorderError?: string; autoReorderSkipped?: string[] }
 
 /** Construit le contenu du digest d'un restaurant (sans l'envoyer). */
 export async function buildDigestForRestaurant(rid: string, opts: { autoReorderPrepared?: DigestInput['autoReorder']; now?: Date } = {}) {
@@ -62,6 +62,9 @@ export async function buildDigestForRestaurant(rid: string, opts: { autoReorderP
     discrepancies: { count: n(disc.count), openValue: Math.round(n(disc.value) * 100) / 100 },
     pendingOrders: pending,
     salesYesterday: n(ys.c) > 0 ? n(ys.p) : null,
+    // Chantier 9 : la relance « ventes non saisies » en attente est réellement affichée dans le mail du matin
+    // (elle est marquée « annoncée » ensuite : jamais annoncée dans le vide).
+    salesReminder: (() => { const a = recentAlerts.find((x) => x.kind === 'saisie'); return a ? { title: a.title, message: a.message } : null; })(),
     spend: { thisMonth: n(sp.thisMonth), evolutionPct },
   };
   return { input, ctx };
@@ -87,11 +90,24 @@ export function weekKey(d: Date) {
  * Chantier 6 — relance si les ventes ne sont pas saisies depuis SALES_GAP_DAYS jours.
  * La relance devient une alerte (visible dans la cloche), envoyée par e-mail par lib/notify.ts.
  */
-export async function checkMissingSales(rid: string, now = new Date()): Promise<{ created: boolean; gapDays: number | null }> {
+export async function checkMissingSales(rid: string, now = new Date()): Promise<{ created: boolean; gentle: boolean; gapDays: number | null }> {
   const db = await getDb();
   const [last] = await db.select({ day: sales.day }).from(sales).where(eq(sales.restaurantId, rid)).orderBy(desc(sales.day)).limit(1);
   const gapDays = last?.day ? Math.floor((now.getTime() - new Date(`${last.day}T00:00:00Z`).getTime()) / 86_400_000) : null;
-  if (last && gapDays !== null && gapDays < SALES_GAP_DAYS()) return { created: false, gapDays };
+  // Chantier 9 (audit 2) : rappel doux à J+1/J+2 (une fois par jour, sans e-mail — la relance ferme
+  // des 3 jours garde son envoi immédiat). Les deux fenêtres ne se recouvrent jamais : pas de doublon.
+  const gentleKey = `ventes_non_saisies:j${now.toISOString().slice(0, 10)}`;
+  let gentle = false;
+  if (gapDays !== null && gapDays >= 2 && gapDays < SALES_GAP_DAYS()) {
+    const res = await db.insert(alerts).values({
+      restaurantId: rid, dedupeKey: gentleKey, kind: 'saisie', severity: 'blue',
+      title: '📝 Pensez à saisir vos ventes',
+      message: `Dernière saisie : ${last?.day}. Sans vos ventes, la prévision se rabat sur vos couverts et vos seuils. 30 secondes suffisent pour la remettre au juste.`,
+      actionUrl: '/app/ventes', payload: { gapDays, lastDay: last?.day ?? null, reminder: 'sales', gentle: true },
+    }).onConflictDoNothing().returning({ id: alerts.id });
+    gentle = res.length > 0;
+  }
+  if (last && gapDays !== null && gapDays < SALES_GAP_DAYS()) return { created: false, gentle, gapDays };
   const key = `ventes_non_saisies:${weekKey(now)}`;
   const res = await db.insert(alerts).values({
     restaurantId: rid, dedupeKey: key, kind: 'saisie', severity: 'orange',
@@ -101,7 +117,7 @@ export async function checkMissingSales(rid: string, now = new Date()): Promise<
       : `Enregistrez vos ventes du jour (portions vendues) : la prévision, le panier intelligent et les alertes de rupture s’appuient dessus.`,
     actionUrl: '/app/ventes', payload: { gapDays, lastDay: last?.day ?? null, reminder: 'sales' },
   }).onConflictDoNothing().returning({ id: alerts.id });
-  return { created: res.length > 0, gapDays };
+  return { created: res.length > 0, gentle, gapDays };
 }
 
 /** Le mail du matin ne part pas : on envoie tout de suite les alertes urgentes en attente (pas de silence). */

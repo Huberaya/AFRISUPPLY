@@ -64,7 +64,9 @@ settingsRoutes.get('/settings', async (c) => {
   const mc = mailerConfig();
   return c.json({
     restaurant: { id: r.id, name: r.name, city: r.city, coversPerDay: r.coversPerDay, plan: r.plan, trialEndsAt: r.trialEndsAt },
-    settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, immediateAlertEmails: s.immediateAlertEmails ?? true, notifyPhone: s.notifyPhone ?? '', digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [], billingEmail: s.billingEmail ?? '' },
+    settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, immediateAlertEmails: s.immediateAlertEmails ?? true, notifyPhone: s.notifyPhone ?? '', digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [], billingEmail: s.billingEmail ?? '',
+      // Chantier 9 de l'audit 2 : saisonnalité (mois de pleine activité) utilisée par la prévision.
+      peakMonths: s.peakMonths ?? [], peakCoef: s.peakCoef ?? 1.2 },
     // Chantier 6 : on annonce ce qui est réellement possible, pas ce qu'on aimerait faire.
     mail: { transport: mc.transport, from: mc.from, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', stats: mailStats() },
     sms: { configured: smsConfig().enabled, whatsapp: smsConfig().whatsapp, delivered: smsConfig().enabled, stats: smsStats() },
@@ -77,6 +79,7 @@ settingsRoutes.put('/settings', async (c) => {
     name: z.string().min(2).optional(), city: z.string().nullable().optional(), coversPerDay: z.number().int().positive().nullable().optional(),
     priceIncreaseAlertPct: z.number().min(1).max(50).optional(), forecastHorizonDays: z.number().int().min(3).max(14).optional(),
     autoReorderEnabled: z.boolean().optional(), dailyDigestEnabled: z.boolean().optional(), immediateAlertEmails: z.boolean().optional(), digestRecipients: z.array(z.string().email()).max(10).optional(), closedWeekdays: z.array(z.number().int().min(0).max(6)).optional(), notifyPhone: z.string().max(30).optional(),
+    peakMonths: z.array(z.number().int().min(1).max(12)).max(12).optional(), peakCoef: z.number().min(1).max(2).optional(),
     // Chantier 7 de l'audit 2 : adresse qui reçoit les factures AFRISUPPLY (vide = propriétaire du compte).
     billingEmail: z.union([z.string().email(), z.literal('')]).optional(),
   }).safeParse(await c.req.json());
