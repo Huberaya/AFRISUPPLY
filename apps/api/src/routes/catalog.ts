@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, isNull, sql, inArray } from 'drizzle-orm';
-import { getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, recipes, recipeIngredients } from '@afrisupply/db';
+import { getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, recipes, recipeIngredients, trackProducts } from '@afrisupply/db';
 import { REFERENCE_PRODUCTS, RECIPE_TEMPLATES, findReferenceProduct, normalize } from '@afrisupply/db/data';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { parseCsv, pick, toNumber, parsePack } from '../lib/csv.js';
@@ -58,13 +58,13 @@ catalogRoutes.post('/catalog/products', async (c) => {
   return c.json(row, 201);
 });
 
-/** Ajoute un produit au stock suivi (avec seuil optionnel). */
+/** Ajoute un produit au stock suivi (avec seuil optionnel — sinon seuils par défaut ≈3 j / objectif ≈7 j). */
 catalogRoutes.post('/catalog/track', async (c) => {
-  const rid = c.get('restaurantId'); const db = await getDb();
+  const rid = c.get('restaurantId');
   const body = z.object({ productIds: z.array(z.string().uuid()).min(1), criticalLevel: z.number().nonnegative().optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
-  const res = await db.insert(inventoryItems).values(body.data.productIds.map((productId) => ({ restaurantId: rid, productId, quantity: '0', criticalLevel: (body.data.criticalLevel ?? 0).toFixed(3) }))).onConflictDoNothing().returning({ id: inventoryItems.id });
-  return c.json({ added: res.length });
+  const added = await trackProducts(rid, body.data.productIds, { criticalLevel: body.data.criticalLevel });
+  return c.json({ added: added.length, items: added });
 });
 
 // -------------------------------------------------------------
@@ -97,8 +97,19 @@ catalogRoutes.post('/onboarding/apply', async (c) => {
     await db.insert(recipeIngredients).values(t.ingredients.map(([p, q]) => ({ recipeId: r.id, productId: byName.get(p)!, quantity: q.toFixed(4) })));
     createdRecipes++;
   }
-  const inv = await db.insert(inventoryItems).values([...productIds].map((productId) => ({ restaurantId: rid, productId, quantity: '0', criticalLevel: '0' }))).onConflictDoNothing().returning({ id: inventoryItems.id });
-  return c.json({ createdRecipes, trackedProducts: inv.length, totalProducts: productIds.size });
+  // Chantier 1 (audit) : le stock suivi naît avec des seuils explicites (≈3 j critique / ≈7 j objectif),
+  // sans quoi la prévision et le panier intelligent restent muets au démarrage (« rien à commander »).
+  const added = await trackProducts(rid, [...productIds]);
+  // L'écran d'onboarding propose ensuite l'étape « vos seuils d'alerte » avec ces valeurs pré-remplies.
+  const items = await db.select({
+    id: inventoryItems.id, productId: products.id, productName: products.name, unit: products.baseUnit, category: products.category,
+    criticalLevel: inventoryItems.criticalLevel, targetLevel: inventoryItems.targetLevel,
+  }).from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId))
+    .where(and(eq(inventoryItems.restaurantId, rid), inArray(inventoryItems.productId, [...productIds])));
+  return c.json({
+    createdRecipes, trackedProducts: added.length, totalProducts: productIds.size,
+    items: items.map((i) => ({ id: i.id, productId: i.productId, productName: i.productName, unit: i.unit, category: i.category, criticalLevel: n(i.criticalLevel), targetLevel: i.targetLevel === null ? null : n(i.targetLevel) })),
+  });
 });
 
 // -------------------------------------------------------------
@@ -178,7 +189,7 @@ catalogRoutes.post('/import/suppliers', async (c) => {
   const allIds = pids.length ? pids : [];
   const extra = privateProducts.filter((pp) => previews.some((p) => p.status === 'nouveau_produit' && normalize(p.product) === normalize(pp.name))).map((pp) => pp.id);
   const toTrack = [...new Set([...allIds, ...extra])];
-  if (toTrack.length) await db.insert(inventoryItems).values(toTrack.map((productId) => ({ restaurantId: rid, productId, quantity: '0', criticalLevel: '0' }))).onConflictDoNothing();
+  if (toTrack.length) await trackProducts(rid, toTrack);
 
   return c.json({ headers, summary, createdSuppliers, createdProducts, upsertedOffers });
 });

@@ -6,6 +6,7 @@ import { and, eq, desc, gte, inArray, sql } from 'drizzle-orm';
 import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements,
   orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, alerts, restaurants, vendors, commissions,
+  trackProducts,
 } from '@afrisupply/db';
 import { sendMail } from '../lib/mailer.js';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
@@ -92,8 +93,8 @@ manageRoutes.post('/suppliers/:id/offers', async (c) => {
   const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid, supplierId, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock })
     .onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, lastSeenAt: new Date() } }).returning();
   await db.insert(priceHistory).values({ restaurantId: rid, offerId: offer.id, unitPriceEur: (d.packPrice / d.packQty).toFixed(4), source: 'manuel' });
-  // le produit devient suivi en stock s'il ne l'est pas encore
-  await db.insert(inventoryItems).values({ restaurantId: rid, productId: d.productId, quantity: '0', criticalLevel: '0' }).onConflictDoNothing();
+  // le produit devient suivi en stock s'il ne l'est pas encore (avec seuils par défaut — chantier 1)
+  await trackProducts(rid, [d.productId]);
   return c.json(offer, 201);
 });
 
@@ -152,7 +153,7 @@ manageRoutes.post('/recipes', async (c) => {
   const d = body.data;
   const [r] = await db.insert(recipes).values({ restaurantId: rid, name: d.name, sellingPriceEur: d.sellingPriceEur != null ? d.sellingPriceEur.toFixed(2) : null, targetMarginPct: (d.targetMarginPct ?? 70).toFixed(2) }).returning();
   await db.insert(recipeIngredients).values(d.ingredients.map((i) => ({ recipeId: r.id, productId: i.productId, quantity: i.quantity.toFixed(4) })));
-  await db.insert(inventoryItems).values(d.ingredients.map((i) => ({ restaurantId: rid, productId: i.productId, quantity: '0', criticalLevel: '0' }))).onConflictDoNothing();
+  await trackProducts(rid, d.ingredients.map((i) => i.productId));
   return c.json(r, 201);
 });
 
@@ -170,7 +171,7 @@ manageRoutes.put('/recipes/:id', async (c) => {
   if (d.ingredients) {
     await db.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, r.id));
     await db.insert(recipeIngredients).values(d.ingredients.map((i) => ({ recipeId: r.id, productId: i.productId, quantity: i.quantity.toFixed(4) })));
-    await db.insert(inventoryItems).values(d.ingredients.map((i) => ({ restaurantId: rid, productId: i.productId, quantity: '0', criticalLevel: '0' }))).onConflictDoNothing();
+    await trackProducts(rid, d.ingredients.map((i) => i.productId));
   }
   return c.json(r);
 });
@@ -197,6 +198,32 @@ manageRoutes.put('/stock/:itemId', async (c) => {
   }).where(and(eq(inventoryItems.id, c.req.param('itemId')), eq(inventoryItems.restaurantId, rid))).returning();
   if (!row) return c.json({ error: 'Article introuvable' }, 404);
   return c.json(row);
+});
+
+/**
+ * Chantier 1 (audit) — réglage en lot des seuils d'alerte (étape « vos seuils » de l'onboarding).
+ * Une seule requête pour 30 produits : indispensable en cuisine, sur mobile.
+ */
+manageRoutes.post('/stock/thresholds', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const body = z.object({
+    items: z.array(z.object({
+      itemId: z.string().uuid(),
+      criticalLevel: z.number().nonnegative(),
+      targetLevel: z.number().nonnegative().nullable().optional(),
+    })).min(1).max(200),
+  }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
+  let updated = 0;
+  for (const it of body.data.items) {
+    const [row] = await db.update(inventoryItems).set({
+      criticalLevel: it.criticalLevel.toFixed(3),
+      targetLevel: it.targetLevel === null ? null : it.targetLevel !== undefined ? it.targetLevel.toFixed(3) : undefined,
+      updatedAt: new Date(),
+    }).where(and(eq(inventoryItems.id, it.itemId), eq(inventoryItems.restaurantId, rid))).returning({ id: inventoryItems.id });
+    if (row) updated++;
+  }
+  return c.json({ updated });
 });
 
 manageRoutes.delete('/stock/:itemId', async (c) => {

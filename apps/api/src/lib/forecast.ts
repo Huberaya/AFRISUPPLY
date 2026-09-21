@@ -13,7 +13,7 @@ export interface SaleRow { recipeId: string; day: string; portions: number }
 export interface IngredientRow { recipeId: string; productId: string; quantity: number }
 export interface StockRow { productId: string; productName: string; unit: string; quantity: number; criticalLevel: number; targetLevel: number | null; shelfLifeDays?: number | null }
 
-export interface RecipeForecast { recipeId: string; perDay: number[]; total: number; confidence: number }
+export interface RecipeForecast { recipeId: string; perDay: number[]; total: number; confidence: number; daysWithData: number }
 export interface ProductForecast {
   productId: string; productName: string; unit: string;
   horizonDays: number; predictedNeed: number; currentStock: number; safetyStock: number;
@@ -76,7 +76,7 @@ export function forecastRecipes(sales: SaleRow[], recipeIds: string[], opts: For
     }
     const total = perDay.reduce((a, b) => a + b, 0);
     const confidence = daysWithData >= 28 ? 0.85 : daysWithData >= 14 ? 0.7 : daysWithData >= 7 ? 0.55 : daysWithData > 0 ? 0.4 : 0.2;
-    out.set(rid, { recipeId: rid, perDay, total: Math.round(total * 10) / 10, confidence });
+    out.set(rid, { recipeId: rid, perDay, total: Math.round(total * 10) / 10, confidence, daysWithData });
   }
   return out;
 }
@@ -86,12 +86,12 @@ export function forecastProducts(
   recipeForecasts: Map<string, RecipeForecast>, ingredients: IngredientRow[], stocks: StockRow[], opts: ForecastOptions = {},
 ): ProductForecast[] {
   const horizon = opts.horizonDays ?? 7; const safetyDays = opts.safetyDays ?? 2; const today = opts.today ?? new Date();
-  const perProduct = new Map<string, { perDay: number[]; conf: number[]; recipes: number }>();
+  const perProduct = new Map<string, { perDay: number[]; conf: number[]; recipes: number; daysWithData: number }>();
   for (const ing of ingredients) {
     const rf = recipeForecasts.get(ing.recipeId); if (!rf) continue;
-    const acc = perProduct.get(ing.productId) ?? { perDay: new Array<number>(horizon).fill(0), conf: [] as number[], recipes: 0 };
+    const acc = perProduct.get(ing.productId) ?? { perDay: new Array<number>(horizon).fill(0), conf: [] as number[], recipes: 0, daysWithData: 0 };
     rf.perDay.forEach((p, i) => { acc.perDay[i] += p * ing.quantity; });
-    acc.conf.push(rf.confidence); acc.recipes++;
+    acc.conf.push(rf.confidence); acc.recipes++; acc.daysWithData = Math.max(acc.daysWithData, rf.daysWithData);
     perProduct.set(ing.productId, acc);
   }
   const out: ProductForecast[] = [];
@@ -106,19 +106,40 @@ export function forecastProducts(
     for (let i = 0; i < perDay.length; i++) { cum += perDay[i]; if (cum > s.quantity) { stockoutIdx = i; break; } }
     const daysLeft = avg > 0 ? Math.round((s.quantity / avg) * 10) / 10 : null;
     const safety = Math.max(s.criticalLevel, avg * safetyDays);
-    let recommended = Math.max(0, need + safety - s.quantity);
-    // ne pas dépasser un stock cible ou une DLC courte
-    if (s.targetLevel && s.quantity + recommended > s.targetLevel * 1.5) recommended = Math.max(0, s.targetLevel * 1.5 - s.quantity);
+    const needWithSafety = need + safety;
+    // Chantier 1 (audit) — démarrage à froid : sans AUCUN historique de vente, se couvrir sur l'horizon
+    // donne toujours 0 et le panier intelligent reste muet. On complète alors au moins jusqu'à
+    // l'objectif (politique (s, S)) ; sans objectif, le retour au seuil critique (comportement d'origine).
+    const daysWithData = acc?.daysWithData ?? 0;
+    let upTo = needWithSafety;
+    if (daysWithData === 0) upTo = Math.max(needWithSafety, s.targetLevel ?? 0);
+    let recommended = Math.max(0, upTo - s.quantity);
+    // Plafond anti-surstock : jamais en dessous du besoin couvert (une cible mal réglée ne doit
+    // pas faire sous-commander une période de forte activité).
+    const cap = Math.max(needWithSafety, s.targetLevel ? s.targetLevel * 1.5 : 0);
+    if (s.quantity + recommended > cap) recommended = Math.max(0, cap - s.quantity);
+    // ne pas dépasser une DLC courte
     if (s.shelfLifeDays && s.shelfLifeDays < horizon && avg > 0) recommended = Math.min(recommended, Math.max(0, avg * s.shelfLifeDays + safety - s.quantity));
     recommended = Math.round(recommended * 10) / 10;
 
     const fmt = (v: number) => `${Number.isInteger(v) ? v : v.toFixed(1)} ${s.unit}`;
     let explanation: string;
-    if (!acc) explanation = `${s.productName} n'entre dans aucune recette : prévision basée uniquement sur votre seuil critique (${fmt(s.criticalLevel)}).`;
-    else {
-      const peak = perDay.indexOf(Math.max(...perDay)); const peakDay = DOW_FR[new Date(today.getTime() + (peak + 1) * DAY_MS).getDay()];
-      explanation = `Besoin estimé de ${fmt(Math.round(need * 10) / 10)} sur ${horizon} jours, calculé à partir de ${acc.recipes} recette${acc.recipes > 1 ? 's' : ''} et de vos ventes des 4 dernières semaines (pic ${peakDay}). ` +
-        `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null ? ` → rupture prévue ${DOW_FR[new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ', suffisant sur la période.') +
+    if (daysWithData === 0) {
+      // Démarrage à froid : on n'invente ni « pic » ni prévision — on dit ce qu'on sait.
+      const seuils = (s.criticalLevel > 0 || (s.targetLevel ?? 0) > 0)
+        ? `je m'appuie sur vos seuils (critique ${fmt(s.criticalLevel)}${s.targetLevel ? `, objectif ${fmt(s.targetLevel)}` : ''})`
+        : `définissez un seuil critique (ou faites un inventaire) pour que je puisse chiffrer une commande`;
+      explanation = (!acc
+        ? `${s.productName} n'entre dans aucune recette. `
+        : `Pas encore assez de ventes pour prévoir ${s.productName.toLowerCase()} sur ${horizon} jours. `) +
+        `${seuils.charAt(0).toUpperCase()}${seuils.slice(1)}.` +
+        (recommended > 0 ? ` Commande recommandée : ${fmt(recommended)}${s.targetLevel ? ' (ramène le stock à votre objectif)' : ''}.` : '');
+    } else {
+      const peakVal = Math.max(...perDay);
+      const peak = perDay.indexOf(peakVal); const peakDay = DOW_FR[new Date(today.getTime() + (peak + 1) * DAY_MS).getDay()];
+      explanation = `Besoin estimé de ${fmt(Math.round(need * 10) / 10)} sur ${horizon} jours, calculé à partir de ${acc!.recipes} recette${acc!.recipes > 1 ? 's' : ''} et de vos ventes des 4 dernières semaines${peakVal > 0 ? ` (pic ${peakDay})` : ''}` +
+        (daysWithData < 7 ? ` — estimé sur ${daysWithData} jour${daysWithData > 1 ? 's' : ''} seulement` : '') + `. ` +
+        `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null && need > 0 ? ` → rupture prévue ${DOW_FR[new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ', suffisant sur la période.') +
         (recommended > 0 ? ` Commande recommandée : ${fmt(recommended)} (inclut ${safetyDays} j de sécurité).` : '');
     }
     out.push({

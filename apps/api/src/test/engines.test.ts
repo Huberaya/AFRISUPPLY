@@ -12,6 +12,19 @@ describe('stock', () => {
     const [a] = alertsFromStock([snap(10, 15, 3)]);
     expect(a.severity).toBe('red'); expect(a.message).toContain('seuil critique');
   });
+  // Chantier 1 (audit) : plus de faux « critique sous votre seuil critique de 0 kg ».
+  it('produit non configuré à zéro : statut « bas » + alerte bleue « à renseigner » (jamais un faux critique)', () => {
+    const unconf = { productId: 'p', productName: 'Sel', unit: 'kg', quantity: 0, criticalLevel: 0, targetLevel: null, avgDailyUse: 0 };
+    expect(stockStatus(unconf)).toBe('bas');
+    const [a] = alertsFromStock([unconf]);
+    expect(a.severity).toBe('blue'); expect(a.title).toMatch(/renseigner/i);
+    expect(a.message).not.toContain('seuil critique de 0');
+  });
+  it('produit non configuré avec du stock : pas de statut alarmiste, pas d’alerte', () => {
+    const unconf = { productId: 'p', productName: 'Sel', unit: 'kg', quantity: 4, criticalLevel: 0, targetLevel: null, avgDailyUse: 0 };
+    expect(stockStatus(unconf)).toBe('ok');
+    expect(alertsFromStock([unconf])).toHaveLength(0);
+  });
 });
 
 describe('prix', () => {

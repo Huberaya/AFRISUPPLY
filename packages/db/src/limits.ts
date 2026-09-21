@@ -14,9 +14,9 @@
 // routes de commande), auquel cas la décision est tracée.
 // =============================================================
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from './client.js';
-import { inventoryItems, stockMovements } from './schema.js';
+import { inventoryItems, products, stockMovements } from './schema.js';
 
 /** Nombre de mois de consommation qu'une commande ne doit pas dépasser sans confirmation explicite. */
 export const ORDER_MAX_MONTHS_OF_STOCK = Number(process.env.ORDER_MAX_MONTHS_OF_STOCK ?? 12);
@@ -25,6 +25,61 @@ export const ORDER_MAX_MONTHS_OF_STOCK = Number(process.env.ORDER_MAX_MONTHS_OF_
 const CATEGORY_MONTHLY_FALLBACK: Record<string, number> = {
   feculents: 40, frais: 40, viandes_poissons: 30, epicerie: 20, boissons: 20, emballages: 50,
 };
+
+// -------------------------------------------------------------
+// Chantier 1 (audit) — démarrage à froid : seuils par défaut
+//
+// Avant : un produit ajouté au suivi l'était avec `critical_level = 0`.
+// Résultat : aucune recommandation possible (« rien à commander » alors
+// que le stock est à zéro), et des alertes absurdes (« sous votre seuil
+// critique de 0 kg »). Désormais tout produit suivi naît avec un seuil
+// critique (≈ 3 jours de conso) et un objectif (≈ 7 jours), dérivés de
+// l'ordre de grandeur de sa catégorie. L'utilisateur peut les ajuster.
+// -----------------------------------------------------------------------
+
+/** Seuils par défaut à l'ajout d'un produit au suivi : ≈3 jours en critique, ≈7 jours en objectif. */
+export function defaultThresholds(category: string | null | undefined): { criticalLevel: number; targetLevel: number } {
+  const monthly = CATEGORY_MONTHLY_FALLBACK[category ?? ''] ?? 20;
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+  return {
+    criticalLevel: Math.max(1, round1(monthly / 10)),   // ≈ 3 jours de consommation
+    targetLevel: Math.max(2, round1(monthly / 4)),      // ≈ 7–8 jours de consommation
+  };
+}
+
+export type TrackedItem = { id: string; productId: string; criticalLevel: number; targetLevel: number | null };
+
+/**
+ * Ajoute des produits au stock suivi AVEC des seuils explicites (jamais 0/0 silencieux).
+ * Idempotent : un produit déjà suivi garde ses réglages (on n'écrase jamais la configuration).
+ * `opts.criticalLevel` force un seuil commun (objectif = max(défaut, 2 × seuil)).
+ */
+export async function trackProducts(
+  restaurantId: string,
+  productIds: string[],
+  opts: { criticalLevel?: number | null } = {},
+): Promise<TrackedItem[]> {
+  const db = await getDb();
+  const ids = [...new Set(productIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const prods = await db.select({ id: products.id, category: products.category }).from(products).where(inArray(products.id, ids));
+  const catById = new Map(prods.map((p) => [p.id, p.category as string]));
+  const rows = ids.map((productId) => {
+    const d = defaultThresholds(catById.get(productId));
+    const critical = opts.criticalLevel ?? d.criticalLevel;
+    const target = Math.max(d.targetLevel, critical * 2);
+    return {
+      restaurantId, productId,
+      quantity: '0',
+      criticalLevel: critical.toFixed(3),
+      targetLevel: target.toFixed(3),
+    };
+  });
+  const ins = await db.insert(inventoryItems).values(rows)
+    .onConflictDoNothing({ target: [inventoryItems.restaurantId, inventoryItems.productId] })
+    .returning({ id: inventoryItems.id, productId: inventoryItems.productId, criticalLevel: inventoryItems.criticalLevel, targetLevel: inventoryItems.targetLevel });
+  return ins.map((r) => ({ id: r.id, productId: r.productId, criticalLevel: Number(r.criticalLevel), targetLevel: r.targetLevel === null ? null : Number(r.targetLevel) }));
+}
 
 export type QuantityCeiling = {
   /** Quantité maximale (en unité de base) acceptée sans confirmation explicite. */

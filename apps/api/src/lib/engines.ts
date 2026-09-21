@@ -20,7 +20,14 @@ export interface StockSnapshot {
 
 export type StockStatus = 'ok' | 'bas' | 'critique';
 
+/** Vrai si le produit porte au moins un repère exploitable (seuil, objectif ou consommation connue). */
+export const isStockConfigured = (s: StockSnapshot) => s.criticalLevel > 0 || s.avgDailyUse > 0 || (s.targetLevel ?? 0) > 0;
+
 export function stockStatus(s: StockSnapshot): StockStatus {
+  // Chantier 1 (audit) : sans seuil ni consommation connue, « critique » est un faux diagnostic
+  // (le fameux « sous votre seuil critique de 0 kg »). Un produit à zéro non configuré est « bas »
+  // (à traiter : inventaire + seuil), jamais « critique » — la critique suppose un repère.
+  if (!isStockConfigured(s)) return s.quantity <= 0 ? 'bas' : 'ok';
   if (s.quantity <= s.criticalLevel) return 'critique';
   const days = daysOfStock(s);
   if (days !== null && days <= 3) return 'critique';
@@ -83,6 +90,17 @@ export function alertsFromStock(stocks: StockSnapshot[], today = new Date()): En
   for (const s of stocks) {
     const status = stockStatus(s);
     const days = daysOfStock(s);
+    // Chantier 1 (audit) : produit à zéro sans aucun repère → une invitation à configurer (bleue),
+    // pas 31 fausses « ruptures » le premier jour.
+    if (!isStockConfigured(s)) {
+      if (s.quantity <= 0) out.push({
+        dedupeKey: `a_configurer:${s.productId}:${dayKey}`, kind: 'stock_bas', severity: 'blue',
+        title: `⚪ À renseigner — ${s.productName}`,
+        message: `Stock à 0 et aucun seuil pour ${s.productName.toLowerCase()} : faites un inventaire et fixez un seuil critique pour être alerté avant les ruptures.`,
+        productId: s.productId, actionUrl: '/app/stock', payload: { quantity: s.quantity },
+      });
+      continue;
+    }
     if (status === 'critique') {
       const reason = s.quantity <= s.criticalLevel
         ? `Stock actuel ${fmtQty(s.quantity, s.unit)}, sous votre seuil critique de ${fmtQty(s.criticalLevel, s.unit)}.`

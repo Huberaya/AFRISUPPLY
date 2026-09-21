@@ -180,16 +180,35 @@ intelligenceRoutes.post('/assistant/ask', async (c) => {
     case 'what_to_order': {
       const needs = ctx.productForecasts.filter((f) => f.recommendedOrder > 0);
       const cart = buildSmartCart(needs.map((f) => ({ productId: f.productId, productName: f.productName, unit: f.unit, neededQty: f.recommendedOrder, daysOfStockLeft: f.daysOfStockLeft, preferredSupplierId: ctx.stocks.find((s) => s.productId === f.productId)?.preferredSupplierId })), ctx.offers);
-      const urgent = needs.filter((f) => f.stockoutDay).slice(0, 5);
-      facts.push(`Produits à commander sur ${ctx.horizon} j : ${needs.length}`, ...needs.slice(0, 12).map((f) => `- ${f.productName} : besoin ${qty(f.predictedNeed, f.unit)}, stock ${qty(f.currentStock, f.unit)}, commander ${qty(f.recommendedOrder, f.unit)}${f.stockoutDay ? ` (rupture prévue le ${f.stockoutDay})` : ''}`), `Panier optimisé : ${eur(cart.total)} chez ${cart.suppliers.length} fournisseur(s) ; économie vs habitudes : ${eur(cart.saving)}`);
-      draft = needs.length ? `Pour les ${ctx.horizon} prochains jours, tu dois commander **${needs.length} produits**. Les plus urgents : ${urgent.map((f) => `${f.productName} (${qty(f.recommendedOrder, f.unit)}, rupture prévue le ${f.stockoutDay?.slice(8, 10)}/${f.stockoutDay?.slice(5, 7)})`).join(', ') || 'aucune rupture imminente'}. J'ai préparé un panier optimisé de **${eur(cart.total)}** réparti entre ${cart.suppliers.map((s) => s.supplierName).join(', ')}${cart.saving > 0 ? `, soit **${eur(cart.saving)} d'économie** par rapport à tes fournisseurs habituels` : ''}.` : `Bonne nouvelle : d'après tes ventes et ton stock, rien d'urgent à commander sur ${ctx.horizon} jours.`;
+      // Chantier 1 (audit) : produits déjà à sec que la prévision ne peut pas encore chiffrer
+      // (ni seuil ni historique) — ne jamais dire « rien d'urgent » dans ce cas.
+      const empty = ctx.productForecasts.filter((f) => f.recommendedOrder <= 0 && f.currentStock <= 0);
+      const urgent = [...needs].sort((a, b) => (a.stockoutDay ?? '9').localeCompare(b.stockoutDay ?? '9') || (a.daysOfStockLeft ?? 99) - (b.daysOfStockLeft ?? 99)).slice(0, 5);
+      facts.push(`Produits à commander sur ${ctx.horizon} j : ${needs.length}`, ...needs.slice(0, 12).map((f) => `- ${f.productName} : besoin ${qty(f.predictedNeed, f.unit)}, stock ${qty(f.currentStock, f.unit)}, commander ${qty(f.recommendedOrder, f.unit)}${f.stockoutDay ? ` (rupture prévue le ${f.stockoutDay})` : f.currentStock <= 0 ? ' (déjà à sec)' : ''}`),
+        ...(empty.length ? [`Produits à sec non chiffrables (seuil ou historique manquant) : ${empty.map((f) => f.productName).join(', ')}`] : []),
+        ...(cart.suppliers.length ? [`Panier optimisé : ${eur(cart.total)} chez ${cart.suppliers.length} fournisseur(s) ; économie vs habitudes : ${eur(cart.saving)}`] : []));
+      draft = needs.length
+        ? `Pour les ${ctx.horizon} prochains jours, tu dois commander **${needs.length} produits**. Les plus urgents : ${urgent.map((f) => `${f.productName} (${qty(f.recommendedOrder, f.unit)}${f.stockoutDay ? `, rupture prévue le ${f.stockoutDay.slice(8, 10)}/${f.stockoutDay.slice(5, 7)}` : f.currentStock <= 0 ? ', déjà à sec' : ''})`).join(', ')}.` +
+          (cart.suppliers.length
+            ? ` J'ai préparé un panier optimisé de **${eur(cart.total)}** réparti entre ${cart.suppliers.map((s) => s.supplierName).join(', ')}${cart.saving > 0 ? `, soit **${eur(cart.saving)} d'économie** par rapport à tes fournisseurs habituels` : ''}.`
+            : ` Ajoute tes fournisseurs et leurs prix (ou importe ta liste) et je prépare le panier commandable.`)
+        : empty.length
+          ? `Attention : ${empty.length} produit${empty.length > 1 ? 's sont' : ' est'} déjà à sec (${empty.slice(0, 5).map((f) => f.productName).join(', ')}) mais je ne peux pas encore chiffrer une commande — renseigne un seuil critique ou fais un premier inventaire dans Stock, et j'en déduis une quantité.`
+          : `Bonne nouvelle : d'après tes ventes et ton stock, rien d'urgent à commander sur ${ctx.horizon} jours.`;
       actions.push({ label: 'Voir le panier intelligent', url: '/app/achats/panier' });
       break;
     }
     case 'upcoming_stockouts': {
       const soon = ctx.productForecasts.filter((f) => f.stockoutDay).slice(0, 8);
-      facts.push(...soon.map((f) => `- ${f.productName} : stock ${qty(f.currentStock, f.unit)}, besoin/jour ${qty(f.avgDailyNeed, f.unit)}, rupture le ${f.stockoutDay}`));
-      draft = soon.length ? `${soon.length} rupture${soon.length > 1 ? 's' : ''} à venir : ${soon.map((f) => `**${f.productName}** le ${f.stockoutDay!.slice(8, 10)}/${f.stockoutDay!.slice(5, 7)} (reste ${qty(f.currentStock, f.unit)}, ~${qty(f.avgDailyNeed, f.unit)}/jour)`).join(' ; ')}.` : 'Aucune rupture prévue sur la période avec ton rythme de ventes actuel.';
+      // Chantier 1 (audit) : « aucune rupture prévue » est faux si des produits sont déjà à zéro.
+      const empty = ctx.productForecasts.filter((f) => !f.stockoutDay && f.currentStock <= 0).slice(0, 8);
+      facts.push(...soon.map((f) => `- ${f.productName} : stock ${qty(f.currentStock, f.unit)}, besoin/jour ${qty(f.avgDailyNeed, f.unit)}, rupture le ${f.stockoutDay}`),
+        ...(empty.length ? [`Déjà à sec : ${empty.map((f) => f.productName).join(', ')}`] : []));
+      draft = soon.length
+        ? `${soon.length} rupture${soon.length > 1 ? 's' : ''} à venir : ${soon.map((f) => `**${f.productName}** le ${f.stockoutDay!.slice(8, 10)}/${f.stockoutDay!.slice(5, 7)} (reste ${qty(f.currentStock, f.unit)}, ~${qty(f.avgDailyNeed, f.unit)}/jour)`).join(' ; ')}.`
+        : empty.length
+          ? `${empty.length} produit${empty.length > 1 ? 's sont' : ' est'} déjà à sec : ${empty.map((f) => f.productName).join(', ')}. Sans historique de vente, je ne peux pas dater les prochaines ruptures — saisis tes ventes quelques jours et la prévision prendra le relais.`
+          : 'Aucune rupture prévue sur la période avec ton rythme de ventes actuel.';
       actions.push({ label: 'Voir la prévision', url: '/app/stock/prevision' });
       break;
     }
