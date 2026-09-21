@@ -272,7 +272,7 @@ manageRoutes.get('/discrepancies', async (c) => {
     .where(onlyOpen ? and(eq(deliveries.restaurantId, rid), eq(deliveryDiscrepancies.resolved, false)) : eq(deliveries.restaurantId, rid)).orderBy(desc(deliveries.receivedAt)).limit(200);
   const items = rows.map((r) => {
     const missing = n(r.d.orderedQty) - n(r.d.receivedQty);
-    return { id: r.d.id, deliveryId: r.delivery.id, orderId: r.order.id, reference: r.order.reference, supplierName: r.supplierName, productName: r.productName, unit: r.unit, ordered: n(r.d.orderedQty), received: n(r.d.receivedQty), missing, valueEur: Math.round(missing * n(r.unitPrice) * 100) / 100, reason: r.d.reason, resolved: r.d.resolved, receivedAt: r.delivery.receivedAt, isLate: r.delivery.isLate, claimMessage: r.d.claimMessage };
+    return { id: r.d.id, deliveryId: r.delivery.id, orderId: r.order.id, vendorId: r.order.vendorId, reference: r.order.reference, supplierName: r.supplierName, productName: r.productName, unit: r.unit, ordered: n(r.d.orderedQty), received: n(r.d.receivedQty), missing, valueEur: Math.round(missing * n(r.unitPrice) * 100) / 100, reason: r.d.reason, resolved: r.d.resolved, receivedAt: r.delivery.receivedAt, isLate: r.delivery.isLate, claimMessage: r.d.claimMessage };
   });
   const openValue = items.filter((i) => !i.resolved && i.missing > 0).reduce((a, i) => a + i.valueEur, 0);
   return c.json({ items, openValue: Math.round(openValue * 100) / 100 });

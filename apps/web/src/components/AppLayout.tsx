@@ -64,7 +64,7 @@ export default function AppLayout() {
         ))}
         {user?.isAdmin && <>
           <p className="px-3 pt-4 pb-1 text-[11px] uppercase tracking-wide text-stone-500">Admin AFRISUPPLY</p>
-          {[['/app/admin', 'Tableau de bord'], ['/app/admin/pilotes', 'Cockpit pilotes'], ['/app/admin/prospection', 'Prospection'], ['/app/admin/abonnements', 'Abonnements'], ['/app/admin/fournisseurs', 'Fournisseurs plateforme'], ['/app/admin/referentiel', 'Référentiel produits']].map(([to, label]) => <NavLink key={to} to={to} end={to === "/app/admin"} onClick={() => setOpen(false)} className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${isActive ? 'bg-brand-700 text-white' : 'hover:bg-stone-800 text-stone-300'}`}><ShieldCheck size={18} /> {label}</NavLink>)}
+          {[['/app/admin', 'Tableau de bord'], ['/app/admin/pilotes', 'Cockpit pilotes'], ['/app/admin/prospection', 'Prospection'], ['/app/admin/abonnements', 'Abonnements'], ['/app/admin/fournisseurs', 'Fournisseurs plateforme'], ['/app/admin/referentiel', 'Référentiel produits'], ['/app/admin/litiges', 'Litiges']].map(([to, label]) => <NavLink key={to} to={to} end={to === "/app/admin"} onClick={() => setOpen(false)} className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${isActive ? 'bg-brand-700 text-white' : 'hover:bg-stone-800 text-stone-300'}`}><ShieldCheck size={18} /> {label}</NavLink>)}
         </>}
       </nav>
       <div className="border-t border-stone-800 px-4 py-4">

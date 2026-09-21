@@ -4,11 +4,12 @@ import { Copy, CheckCircle2 } from 'lucide-react';
 import { api, fmtEur, fmtQty, fmtDate } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Empty, Stat } from '../components/ui';
+import { ClaimModal, ClaimsList } from '../components/Claims';
 
-type Item = { id: string; orderId: string; reference: string; supplierName: string; productName: string; unit: string; ordered: number; received: number; missing: number; valueEur: number; reason: string | null; resolved: boolean; receivedAt: string; isLate: boolean; claimMessage: string | null };
+type Item = { id: string; orderId: string; vendorId?: string | null; reference: string; supplierName: string; productName: string; unit: string; ordered: number; received: number; missing: number; valueEur: number; reason: string | null; resolved: boolean; receivedAt: string; isLate: boolean; claimMessage: string | null };
 
 export default function Discrepancies() {
-  const [all, setAll] = useState(false);
+  const [all, setAll] = useState(false); const [claimFor, setClaimFor] = useState<Item | null>(null); const [flash, setFlash] = useState<string | null>(null);
   const { data, loading, error, reload } = useApi<{ items: Item[]; openValue: number }>(`/discrepancies${all ? '?all=1' : ''}`);
   const resolve = async (i: Item, resolution: 'avoir' | 'relivraison' | 'abandon') => { await api(`/discrepancies/${i.id}/resolve`, { method: 'POST', json: { resolution } }); await reload(); };
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />;
@@ -19,6 +20,9 @@ export default function Discrepancies() {
       <Link to="/app/achats" className="text-sm text-stone-500">← Achats</Link>
       <PageTitle title="⚠️ Écarts de livraison" subtitle="Manquants et excédents constatés à la réception. Chaque écart a sa réclamation pré-rédigée ; marquez-le résolu quand l’avoir ou la relivraison est obtenu."
         action={<label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Afficher les résolus</label>} />
+      {flash && <p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{flash}</p>}
+      {claimFor && <ClaimModal discrepancyId={claimFor.id} productName={claimFor.productName} defaultEur={Math.max(0, claimFor.valueEur)} onClose={() => setClaimFor(null)} onDone={(m) => { setClaimFor(null); setFlash(m); void reload(); }} />}
+      <ClaimsList />
       <div className="grid gap-3 sm:grid-cols-3">
         <Stat label="Écarts ouverts" value={openItems.length} tone={openItems.length ? 'warn' : 'good'} />
         <Stat label="Valeur à récupérer" value={fmtEur(data?.openValue ?? 0)} tone={(data?.openValue ?? 0) > 0 ? 'bad' : 'good'} hint="manquants × prix commandé" />
@@ -37,7 +41,7 @@ export default function Discrepancies() {
               {i.reason && <p className="mt-2 text-xs text-stone-500">Motif : {i.reason}</p>}
               <div className="mt-3 flex flex-wrap gap-2">
                 {i.claimMessage && <button className="btn-ghost !py-1.5" onClick={() => void navigator.clipboard.writeText(i.claimMessage!)}><Copy size={14} /> Copier la réclamation</button>}
-                {!i.resolved && <><button className="btn-primary !py-1.5" onClick={() => void resolve(i, 'avoir')}>Avoir obtenu</button><button className="btn-ghost !py-1.5" onClick={() => void resolve(i, 'relivraison')}>Relivré</button><button className="btn-ghost !py-1.5 text-stone-500" onClick={() => void resolve(i, 'abandon')}>Abandonner</button></>}
+                {!i.resolved && i.vendorId && <button className="btn-primary !py-1.5 !bg-purple-700" onClick={() => setClaimFor(i)}>⚖️ Ouvrir un litige (avoir)</button>}{!i.resolved && <><button className="btn-primary !py-1.5" onClick={() => void resolve(i, 'avoir')}>Avoir obtenu</button><button className="btn-ghost !py-1.5" onClick={() => void resolve(i, 'relivraison')}>Relivré</button><button className="btn-ghost !py-1.5 text-stone-500" onClick={() => void resolve(i, 'abandon')}>Abandonner</button></>}
               </div>
             </div>
           </details>

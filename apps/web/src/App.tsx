@@ -29,6 +29,7 @@ const AdminBilling = lazy(() => import('./pages/admin/AdminBilling'));
 const AdminPilots = lazy(() => import('./pages/admin/AdminPilots'));
 const AdminProspects = lazy(() => import('./pages/admin/AdminProspects'));
 const AdminReference = lazy(() => import('./pages/admin/AdminReference'));
+const AdminClaims = lazy(() => import('./pages/admin/AdminClaims'));
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const Billing = lazy(() => import('./pages/Billing'));
 const Sales = lazy(() => import('./pages/Sales'));
@@ -99,6 +100,7 @@ export default function App() {
                 <Route path="admin/prospection" element={<AdminProspects />} />
                 <Route path="admin/referentiel" element={<AdminReference />} />
                 <Route path="admin" element={<AdminDashboard />} />
+                <Route path="admin/litiges" element={<AdminClaims />} />
                 <Route path="abonnement" element={<Billing />} />
                 <Route path="fournisseurs/:id" element={<SupplierDetail />} />
                 <Route path="recettes" element={<Recipes />} />

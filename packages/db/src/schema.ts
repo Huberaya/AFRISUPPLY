@@ -658,3 +658,28 @@ export const recurringOrders = pgTable('recurring_orders', {
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('recurring_restaurant_idx').on(t.restaurantId)]);
+
+// ---------- Chantier 26 : litiges & avoirs (commandes marketplace) ----------
+export const claims = pgTable('claims', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  orderId: uuid('order_id').notNull().references(() => orders.id, { onDelete: 'cascade' }),
+  discrepancyId: uuid('discrepancy_id').references(() => deliveryDiscrepancies.id, { onDelete: 'set null' }),
+  reference: text('reference').notNull(),                 // LIT-2026-0001
+  productName: text('product_name').notNull(),
+  kind: text('kind').notNull(),                           // manquant | abime | erreur_produit | qualite | autre
+  orderedQty: numeric('ordered_qty', { precision: 12, scale: 3 }),
+  receivedQty: numeric('received_qty', { precision: 12, scale: 3 }),
+  claimedEur: numeric('claimed_eur', { precision: 10, scale: 2 }).notNull(),   // montant demandé par le restaurant
+  message: text('message'),
+  photo: text('photo'),                                    // data URL
+  status: text('status').default('ouvert').notNull(),     // ouvert | propose | accepte | refuse | escalade | clos
+  resolution: text('resolution'),                          // avoir | relivraison | refus
+  creditEur: numeric('credit_eur', { precision: 10, scale: 2 }),                // avoir accordé
+  vendorMessage: text('vendor_message'),
+  vendorRespondedAt: timestamp('vendor_responded_at', { withTimezone: true }),
+  closedAt: timestamp('closed_at', { withTimezone: true }),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('claims_vendor_idx').on(t.vendorId), index('claims_restaurant_idx').on(t.restaurantId)]);

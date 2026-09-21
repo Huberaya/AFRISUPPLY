@@ -18,6 +18,7 @@ __export(schema_exports, {
   alertsRelations: () => alertsRelations,
   auditLog: () => auditLog,
   billingEvents: () => billingEvents,
+  claims: () => claims,
   commissionInvoices: () => commissionInvoices,
   commissions: () => commissions,
   deliveries: () => deliveries,
@@ -92,7 +93,7 @@ import {
   uniqueIndex
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
-var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, feedback, usageEvents, prospects, shoppingLists, notifications, orderEvents, recurringOrders;
+var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, feedback, usageEvents, prospects, shoppingLists, notifications, orderEvents, recurringOrders, claims;
 var init_schema = __esm({
   "packages/db/src/schema.ts"() {
     "use strict";
@@ -711,6 +712,36 @@ var init_schema = __esm({
       createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
       createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
     }, (t) => [index("recurring_restaurant_idx").on(t.restaurantId)]);
+    claims = pgTable("claims", {
+      id: uuid("id").primaryKey().defaultRandom(),
+      restaurantId: uuid("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+      vendorId: uuid("vendor_id").notNull().references(() => vendors.id, { onDelete: "cascade" }),
+      orderId: uuid("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+      discrepancyId: uuid("discrepancy_id").references(() => deliveryDiscrepancies.id, { onDelete: "set null" }),
+      reference: text("reference").notNull(),
+      // LIT-2026-0001
+      productName: text("product_name").notNull(),
+      kind: text("kind").notNull(),
+      // manquant | abime | erreur_produit | qualite | autre
+      orderedQty: numeric("ordered_qty", { precision: 12, scale: 3 }),
+      receivedQty: numeric("received_qty", { precision: 12, scale: 3 }),
+      claimedEur: numeric("claimed_eur", { precision: 10, scale: 2 }).notNull(),
+      // montant demandé par le restaurant
+      message: text("message"),
+      photo: text("photo"),
+      // data URL
+      status: text("status").default("ouvert").notNull(),
+      // ouvert | propose | accepte | refuse | escalade | clos
+      resolution: text("resolution"),
+      // avoir | relivraison | refus
+      creditEur: numeric("credit_eur", { precision: 10, scale: 2 }),
+      // avoir accordé
+      vendorMessage: text("vendor_message"),
+      vendorRespondedAt: timestamp("vendor_responded_at", { withTimezone: true }),
+      closedAt: timestamp("closed_at", { withTimezone: true }),
+      createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+      createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    }, (t) => [index("claims_vendor_idx").on(t.vendorId), index("claims_restaurant_idx").on(t.restaurantId)]);
   }
 });
 
@@ -1458,7 +1489,7 @@ var init_seed = __esm({
     init_client();
     init_schema();
     init_products();
-    daysAgo = (n13) => new Date(Date.now() - n13 * 864e5);
+    daysAgo = (n14) => new Date(Date.now() - n14 * 864e5);
     isoDay = (d) => d.toISOString().slice(0, 10);
     num = (v, dec = 3) => v.toFixed(dec);
     if (process.argv[1] && process.argv[1].endsWith("seed.ts")) {
@@ -1842,6 +1873,7 @@ __export(src_exports, {
   alertsRelations: () => alertsRelations,
   auditLog: () => auditLog,
   billingEvents: () => billingEvents,
+  claims: () => claims,
   commissionInvoices: () => commissionInvoices,
   commissions: () => commissions,
   deliveries: () => deliveries,
@@ -2969,16 +3001,16 @@ function buildSmartCart(needs, offers) {
   const unavailable = [];
   const choices = [];
   let baseline = 0;
-  for (const n13 of needs) {
-    if (n13.neededQty <= 0) continue;
-    const cands = offers.filter((o) => o.productId === n13.productId && o.inStock);
+  for (const n14 of needs) {
+    if (n14.neededQty <= 0) continue;
+    const cands = offers.filter((o) => o.productId === n14.productId && o.inStock);
     if (!cands.length) {
-      unavailable.push({ productId: n13.productId, productName: n13.productName, unit: n13.unit, neededQty: n13.neededQty });
+      unavailable.push({ productId: n14.productId, productName: n14.productName, unit: n14.unit, neededQty: n14.neededQty });
       continue;
     }
-    const urgencyH = n13.daysOfStockLeft !== null ? Math.max(24, n13.daysOfStockLeft * 24) : Infinity;
+    const urgencyH = n14.daysOfStockLeft !== null ? Math.max(24, n14.daysOfStockLeft * 24) : Infinity;
     const score = (o) => {
-      const packs2 = Math.max(1, Math.ceil(n13.neededQty / o.packQty));
+      const packs2 = Math.max(1, Math.ceil(n14.neededQty / o.packQty));
       const cost = packs2 * o.packPrice;
       const latePenalty = o.leadTimeHours > urgencyH ? 1e6 : 0;
       const reliabilityPenalty = (100 - o.reliabilityPct) / 100 * cost * 0.15;
@@ -2986,13 +3018,13 @@ function buildSmartCart(needs, offers) {
     };
     const ranked = [...cands].sort((a, b) => score(a) - score(b));
     const best = ranked[0];
-    const packs = Math.max(1, Math.ceil(n13.neededQty / best.packQty));
-    const usual = n13.preferredSupplierId ? cands.find((o) => o.supplierId === n13.preferredSupplierId) : void 0;
-    const usualCost = usual ? Math.max(1, Math.ceil(n13.neededQty / usual.packQty)) * usual.packPrice : packs * best.packPrice;
+    const packs = Math.max(1, Math.ceil(n14.neededQty / best.packQty));
+    const usual = n14.preferredSupplierId ? cands.find((o) => o.supplierId === n14.preferredSupplierId) : void 0;
+    const usualCost = usual ? Math.max(1, Math.ceil(n14.neededQty / usual.packQty)) * usual.packPrice : packs * best.packPrice;
     baseline += usualCost;
     const lineTotal = packs * best.packPrice;
-    const reason = best.leadTimeHours > 48 && urgencyH !== Infinity ? `D\xE9lai ${Math.round(best.leadTimeHours / 24)} j accept\xE9 (stock ${n13.daysOfStockLeft} j)` : usual && usual.offerId !== best.offerId ? `${best.supplierName} moins cher que ${usual.supplierName} (${(usualCost - lineTotal).toFixed(2)} \u20AC \xE9conomis\xE9s)` : best.unitPrice === Math.min(...cands.map((c) => c.unitPrice)) ? "Meilleur prix disponible" : "Meilleur compromis prix / d\xE9lai / fiabilit\xE9";
-    choices.push({ line: { productId: n13.productId, productName: n13.productName, unit: n13.unit, neededQty: n13.neededQty, offer: best, packs, quantity: packs * best.packQty, lineTotal, alternativeSaving: Math.max(0, usualCost - lineTotal), reason }, alternatives: ranked.slice(1) });
+    const reason = best.leadTimeHours > 48 && urgencyH !== Infinity ? `D\xE9lai ${Math.round(best.leadTimeHours / 24)} j accept\xE9 (stock ${n14.daysOfStockLeft} j)` : usual && usual.offerId !== best.offerId ? `${best.supplierName} moins cher que ${usual.supplierName} (${(usualCost - lineTotal).toFixed(2)} \u20AC \xE9conomis\xE9s)` : best.unitPrice === Math.min(...cands.map((c) => c.unitPrice)) ? "Meilleur prix disponible" : "Meilleur compromis prix / d\xE9lai / fiabilit\xE9";
+    choices.push({ line: { productId: n14.productId, productName: n14.productName, unit: n14.unit, neededQty: n14.neededQty, offer: best, packs, quantity: packs * best.packQty, lineTotal, alternativeSaving: Math.max(0, usualCost - lineTotal), reason }, alternatives: ranked.slice(1) });
   }
   const group = () => {
     const m = /* @__PURE__ */ new Map();
@@ -4255,10 +4287,10 @@ import { Hono as Hono8 } from "hono";
 import { z as z8 } from "zod";
 import { and as and10, desc as desc6, eq as eq13, gte as gte4, inArray as inArray4, sql as sql9 } from "drizzle-orm";
 function restaurantZones(r) {
-  const z18 = /* @__PURE__ */ new Set(["France"]);
-  if (r.city) z18.add(r.city.trim().toLowerCase());
-  if (r.postalCode) z18.add(r.postalCode.slice(0, 2));
-  return z18;
+  const z19 = /* @__PURE__ */ new Set(["France"]);
+  if (r.city) z19.add(r.city.trim().toLowerCase());
+  if (r.postalCode) z19.add(r.postalCode.slice(0, 2));
+  return z19;
 }
 async function linkVendor(rid, vid) {
   const db = await getDb();
@@ -4745,7 +4777,7 @@ var init_daily = __esm({
 import { getRequestListener } from "@hono/node-server";
 
 // apps/api/src/app.ts
-import { Hono as Hono20 } from "hono";
+import { Hono as Hono21 } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
@@ -4810,8 +4842,8 @@ authRoutes.get("/me", requireAuth, async (c) => {
   const db = await getDb();
   const user = c.get("user");
   const rows = await db.select({ restaurant: restaurants, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(restaurants, eq4(restaurants.id, restaurantMembers.restaurantId)).where(eq4(restaurantMembers.userId, user.id));
-  const isAdmin7 = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
-  return c.json({ user: { ...user, isAdmin: isAdmin7 }, restaurants: rows.map((r) => ({ ...r.restaurant, role: r.role })) });
+  const isAdmin8 = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
+  return c.json({ user: { ...user, isAdmin: isAdmin8 }, restaurants: rows.map((r) => ({ ...r.restaurant, role: r.role })) });
 });
 
 // apps/api/src/app.ts
@@ -4886,16 +4918,16 @@ function pick(row, key) {
 }
 var toNumber = (s) => {
   const clean = s.replace(/[€\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
-  const n13 = Number(clean);
-  return Number.isFinite(n13) && clean !== "" ? n13 : null;
+  const n14 = Number(clean);
+  return Number.isFinite(n14) && clean !== "" ? n14 : null;
 };
 function parsePack(label) {
   const s = label.toLowerCase().replace(",", ".");
   const mult = s.match(/(\d+)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*(kg|g|l|cl|ml)/);
   if (mult) {
-    const n13 = Number(mult[1]);
+    const n14 = Number(mult[1]);
     const q2 = Number(mult[2]);
-    return convert(n13 * q2, mult[3]);
+    return convert(n14 * q2, mult[3]);
   }
   const single = s.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|cl|ml)\b/);
   if (single) return convert(Number(single[1]), single[2]);
@@ -5190,8 +5222,8 @@ var UNITS = { kg: "kg", kilo: "kg", kilos: "kg", g: "g", gr: "g", grammes: "g", 
 var NUM_WORDS = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11, douze: 12, quinze: 15, vingt: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60, cent: 100 };
 var STOP = /* @__PURE__ */ new Set(["de", "du", "des", "le", "la", "les", "et", "a", "au", "aux", "en", "pour", "ce", "ces", "soir", "midi", "aujourd", "hui", "hier", "matin", "avec", "sur"]);
 function detectKind(text2, fallback = "vente") {
-  const n13 = normalize2(text2);
-  for (const [re, k] of KIND_WORDS) if (re.test(n13)) return k;
+  const n14 = normalize2(text2);
+  for (const [re, k] of KIND_WORDS) if (re.test(n14)) return k;
   return fallback;
 }
 function similarity(a, b) {
@@ -5225,13 +5257,13 @@ function bestMatches(name, entities2, limit = 3) {
   return entities2.map((e) => ({ id: e.id, name: e.name, score: Math.max(similarity(name, e.name), ...(e.aliases ?? []).map((a) => similarity(name, a))) })).filter((m) => m.score >= 0.45).sort((a, b) => b.score - a.score).slice(0, limit);
 }
 function tokenize(text2) {
-  let n13 = normalize2(text2);
-  for (const [w, v] of Object.entries(NUM_WORDS)) n13 = n13.replace(new RegExp(`\\b${w}\\b`, "g"), String(v));
-  n13 = n13.replace(/(\d)(kg|g|l|ml|cl)\b/g, "$1 $2");
+  let n14 = normalize2(text2);
+  for (const [w, v] of Object.entries(NUM_WORDS)) n14 = n14.replace(new RegExp(`\\b${w}\\b`, "g"), String(v));
+  n14 = n14.replace(/(\d)(kg|g|l|ml|cl)\b/g, "$1 $2");
   const out = [];
   const re = /(\d+(?:\.\d+)?)\s+([^\d]+?)(?=\s+\d|$)/g;
   let m;
-  while (m = re.exec(n13)) {
+  while (m = re.exec(n14)) {
     const qty3 = Number(m[1]);
     const words = m[2].trim().split(" ").filter((w) => w && !STOP.has(w));
     if (!words.length) continue;
@@ -5451,8 +5483,8 @@ var Pdf = class {
   rect(x, y, w, h, gray = 0.95) {
     this.ops.push(`${gray} g ${x} ${y} ${w} ${h} re f 0 g`);
   }
-  down(n13) {
-    this.y -= n13;
+  down(n14) {
+    this.y -= n14;
     if (this.y < 60) this.newPage();
   }
   get cursor() {
@@ -5595,16 +5627,16 @@ function parseCatalogLine(rawIn) {
     const p = parsePack2(cols[1]);
     if (p) return { raw, label: cols[0], packLabel: cols[1], packQty: p.qty, packUnit: p.unit, price: num2(cols[2]), inStock: true };
   }
-  let n13 = normalize2(raw.replace(/€|eur|euros|ttc|ht/gi, " "));
-  const priceM = n13.match(/(\d+(?:\.\d+)?)\s*$/);
+  let n14 = normalize2(raw.replace(/€|eur|euros|ttc|ht/gi, " "));
+  const priceM = n14.match(/(\d+(?:\.\d+)?)\s*$/);
   if (!priceM) return null;
   const price = Number(priceM[1]);
-  n13 = n13.slice(0, priceM.index).trim();
+  n14 = n14.slice(0, priceM.index).trim();
   if (!(price > 0)) return null;
   let packQty = 0;
   let packUnit = "";
   let packLabel = "";
-  const multi = n13.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?\s*x\s*(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?/);
+  const multi = n14.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?\s*x\s*(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?/);
   if (multi) {
     const a = Number(multi[1]), b = Number(multi[3]);
     const u = UNIT[multi[2] ?? multi[4] ?? ""] ?? "piece";
@@ -5613,22 +5645,22 @@ function parseCatalogLine(rawIn) {
     packQty = per * count;
     packUnit = u;
     packLabel = `${count} \xD7 ${per} ${u === "piece" ? "pi\xE8ce" : u}`.replace(/\.0+ /, " ");
-    n13 = n13.replace(multi[0], " ");
+    n14 = n14.replace(multi[0], " ");
   } else {
-    const q2 = n13.match(/(\d+(?:\.\d+)?)\s*(kg|kilos?|kgs|g|gr|l|lt|litres?|ml|cl|pcs?|pieces?|unites?|u|bottes?)\b/);
+    const q2 = n14.match(/(\d+(?:\.\d+)?)\s*(kg|kilos?|kgs|g|gr|l|lt|litres?|ml|cl|pcs?|pieces?|unites?|u|bottes?)\b/);
     if (q2) {
       packQty = Number(q2[1]);
       packUnit = UNIT[q2[2]] ?? "kg";
-      const pw = n13.match(PACK_WORDS);
+      const pw = n14.match(PACK_WORDS);
       packLabel = `${pw ? cap(pw[1]) + " " : ""}${q2[1]} ${packUnit}`;
-      n13 = n13.replace(q2[0], " ").replace(PACK_WORDS, " ");
+      n14 = n14.replace(q2[0], " ").replace(PACK_WORDS, " ");
     } else {
-      const pw = n13.match(PACK_WORDS);
-      const cnt = n13.match(/\bx?\s*(\d+)\s*$/);
+      const pw = n14.match(PACK_WORDS);
+      const cnt = n14.match(/\bx?\s*(\d+)\s*$/);
       packQty = cnt ? Number(cnt[1]) : 1;
       packUnit = "piece";
       packLabel = pw ? cap(pw[1]) : packQty > 1 ? `Lot de ${packQty}` : "Pi\xE8ce";
-      n13 = n13.replace(PACK_WORDS, " ").replace(/\bx?\s*\d+\s*$/, " ");
+      n14 = n14.replace(PACK_WORDS, " ").replace(/\bx?\s*\d+\s*$/, " ");
     }
   }
   if (packUnit === "g") {
@@ -5643,7 +5675,7 @@ function parseCatalogLine(rawIn) {
     packQty = packQty / 100;
     packUnit = "L";
   }
-  const label = n13.replace(/\s+/g, " ").replace(/[-–:]+$/, "").trim();
+  const label = n14.replace(/\s+/g, " ").replace(/[-–:]+$/, "").trim();
   if (!label || packQty <= 0) return null;
   return { raw, label, packLabel: packLabel.trim(), packQty: Math.round(packQty * 1e3) / 1e3, packUnit, price, inStock: true };
 }
@@ -5774,7 +5806,7 @@ vendorRoutes.post("/vendor/register", requireAuth, async (c) => {
   const user = c.get("user");
   const { invite, acceptCgv: _a, ...d } = body3.data;
   const inv = invite ? await readVendorInvite(invite) : null;
-  const [v] = await db.insert(vendors).values({ ...d, cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email, slug: `${slugify2(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z18) => z18.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
+  const [v] = await db.insert(vendors).values({ ...d, cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email, slug: `${slugify2(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z19) => z19.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
   if (inv) await db.update(prospects).set({ status: "converti", email: user.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq16(prospects.id, inv.pid));
   await db.insert(vendorMembers).values({ vendorId: v.id, userId: user.id, role: "owner" });
   await audit("vendor.register", { actorEmail: user.email, target: v.id, meta: { name: v.name, invited: !!inv } });
@@ -5816,7 +5848,7 @@ vendorRoutes.put("/vendor/profile", async (c) => {
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const d = body3.data;
-  const [v] = await db.update(vendors).set({ ...d, deliveryZones: d.deliveryZones?.map((z18) => z18.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq16(vendors.id, c.get("vendorId"))).returning();
+  const [v] = await db.update(vendors).set({ ...d, deliveryZones: d.deliveryZones?.map((z19) => z19.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq16(vendors.id, c.get("vendorId"))).returning();
   return c.json({ vendor: v });
 });
 vendorRoutes.get("/vendor/offers", async (c) => {
@@ -6252,8 +6284,8 @@ vendorRoutes.get("/vendor/analytics", async (c) => {
   const monthly = await db.select({ month: sql12`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`, revenue: sql12`sum(${orders.totalEur})`, orders: sql12`count(*)`, restaurants: sql12`count(distinct ${orders.restaurantId})` }).from(orders).where(and13(eq16(orders.vendorId, vid), okStatus, sql12`${orders.createdAt} >= date_trunc('month', now()) - interval '5 months'`)).groupBy(sql12`1`).orderBy(sql12`1`);
   const [funnel] = await db.select({ total: sql12`count(*)`, refused: sql12`count(*) filter (where ${orders.status} = 'annulee')`, avgDecisionH: sql12`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)` }).from(orders).where(and13(eq16(orders.vendorId, vid), since));
   const allR = await db.select({ id: restaurants.id, city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants);
-  const myZones = v.deliveryZones.map((z18) => z18.trim().toLowerCase());
-  const inZone = allR.filter((r) => myZones.length === 0 || [...restaurantZones(r)].some((z18) => myZones.includes(z18.toLowerCase()))).map((r) => r.id);
+  const myZones = v.deliveryZones.map((z19) => z19.trim().toLowerCase());
+  const inZone = allR.filter((r) => myZones.length === 0 || [...restaurantZones(r)].some((z19) => myZones.includes(z19.toLowerCase()))).map((r) => r.id);
   let uncovered = [];
   if (inZone.length) {
     const mine = new Set((await db.select({ productId: vendorOffers.productId }).from(vendorOffers).where(eq16(vendorOffers.vendorId, vid))).map((x) => x.productId));
@@ -6576,7 +6608,7 @@ manageRoutes.get("/discrepancies", async (c) => {
   const rows = await db.select({ d: deliveryDiscrepancies, delivery: deliveries, order: orders, supplierName: suppliers.name, productName: products.name, unit: products.baseUnit, unitPrice: orderLines.unitPriceEur }).from(deliveryDiscrepancies).innerJoin(deliveries, eq17(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orders, eq17(orders.id, deliveries.orderId)).innerJoin(suppliers, eq17(suppliers.id, orders.supplierId)).innerJoin(orderLines, eq17(orderLines.id, deliveryDiscrepancies.orderLineId)).innerJoin(products, eq17(products.id, orderLines.productId)).where(onlyOpen ? and14(eq17(deliveries.restaurantId, rid), eq17(deliveryDiscrepancies.resolved, false)) : eq17(deliveries.restaurantId, rid)).orderBy(desc10(deliveries.receivedAt)).limit(200);
   const items = rows.map((r) => {
     const missing = n8(r.d.orderedQty) - n8(r.d.receivedQty);
-    return { id: r.d.id, deliveryId: r.delivery.id, orderId: r.order.id, reference: r.order.reference, supplierName: r.supplierName, productName: r.productName, unit: r.unit, ordered: n8(r.d.orderedQty), received: n8(r.d.receivedQty), missing, valueEur: Math.round(missing * n8(r.unitPrice) * 100) / 100, reason: r.d.reason, resolved: r.d.resolved, receivedAt: r.delivery.receivedAt, isLate: r.delivery.isLate, claimMessage: r.d.claimMessage };
+    return { id: r.d.id, deliveryId: r.delivery.id, orderId: r.order.id, vendorId: r.order.vendorId, reference: r.order.reference, supplierName: r.supplierName, productName: r.productName, unit: r.unit, ordered: n8(r.d.orderedQty), received: n8(r.d.receivedQty), missing, valueEur: Math.round(missing * n8(r.unitPrice) * 100) / 100, reason: r.d.reason, resolved: r.d.resolved, receivedAt: r.delivery.receivedAt, isLate: r.delivery.isLate, claimMessage: r.d.claimMessage };
   });
   const openValue = items.filter((i) => !i.resolved && i.missing > 0).reduce((a, i) => a + i.valueEur, 0);
   return c.json({ items, openValue: Math.round(openValue * 100) / 100 });
@@ -6880,6 +6912,203 @@ adminDashboardRoutes.get("/admin/dashboard", async (c) => {
   });
 });
 
+// apps/api/src/routes/claims.ts
+init_src();
+init_auth();
+init_mailer();
+init_sms();
+init_order_events();
+init_ops();
+import { Hono as Hono15 } from "hono";
+import { z as z14 } from "zod";
+import { and as and18, desc as desc13, eq as eq21, sql as sql17 } from "drizzle-orm";
+var APP_URL3 = () => process.env.APP_URL ?? "http://localhost:5173";
+var n11 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var eur9 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+var KIND = { manquant: "Manquant", abime: "Ab\xEEm\xE9 / casse", erreur_produit: "Erreur de produit", qualite: "Qualit\xE9 / DLC", autre: "Autre" };
+var isAdmin7 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
+async function nextClaimRef() {
+  const db = await getDb();
+  await db.execute(sql17`create sequence if not exists claim_ref_seq`);
+  const res = await db.execute(sql17`select nextval('claim_ref_seq') as v`);
+  const rows = res.rows ?? res;
+  return `LIT-${(/* @__PURE__ */ new Date()).getFullYear()}-${String(Number((Array.isArray(rows) ? rows[0] : rows).v)).padStart(4, "0")}`;
+}
+async function notifyVendor(vendorId, subject, text2, kind = "order.confirmed") {
+  const db = await getDb();
+  const [v] = await db.select().from(vendors).where(eq21(vendors.id, vendorId));
+  if (!v) return;
+  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p><p><a href="${APP_URL3()}/fournisseur">Ouvrir mon espace</a></p>`, tags: { type: "claim" } });
+  const phone = v.whatsapp || v.contactPhone;
+  if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? "whatsapp" : "sms", kind, vendorId, body: `AFRISUPPLY \u2014 ${subject}
+${text2}
+${APP_URL3()}/fournisseur` });
+}
+async function notifyRestaurant2(restaurantId, subject, text2) {
+  const db = await getDb();
+  const [r] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq21(restaurants.id, restaurantId));
+  const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq21(users.id, restaurantMembers.userId)).where(eq21(restaurantMembers.restaurantId, restaurantId));
+  for (const x of rcpts) void sendMail({ to: x.email, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p><p><a href="${APP_URL3()}/app/achats/ecarts">Voir mes litiges</a></p>`, tags: { type: "claim" } });
+  if (r?.settings?.notifyPhone) void sendMessage({ to: r.settings.notifyPhone, kind: "order.confirmed", restaurantId, body: `AFRISUPPLY \u2014 ${subject}
+${text2}` });
+}
+var publicClaim = (c) => ({ ...c, photo: void 0, hasPhoto: !!c.photo, kindLabel: KIND[c.kind] ?? c.kind });
+var claimRoutes = new Hono15();
+claimRoutes.use("/claims", requireAuth, requireRestaurant);
+claimRoutes.use("/claims/*", requireAuth, requireRestaurant);
+claimRoutes.get("/claims", async (c) => {
+  const db = await getDb();
+  const rid = c.get("restaurantId");
+  const rows = await db.select({ cl: claims, vendorName: vendors.name, reference: orders.reference }).from(claims).innerJoin(vendors, eq21(vendors.id, claims.vendorId)).innerJoin(orders, eq21(orders.id, claims.orderId)).where(eq21(claims.restaurantId, rid)).orderBy(desc13(claims.createdAt)).limit(200);
+  const items = rows.map((r) => ({ ...publicClaim(r.cl), vendorName: r.vendorName, orderReference: r.reference }));
+  const credits = items.filter((i) => i.status === "accepte" || i.status === "clos").reduce((a, i) => a + n11(i.creditEur), 0);
+  return c.json({ items, openCount: items.filter((i) => ["ouvert", "propose", "escalade"].includes(i.status)).length, creditsEur: Math.round(credits * 100) / 100 });
+});
+claimRoutes.get("/claims/:id/photo", async (c) => {
+  const db = await getDb();
+  const rid = c.get("restaurantId");
+  const [cl] = await db.select({ photo: claims.photo }).from(claims).where(and18(eq21(claims.id, c.req.param("id")), eq21(claims.restaurantId, rid)));
+  if (!cl?.photo) return c.json({ error: "Pas de photo" }, 404);
+  return c.json({ photo: cl.photo });
+});
+claimRoutes.post("/claims", async (c) => {
+  const body3 = z14.object({ orderId: z14.string().uuid().optional(), discrepancyId: z14.string().uuid().optional(), productName: z14.string().min(1).max(120).optional(), kind: z14.enum(["manquant", "abime", "erreur_produit", "qualite", "autre"]).default("manquant"), claimedEur: z14.number().nonnegative().optional(), message: z14.string().max(600).optional(), photo: z14.string().max(6e5).optional() }).safeParse(await c.req.json());
+  if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
+  const db = await getDb();
+  const rid = c.get("restaurantId");
+  const user = c.get("user");
+  const d = body3.data;
+  if (d.photo && !/^data:image\/(jpeg|png|webp);base64,/.test(d.photo)) return c.json({ error: "Photo invalide" }, 400);
+  let orderId = d.orderId, productName = d.productName, claimedEur = d.claimedEur, orderedQty = null, receivedQty = null;
+  if (d.discrepancyId) {
+    const [row] = await db.select({ dd: deliveryDiscrepancies, orderId: deliveries.orderId, rid: deliveries.restaurantId, unitPrice: orderLines.unitPriceEur, productName: products.name }).from(deliveryDiscrepancies).innerJoin(deliveries, eq21(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orderLines, eq21(orderLines.id, deliveryDiscrepancies.orderLineId)).innerJoin(products, eq21(products.id, orderLines.productId)).where(eq21(deliveryDiscrepancies.id, d.discrepancyId));
+    if (!row || row.rid !== rid) return c.json({ error: "\xC9cart introuvable" }, 404);
+    const [dup] = await db.select({ id: claims.id }).from(claims).where(eq21(claims.discrepancyId, d.discrepancyId));
+    if (dup) return c.json({ error: "Un litige existe d\xE9j\xE0 pour cet \xE9cart" }, 409);
+    orderId = row.orderId;
+    productName = productName ?? row.productName;
+    orderedQty = n11(row.dd.orderedQty);
+    receivedQty = n11(row.dd.receivedQty);
+    if (claimedEur === void 0) claimedEur = Math.round(Math.max(0, orderedQty - receivedQty) * n11(row.unitPrice) * 100) / 100;
+  }
+  if (!orderId || !productName) return c.json({ error: "Commande et produit requis" }, 400);
+  const [o] = await db.select().from(orders).where(and18(eq21(orders.id, orderId), eq21(orders.restaurantId, rid)));
+  if (!o) return c.json({ error: "Commande introuvable" }, 404);
+  if (!o.vendorId) return c.json({ error: "Les litiges plateforme ne concernent que les commandes pass\xE9es via un grossiste AFRISUPPLY. Pour un fournisseur priv\xE9, utilisez la r\xE9clamation pr\xE9-r\xE9dig\xE9e." }, 400);
+  if (claimedEur === void 0) return c.json({ error: "Montant r\xE9clam\xE9 requis" }, 400);
+  const reference = await nextClaimRef();
+  const [cl] = await db.insert(claims).values({ restaurantId: rid, vendorId: o.vendorId, orderId: o.id, discrepancyId: d.discrepancyId, reference, productName, kind: d.kind, orderedQty: orderedQty?.toFixed(3), receivedQty: receivedQty?.toFixed(3), claimedEur: claimedEur.toFixed(2), message: d.message, photo: d.photo, createdBy: user.id }).returning();
+  const [r] = await db.select({ name: restaurants.name }).from(restaurants).where(eq21(restaurants.id, rid));
+  void logOrderEvent(o.id, "note", `Litige ${reference} ouvert \u2014 ${productName} (${KIND[d.kind]}), ${eur9(claimedEur)} r\xE9clam\xE9s`, "restaurant");
+  void notifyVendor(o.vendorId, `\u26A0\uFE0F Litige ${reference} \u2014 ${r.name} \u2014 commande ${o.reference}`, `${r.name} signale un probl\xE8me sur la commande ${o.reference} :
+\u2022 ${productName} \u2014 ${KIND[d.kind]}${orderedQty !== null ? ` (command\xE9 ${orderedQty}, re\xE7u ${receivedQty})` : ""}
+\u2022 Montant r\xE9clam\xE9 : ${eur9(claimedEur)}${d.message ? `
+Message : ${d.message}` : ""}
+
+R\xE9pondez sous 48 h : avoir, relivraison ou refus motiv\xE9.`);
+  return c.json({ claim: publicClaim(cl), message: `Litige ${reference} envoy\xE9 \xE0 votre fournisseur. R\xE9ponse attendue sous 48 h.` }, 201);
+});
+claimRoutes.post("/claims/:id/close", async (c) => {
+  const body3 = z14.object({ action: z14.enum(["accept", "escalate"]), message: z14.string().max(600).optional() }).safeParse(await c.req.json());
+  if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
+  const db = await getDb();
+  const rid = c.get("restaurantId");
+  const [cl] = await db.select().from(claims).where(and18(eq21(claims.id, c.req.param("id")), eq21(claims.restaurantId, rid)));
+  if (!cl) return c.json({ error: "Litige introuvable" }, 404);
+  if (!["propose", "refuse", "accepte"].includes(cl.status)) return c.json({ error: "En attente de la r\xE9ponse du fournisseur" }, 400);
+  if (body3.data.action === "accept") {
+    const [upd2] = await db.update(claims).set({ status: "clos", closedAt: /* @__PURE__ */ new Date() }).where(eq21(claims.id, cl.id)).returning();
+    if (cl.discrepancyId) {
+      await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `litige \u2192 ${cl.resolution ?? "clos"}` }).where(eq21(deliveryDiscrepancies.id, cl.discrepancyId));
+    }
+    void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} clos \u2014 ${cl.resolution === "avoir" ? `avoir ${eur9(n11(cl.creditEur))}` : cl.resolution ?? ""}`, "restaurant");
+    return c.json({ claim: publicClaim(upd2) });
+  }
+  const [upd] = await db.update(claims).set({ status: "escalade", message: body3.data.message ? `${cl.message ?? ""}
+[Escalade] ${body3.data.message}`.trim() : cl.message }).where(eq21(claims.id, cl.id)).returning();
+  void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} escalad\xE9 \xE0 AFRISUPPLY`, "restaurant");
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  for (const to of admins) void sendMail({ to, subject: `\u{1F6A8} Litige escalad\xE9 ${cl.reference} (${eur9(n11(cl.claimedEur))})`, text: `Le restaurant conteste la r\xE9ponse du grossiste.
+Litige : ${cl.reference} \u2014 ${cl.productName} \u2014 r\xE9clam\xE9 ${eur9(n11(cl.claimedEur))}, propos\xE9 ${cl.resolution ?? "\u2014"} ${cl.creditEur ? eur9(n11(cl.creditEur)) : ""}.
+Message : ${body3.data.message ?? "\u2014"}
+${APP_URL3()}/app/admin/litiges`, html: `<p>Litige <b>${cl.reference}</b> escalad\xE9 \u2014 ${cl.productName}, r\xE9clam\xE9 ${eur9(n11(cl.claimedEur))}.</p><p><a href="${APP_URL3()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: "claim" } });
+  return c.json({ claim: publicClaim(upd), message: "AFRISUPPLY a \xE9t\xE9 pr\xE9venu et arbitrera sous 3 jours ouvr\xE9s." });
+});
+var vendorClaimRoutes = new Hono15();
+var vendorGuard = async (c, next) => {
+  const db = await getDb();
+  const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq21(vendorMembers.userId, c.get("user").id));
+  const w = c.req.header("x-vendor-id");
+  const vid = w && rows.some((r) => r.vendorId === w) ? w : rows[0]?.vendorId;
+  if (!vid) return c.json({ error: "Aucun espace fournisseur" }, 403);
+  c.set("vendorId", vid);
+  await next();
+};
+vendorClaimRoutes.use("/vendor/claims", requireAuth, vendorGuard);
+vendorClaimRoutes.use("/vendor/claims/*", requireAuth, vendorGuard);
+vendorClaimRoutes.get("/vendor/claims", async (c) => {
+  const db = await getDb();
+  const vid = c.get("vendorId");
+  const rows = await db.select({ cl: claims, restaurantName: restaurants.name, reference: orders.reference }).from(claims).innerJoin(restaurants, eq21(restaurants.id, claims.restaurantId)).innerJoin(orders, eq21(orders.id, claims.orderId)).where(eq21(claims.vendorId, vid)).orderBy(desc13(claims.createdAt)).limit(200);
+  const items = rows.map((r) => ({ ...publicClaim(r.cl), photo: r.cl.photo, restaurantName: r.restaurantName, orderReference: r.reference }));
+  return c.json({ items, openCount: items.filter((i) => i.status === "ouvert" || i.status === "escalade").length, creditsEur: Math.round(items.reduce((a, i) => a + n11(i.creditEur), 0) * 100) / 100 });
+});
+vendorClaimRoutes.post("/vendor/claims/:id/respond", async (c) => {
+  const body3 = z14.object({ resolution: z14.enum(["avoir", "relivraison", "refus"]), creditEur: z14.number().nonnegative().optional(), message: z14.string().max(600).optional() }).safeParse(await c.req.json());
+  if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
+  const db = await getDb();
+  const vid = c.get("vendorId");
+  const d = body3.data;
+  const [cl] = await db.select().from(claims).where(and18(eq21(claims.id, c.req.param("id")), eq21(claims.vendorId, vid)));
+  if (!cl) return c.json({ error: "Litige introuvable" }, 404);
+  if (!["ouvert", "propose"].includes(cl.status)) return c.json({ error: `Litige ${cl.status}` }, 400);
+  if (d.resolution === "refus" && !d.message) return c.json({ error: "Un refus doit \xEAtre motiv\xE9" }, 400);
+  const credit = d.resolution === "avoir" ? d.creditEur ?? n11(cl.claimedEur) : 0;
+  if (d.resolution === "avoir" && credit <= 0) return c.json({ error: "Montant de l\u2019avoir requis" }, 400);
+  const full = d.resolution === "avoir" && credit >= n11(cl.claimedEur) - 5e-3;
+  const status = d.resolution === "refus" ? "refuse" : full ? "accepte" : "propose";
+  const [upd] = await db.update(claims).set({ status, resolution: d.resolution, creditEur: d.resolution === "avoir" ? credit.toFixed(2) : null, vendorMessage: d.message, vendorRespondedAt: /* @__PURE__ */ new Date() }).where(eq21(claims.id, cl.id)).returning();
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq21(vendors.id, vid));
+  const label = d.resolution === "avoir" ? `avoir de ${eur9(credit)}${full ? "" : ` (sur ${eur9(n11(cl.claimedEur))} r\xE9clam\xE9s)`}` : d.resolution === "relivraison" ? "relivraison du manquant" : `refus : ${d.message}`;
+  void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} \u2014 r\xE9ponse de ${v.name} : ${label}`, "vendor");
+  void notifyRestaurant2(cl.restaurantId, `${d.resolution === "refus" ? "\u274C" : "\u2705"} Litige ${cl.reference} \u2014 r\xE9ponse de ${v.name}`, `${v.name} r\xE9pond au litige ${cl.reference} (${cl.productName}) : ${label}.${d.message && d.resolution !== "refus" ? `
+Message : ${d.message}` : ""}
+${full ? "L\u2019avoir est \xE0 d\xE9duire de votre prochaine facture chez ce fournisseur." : "Acceptez la r\xE9ponse ou contestez aupr\xE8s d\u2019AFRISUPPLY dans Achats \u2192 \xC9carts & litiges."}`);
+  await audit("claim.respond", { actorEmail: c.get("user").email, target: cl.id, meta: { resolution: d.resolution, credit } });
+  return c.json({ claim: publicClaim(upd) });
+});
+var adminClaimRoutes = new Hono15();
+adminClaimRoutes.use("/admin/claims/*", requireAuth, async (c, next) => {
+  if (!isAdmin7(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
+  await next();
+});
+adminClaimRoutes.use("/admin/claims", requireAuth, async (c, next) => {
+  if (!isAdmin7(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
+  await next();
+});
+adminClaimRoutes.get("/admin/claims", async (c) => {
+  const db = await getDb();
+  const rows = await db.select({ cl: claims, restaurantName: restaurants.name, vendorName: vendors.name, reference: orders.reference }).from(claims).innerJoin(restaurants, eq21(restaurants.id, claims.restaurantId)).innerJoin(vendors, eq21(vendors.id, claims.vendorId)).innerJoin(orders, eq21(orders.id, claims.orderId)).orderBy(desc13(claims.createdAt)).limit(300);
+  return c.json({ items: rows.map((r) => ({ ...publicClaim(r.cl), photo: r.cl.photo, restaurantName: r.restaurantName, vendorName: r.vendorName, orderReference: r.reference })) });
+});
+adminClaimRoutes.post("/admin/claims/:id/arbitrate", async (c) => {
+  const body3 = z14.object({ resolution: z14.enum(["avoir", "relivraison", "refus"]), creditEur: z14.number().nonnegative().optional(), message: z14.string().min(2).max(600) }).safeParse(await c.req.json());
+  if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
+  const db = await getDb();
+  const d = body3.data;
+  const [cl] = await db.select().from(claims).where(eq21(claims.id, c.req.param("id")));
+  if (!cl) return c.json({ error: "Introuvable" }, 404);
+  const credit = d.resolution === "avoir" ? d.creditEur ?? n11(cl.claimedEur) : 0;
+  const [upd] = await db.update(claims).set({ status: "clos", resolution: d.resolution, creditEur: d.resolution === "avoir" ? credit.toFixed(2) : null, vendorMessage: `[Arbitrage AFRISUPPLY] ${d.message}`, closedAt: /* @__PURE__ */ new Date() }).where(eq21(claims.id, cl.id)).returning();
+  if (cl.discrepancyId) await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `arbitrage \u2192 ${d.resolution}` }).where(eq21(deliveryDiscrepancies.id, cl.discrepancyId));
+  const txt = `D\xE9cision AFRISUPPLY sur le litige ${cl.reference} (${cl.productName}) : ${d.resolution === "avoir" ? `avoir de ${eur9(credit)}` : d.resolution}. ${d.message}`;
+  void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} arbitr\xE9 par AFRISUPPLY : ${d.resolution}${credit ? ` ${eur9(credit)}` : ""}`, "system");
+  void notifyRestaurant2(cl.restaurantId, `\u2696\uFE0F Litige ${cl.reference} \u2014 d\xE9cision AFRISUPPLY`, txt);
+  void notifyVendor(cl.vendorId, `\u2696\uFE0F Litige ${cl.reference} \u2014 d\xE9cision AFRISUPPLY`, txt);
+  await audit("claim.arbitrate", { actorEmail: c.get("user").email, target: cl.id, meta: { resolution: d.resolution, credit } });
+  return c.json({ claim: publicClaim(upd) });
+});
+
 // apps/api/src/routes/jobs.ts
 init_src();
 init_auth();
@@ -6888,10 +7117,10 @@ init_digest();
 init_mailer();
 init_reminders();
 init_sms();
-import { Hono as Hono15 } from "hono";
-import { z as z14 } from "zod";
-import { eq as eq21 } from "drizzle-orm";
-var jobsRoutes = new Hono15();
+import { Hono as Hono16 } from "hono";
+import { z as z15 } from "zod";
+import { eq as eq22 } from "drizzle-orm";
+var jobsRoutes = new Hono16();
 var runDaily = async (c) => {
   const secret2 = process.env.CRON_SECRET;
   const auth = c.req.header("authorization");
@@ -6912,38 +7141,38 @@ var runReminders = async (c) => {
 jobsRoutes.get("/jobs/reminders", runReminders);
 jobsRoutes.post("/jobs/reminders", runReminders);
 jobsRoutes.get("/jobs/daily", runDaily);
-var settingsRoutes = new Hono15();
+var settingsRoutes = new Hono16();
 settingsRoutes.use("*", requireAuth, requireRestaurant);
 settingsRoutes.get("/settings", async (c) => {
   const db = await getDb();
-  const [r] = await db.select().from(restaurants).where(eq21(restaurants.id, c.get("restaurantId")));
+  const [r] = await db.select().from(restaurants).where(eq22(restaurants.id, c.get("restaurantId")));
   const s = r.settings ?? {};
   return c.json({ restaurant: { id: r.id, name: r.name, city: r.city, coversPerDay: r.coversPerDay, plan: r.plan, trialEndsAt: r.trialEndsAt }, settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, notifyPhone: s.notifyPhone ?? "", digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [] }, mail: { transport: mailerConfig().transport, from: mailerConfig().from }, sms: { configured: smsConfig().enabled, whatsapp: smsConfig().whatsapp } });
 });
 settingsRoutes.put("/settings", async (c) => {
-  const body3 = z14.object({
-    name: z14.string().min(2).optional(),
-    city: z14.string().nullable().optional(),
-    coversPerDay: z14.number().int().positive().nullable().optional(),
-    priceIncreaseAlertPct: z14.number().min(1).max(50).optional(),
-    forecastHorizonDays: z14.number().int().min(3).max(14).optional(),
-    autoReorderEnabled: z14.boolean().optional(),
-    dailyDigestEnabled: z14.boolean().optional(),
-    digestRecipients: z14.array(z14.string().email()).max(10).optional(),
-    closedWeekdays: z14.array(z14.number().int().min(0).max(6)).optional(),
-    notifyPhone: z14.string().max(30).optional()
+  const body3 = z15.object({
+    name: z15.string().min(2).optional(),
+    city: z15.string().nullable().optional(),
+    coversPerDay: z15.number().int().positive().nullable().optional(),
+    priceIncreaseAlertPct: z15.number().min(1).max(50).optional(),
+    forecastHorizonDays: z15.number().int().min(3).max(14).optional(),
+    autoReorderEnabled: z15.boolean().optional(),
+    dailyDigestEnabled: z15.boolean().optional(),
+    digestRecipients: z15.array(z15.string().email()).max(10).optional(),
+    closedWeekdays: z15.array(z15.number().int().min(0).max(6)).optional(),
+    notifyPhone: z15.string().max(30).optional()
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
   const rid = c.get("restaurantId");
-  const [r] = await db.select().from(restaurants).where(eq21(restaurants.id, rid));
+  const [r] = await db.select().from(restaurants).where(eq22(restaurants.id, rid));
   const { name, city, coversPerDay, ...settingsPatch } = body3.data;
   if (settingsPatch.notifyPhone !== void 0) {
     const p = normalizePhone(settingsPatch.notifyPhone);
     if (settingsPatch.notifyPhone && !p) return c.json({ error: "Num\xE9ro de t\xE9l\xE9phone invalide (ex. 06 12 34 56 78 ou +33612345678)" }, 400);
     settingsPatch.notifyPhone = p ?? "";
   }
-  const [row] = await db.update(restaurants).set({ name, city, coversPerDay, settings: { ...r.settings ?? {}, ...settingsPatch } }).where(eq21(restaurants.id, rid)).returning();
+  const [row] = await db.update(restaurants).set({ name, city, coversPerDay, settings: { ...r.settings ?? {}, ...settingsPatch } }).where(eq22(restaurants.id, rid)).returning();
   return c.json({ ok: true, settings: row.settings });
 });
 settingsRoutes.get("/digest/preview", async (c) => {
@@ -6959,7 +7188,7 @@ settingsRoutes.post("/digest/send-test", async (c) => {
 });
 settingsRoutes.post("/settings/test-sms", async (c) => {
   const db = await getDb();
-  const [r] = await db.select().from(restaurants).where(eq21(restaurants.id, c.get("restaurantId")));
+  const [r] = await db.select().from(restaurants).where(eq22(restaurants.id, c.get("restaurantId")));
   const to = r.settings?.notifyPhone;
   if (!to) return c.json({ error: "Renseignez d\u2019abord un num\xE9ro" }, 400);
   const res = await sendMessage({ to, kind: "test", restaurantId: r.id, body: `AFRISUPPLY \u2014 test : vous recevrez ici le suivi de vos commandes (${r.name}).` });
@@ -6973,38 +7202,38 @@ init_src();
 init_src();
 init_auth();
 init_ops();
-import { Hono as Hono16 } from "hono";
-import { z as z15 } from "zod";
-import { and as and18, eq as eq22, inArray as inArray8 } from "drizzle-orm";
+import { Hono as Hono17 } from "hono";
+import { z as z16 } from "zod";
+import { and as and19, eq as eq23, inArray as inArray8 } from "drizzle-orm";
 import { deleteCookie as deleteCookie2 } from "hono/cookie";
-var accountRoutes = new Hono16();
+var accountRoutes = new Hono17();
 accountRoutes.use("/account/*", requireAuth);
 accountRoutes.get("/account/export", async (c) => {
   const db = await getDb();
   const u = c.get("user");
-  const [me] = await db.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt }).from(users).where(eq22(users.id, u.id));
-  const memberships = await db.select({ restaurant: restaurants, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(restaurants, eq22(restaurants.id, restaurantMembers.restaurantId)).where(eq22(restaurantMembers.userId, u.id));
+  const [me] = await db.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt }).from(users).where(eq23(users.id, u.id));
+  const memberships = await db.select({ restaurant: restaurants, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(restaurants, eq23(restaurants.id, restaurantMembers.restaurantId)).where(eq23(restaurantMembers.userId, u.id));
   const out = [];
   for (const m of memberships) {
     const rid = m.restaurant.id;
     const [sup, prod, inv, ord, sal, rec, al, rules, del, mov] = await Promise.all([
-      db.select().from(suppliers).where(eq22(suppliers.restaurantId, rid)),
-      db.select().from(products).where(eq22(products.restaurantId, rid)),
-      db.select().from(inventoryItems).where(eq22(inventoryItems.restaurantId, rid)),
-      db.select().from(orders).where(eq22(orders.restaurantId, rid)),
-      db.select().from(sales).where(eq22(sales.restaurantId, rid)),
-      db.select().from(recipes).where(eq22(recipes.restaurantId, rid)),
-      db.select().from(alerts).where(eq22(alerts.restaurantId, rid)),
-      db.select().from(reorderRules).where(eq22(reorderRules.restaurantId, rid)),
-      db.select().from(deliveries).where(eq22(deliveries.restaurantId, rid)),
-      db.select().from(stockMovements).where(eq22(stockMovements.restaurantId, rid))
+      db.select().from(suppliers).where(eq23(suppliers.restaurantId, rid)),
+      db.select().from(products).where(eq23(products.restaurantId, rid)),
+      db.select().from(inventoryItems).where(eq23(inventoryItems.restaurantId, rid)),
+      db.select().from(orders).where(eq23(orders.restaurantId, rid)),
+      db.select().from(sales).where(eq23(sales.restaurantId, rid)),
+      db.select().from(recipes).where(eq23(recipes.restaurantId, rid)),
+      db.select().from(alerts).where(eq23(alerts.restaurantId, rid)),
+      db.select().from(reorderRules).where(eq23(reorderRules.restaurantId, rid)),
+      db.select().from(deliveries).where(eq23(deliveries.restaurantId, rid)),
+      db.select().from(stockMovements).where(eq23(stockMovements.restaurantId, rid))
     ]);
     const orderIds = ord.map((o) => o.id);
     const supIds = sup.map((s) => s.id);
     const [lines, offers, prices] = await Promise.all([
       orderIds.length ? db.select().from(orderLines).where(inArray8(orderLines.orderId, orderIds)) : [],
       supIds.length ? db.select().from(supplierOffers).where(inArray8(supplierOffers.supplierId, supIds)) : [],
-      db.select().from(priceHistory).where(eq22(priceHistory.restaurantId, rid))
+      db.select().from(priceHistory).where(eq23(priceHistory.restaurantId, rid))
     ]);
     out.push({ restaurant: m.restaurant, role: m.role, suppliers: sup, supplierOffers: offers, priceHistory: prices, products: prod, inventory: inv, stockMovements: mov, orders: ord, orderLines: lines, deliveries: del, sales: sal, recipes: rec, alerts: al, reorderRules: rules });
   }
@@ -7013,24 +7242,24 @@ accountRoutes.get("/account/export", async (c) => {
   return c.json({ exportedAt: (/* @__PURE__ */ new Date()).toISOString(), user: me, restaurants: out });
 });
 accountRoutes.delete("/account", async (c) => {
-  const body3 = z15.object({ password: z15.string(), confirm: z15.literal("SUPPRIMER") }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z16.object({ password: z16.string(), confirm: z16.literal("SUPPRIMER") }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Mot de passe et confirmation \xAB SUPPRIMER \xBB requis" }, 400);
   const db = await getDb();
   const u = c.get("user");
-  const [me] = await db.select().from(users).where(eq22(users.id, u.id));
+  const [me] = await db.select().from(users).where(eq23(users.id, u.id));
   if (!me || !await verifyPassword(body3.data.password, me.passwordHash)) return c.json({ error: "Mot de passe incorrect" }, 401);
-  const mine = await db.select({ rid: restaurantMembers.restaurantId, role: restaurantMembers.role }).from(restaurantMembers).where(eq22(restaurantMembers.userId, u.id));
+  const mine = await db.select({ rid: restaurantMembers.restaurantId, role: restaurantMembers.role }).from(restaurantMembers).where(eq23(restaurantMembers.userId, u.id));
   const deleted = [];
   const left = [];
   for (const m of mine) {
-    const others = await db.select({ id: restaurantMembers.userId }).from(restaurantMembers).where(and18(eq22(restaurantMembers.restaurantId, m.rid), eq22(restaurantMembers.role, "owner")));
+    const others = await db.select({ id: restaurantMembers.userId }).from(restaurantMembers).where(and19(eq23(restaurantMembers.restaurantId, m.rid), eq23(restaurantMembers.role, "owner")));
     const soleOwner = m.role === "owner" && others.every((o) => o.id === u.id);
     if (soleOwner) {
-      await db.delete(restaurants).where(eq22(restaurants.id, m.rid));
+      await db.delete(restaurants).where(eq23(restaurants.id, m.rid));
       deleted.push(m.rid);
     } else left.push(m.rid);
   }
-  await db.delete(users).where(eq22(users.id, u.id));
+  await db.delete(users).where(eq23(users.id, u.id));
   await audit("account.delete", { actorEmail: u.email, target: u.id, meta: { restaurantsDeleted: deleted.length, restaurantsLeft: left.length } });
   deleteCookie2(c, "afs_token", { path: "/" });
   return c.json({ ok: true, restaurantsDeleted: deleted.length, restaurantsLeft: left.length });
@@ -7039,32 +7268,32 @@ accountRoutes.delete("/account", async (c) => {
 // apps/api/src/routes/quick.ts
 init_src();
 init_auth();
-import { Hono as Hono17 } from "hono";
-import { z as z16 } from "zod";
-import { and as and19, eq as eq23, inArray as inArray9, sql as sql17 } from "drizzle-orm";
-var quickRoutes = new Hono17();
+import { Hono as Hono18 } from "hono";
+import { z as z17 } from "zod";
+import { and as and20, eq as eq24, inArray as inArray9, sql as sql18 } from "drizzle-orm";
+var quickRoutes = new Hono18();
 quickRoutes.use("*", requireAuth, requireRestaurant);
-var n11 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var n12 = (v) => v === null || v === void 0 ? 0 : Number(v);
 async function entities(rid) {
   const db = await getDb();
   const [recs, items] = await Promise.all([
-    db.select({ id: recipes.id, name: recipes.name }).from(recipes).where(and19(eq23(recipes.restaurantId, rid), eq23(recipes.isActive, true))),
-    db.select({ id: inventoryItems.id, name: products.name, aliases: products.aliases, unit: products.baseUnit }).from(inventoryItems).innerJoin(products, eq23(products.id, inventoryItems.productId)).where(eq23(inventoryItems.restaurantId, rid))
+    db.select({ id: recipes.id, name: recipes.name }).from(recipes).where(and20(eq24(recipes.restaurantId, rid), eq24(recipes.isActive, true))),
+    db.select({ id: inventoryItems.id, name: products.name, aliases: products.aliases, unit: products.baseUnit }).from(inventoryItems).innerJoin(products, eq24(products.id, inventoryItems.productId)).where(eq24(inventoryItems.restaurantId, rid))
   ]);
   return { recipes: recs, products: items.map((i) => ({ id: i.id, name: i.name, aliases: i.aliases, unit: i.unit })) };
 }
 quickRoutes.post("/quick/parse", async (c) => {
-  const body3 = z16.object({ text: z16.string().min(2).max(500), kind: z16.enum(["vente", "comptage", "reception", "perte"]).optional() }).safeParse(await c.req.json());
+  const body3 = z17.object({ text: z17.string().min(2).max(500), kind: z17.enum(["vente", "comptage", "reception", "perte"]).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Texte requis" }, 400);
   const ctx = await entities(c.get("restaurantId"));
   return c.json(parseQuick(body3.data.text, ctx, body3.data.kind));
 });
 quickRoutes.post("/quick/apply", async (c) => {
-  const body3 = z16.object({
-    kind: z16.enum(["vente", "comptage", "reception", "perte"]),
-    day: z16.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    note: z16.string().max(200).optional(),
-    lines: z16.array(z16.object({ id: z16.string().uuid(), qty: z16.number().nonnegative() })).min(1).max(60)
+  const body3 = z17.object({
+    kind: z17.enum(["vente", "comptage", "reception", "perte"]),
+    day: z17.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    note: z17.string().max(200).optional(),
+    lines: z17.array(z17.object({ id: z17.string().uuid(), qty: z17.number().nonnegative() })).min(1).max(60)
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const rid = c.get("restaurantId");
@@ -7074,8 +7303,8 @@ quickRoutes.post("/quick/apply", async (c) => {
   const day = d.day ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   if (d.kind === "vente") {
     const ids2 = d.lines.map((l) => l.id);
-    const valid = new Set((await db.select({ id: recipes.id }).from(recipes).where(and19(eq23(recipes.restaurantId, rid), inArray9(recipes.id, ids2)))).map((r) => r.id));
-    const prev = new Map((await db.select().from(sales).where(and19(eq23(sales.restaurantId, rid), eq23(sales.day, day)))).map((p) => [p.recipeId, p.portions]));
+    const valid = new Set((await db.select({ id: recipes.id }).from(recipes).where(and20(eq24(recipes.restaurantId, rid), inArray9(recipes.id, ids2)))).map((r) => r.id));
+    const prev = new Map((await db.select().from(sales).where(and20(eq24(sales.restaurantId, rid), eq24(sales.day, day)))).map((p) => [p.recipeId, p.portions]));
     let applied2 = 0;
     let consumed = 0;
     for (const l of d.lines) {
@@ -7085,31 +7314,31 @@ quickRoutes.post("/quick/apply", async (c) => {
       await db.insert(sales).values({ restaurantId: rid, recipeId: l.id, day, portions }).onConflictDoUpdate({ target: [sales.restaurantId, sales.recipeId, sales.day], set: { portions } });
       applied2++;
       if (delta === 0) continue;
-      const ings = await db.select().from(recipeIngredients).where(eq23(recipeIngredients.recipeId, l.id));
+      const ings = await db.select().from(recipeIngredients).where(eq24(recipeIngredients.recipeId, l.id));
       for (const ing of ings) {
-        const [item] = await db.select().from(inventoryItems).where(and19(eq23(inventoryItems.restaurantId, rid), eq23(inventoryItems.productId, ing.productId)));
+        const [item] = await db.select().from(inventoryItems).where(and20(eq24(inventoryItems.restaurantId, rid), eq24(inventoryItems.productId, ing.productId)));
         if (!item) continue;
-        const q2 = n11(ing.quantity) * delta;
+        const q2 = n12(ing.quantity) * delta;
         if (!q2) continue;
         await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type: "consommation", quantity: (-q2).toFixed(3), note: `Saisie express ventes ${day}`, createdBy: user.id });
-        await db.update(inventoryItems).set({ quantity: Math.max(0, n11(item.quantity) - q2).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq23(inventoryItems.id, item.id));
+        await db.update(inventoryItems).set({ quantity: Math.max(0, n12(item.quantity) - q2).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq24(inventoryItems.id, item.id));
         consumed++;
       }
     }
     return c.json({ ok: true, kind: d.kind, day, applied: applied2, stockLinesUpdated: consumed });
   }
   const ids = d.lines.map((l) => l.id);
-  const items = await db.select().from(inventoryItems).where(and19(eq23(inventoryItems.restaurantId, rid), inArray9(inventoryItems.id, ids)));
+  const items = await db.select().from(inventoryItems).where(and20(eq24(inventoryItems.restaurantId, rid), inArray9(inventoryItems.id, ids)));
   const byId = new Map(items.map((i) => [i.id, i]));
   let applied = 0;
   for (const l of d.lines) {
     const item = byId.get(l.id);
     if (!item) continue;
     const type = d.kind === "comptage" ? "ajustement" : d.kind === "reception" ? "reception" : "perte";
-    const delta = type === "ajustement" ? l.qty - n11(item.quantity) : type === "reception" ? l.qty : -l.qty;
+    const delta = type === "ajustement" ? l.qty - n12(item.quantity) : type === "reception" ? l.qty : -l.qty;
     if (type !== "ajustement" && delta === 0) continue;
     await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type, quantity: delta.toFixed(3), note: d.note ?? "Saisie express", createdBy: user.id });
-    await db.update(inventoryItems).set({ quantity: Math.max(0, n11(item.quantity) + delta).toFixed(3), updatedAt: /* @__PURE__ */ new Date(), ...type === "ajustement" ? { lastCountedAt: /* @__PURE__ */ new Date() } : {} }).where(eq23(inventoryItems.id, item.id));
+    await db.update(inventoryItems).set({ quantity: Math.max(0, n12(item.quantity) + delta).toFixed(3), updatedAt: /* @__PURE__ */ new Date(), ...type === "ajustement" ? { lastCountedAt: /* @__PURE__ */ new Date() } : {} }).where(eq24(inventoryItems.id, item.id));
     applied++;
   }
   return c.json({ ok: true, kind: d.kind, applied });
@@ -7117,20 +7346,20 @@ quickRoutes.post("/quick/apply", async (c) => {
 quickRoutes.get("/quick/inventory", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const rows = await db.select({ id: inventoryItems.id, name: products.name, unit: products.baseUnit, category: products.category, quantity: inventoryItems.quantity, criticalLevel: inventoryItems.criticalLevel, lastCountedAt: inventoryItems.lastCountedAt }).from(inventoryItems).innerJoin(products, eq23(products.id, inventoryItems.productId)).where(eq23(inventoryItems.restaurantId, rid));
-  const items = rows.map((r) => ({ ...r, quantity: n11(r.quantity), criticalLevel: n11(r.criticalLevel), daysSinceCount: r.lastCountedAt ? Math.floor((Date.now() - new Date(r.lastCountedAt).getTime()) / 864e5) : null })).sort((a, b) => (a.daysSinceCount ?? 999) === (b.daysSinceCount ?? 999) ? a.name.localeCompare(b.name) : (b.daysSinceCount ?? 999) - (a.daysSinceCount ?? 999));
-  const [{ counted7 }] = await db.select({ counted7: sql17`count(*) filter (where ${inventoryItems.lastCountedAt} > now() - interval '7 days')` }).from(inventoryItems).where(eq23(inventoryItems.restaurantId, rid));
-  return c.json({ items, total: items.length, countedLast7Days: n11(counted7) });
+  const rows = await db.select({ id: inventoryItems.id, name: products.name, unit: products.baseUnit, category: products.category, quantity: inventoryItems.quantity, criticalLevel: inventoryItems.criticalLevel, lastCountedAt: inventoryItems.lastCountedAt }).from(inventoryItems).innerJoin(products, eq24(products.id, inventoryItems.productId)).where(eq24(inventoryItems.restaurantId, rid));
+  const items = rows.map((r) => ({ ...r, quantity: n12(r.quantity), criticalLevel: n12(r.criticalLevel), daysSinceCount: r.lastCountedAt ? Math.floor((Date.now() - new Date(r.lastCountedAt).getTime()) / 864e5) : null })).sort((a, b) => (a.daysSinceCount ?? 999) === (b.daysSinceCount ?? 999) ? a.name.localeCompare(b.name) : (b.daysSinceCount ?? 999) - (a.daysSinceCount ?? 999));
+  const [{ counted7 }] = await db.select({ counted7: sql18`count(*) filter (where ${inventoryItems.lastCountedAt} > now() - interval '7 days')` }).from(inventoryItems).where(eq24(inventoryItems.restaurantId, rid));
+  return c.json({ items, total: items.length, countedLast7Days: n12(counted7) });
 });
 quickRoutes.post("/quick/invoice", async (c) => {
-  const body3 = z16.object({ image: z16.string().startsWith("data:image/").max(8e6) }).safeParse(await c.req.json());
+  const body3 = z17.object({ image: z17.string().startsWith("data:image/").max(8e6) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Image requise (data URL, \u2264 6 Mo)" }, 400);
   const rid = c.get("restaurantId");
   const db = await getDb();
   const res = await extractInvoiceFromImage(body3.data.image);
   if (!res.ok) return c.json({ error: res.error }, 503);
   const ctx = await entities(rid);
-  const sups = await db.select({ id: suppliers.id, name: suppliers.name }).from(suppliers).where(eq23(suppliers.restaurantId, rid));
+  const sups = await db.select({ id: suppliers.id, name: suppliers.name }).from(suppliers).where(eq24(suppliers.restaurantId, rid));
   const supplier = res.data.supplierName ? bestMatches(res.data.supplierName, sups, 1)[0] ?? null : null;
   const lines = res.data.lines.map((l) => {
     const cands = bestMatches(l.label, ctx.products);
@@ -7139,30 +7368,30 @@ quickRoutes.post("/quick/invoice", async (c) => {
   return c.json({ supplierName: res.data.supplierName ?? null, supplier, date: res.data.date ?? null, total: res.data.total ?? null, lines, matched: lines.filter((l) => l.match).length });
 });
 quickRoutes.post("/quick/invoice/apply", async (c) => {
-  const body3 = z16.object({
-    supplierId: z16.string().uuid().optional(),
-    date: z16.string().optional(),
-    note: z16.string().max(200).optional(),
-    lines: z16.array(z16.object({ inventoryItemId: z16.string().uuid(), qty: z16.number().positive(), unitPrice: z16.number().positive().optional() })).min(1).max(80)
+  const body3 = z17.object({
+    supplierId: z17.string().uuid().optional(),
+    date: z17.string().optional(),
+    note: z17.string().max(200).optional(),
+    lines: z17.array(z17.object({ inventoryItemId: z17.string().uuid(), qty: z17.number().positive(), unitPrice: z17.number().positive().optional() })).min(1).max(80)
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const rid = c.get("restaurantId");
   const db = await getDb();
   const user = c.get("user");
   const d = body3.data;
-  const items = await db.select().from(inventoryItems).where(and19(eq23(inventoryItems.restaurantId, rid), inArray9(inventoryItems.id, d.lines.map((l) => l.inventoryItemId))));
+  const items = await db.select().from(inventoryItems).where(and20(eq24(inventoryItems.restaurantId, rid), inArray9(inventoryItems.id, d.lines.map((l) => l.inventoryItemId))));
   const byId = new Map(items.map((i) => [i.id, i]));
   let received = 0;
   let pricesUpdated = 0;
   if (d.supplierId) {
-    const [s] = await db.select({ id: suppliers.id }).from(suppliers).where(and19(eq23(suppliers.id, d.supplierId), eq23(suppliers.restaurantId, rid)));
+    const [s] = await db.select({ id: suppliers.id }).from(suppliers).where(and20(eq24(suppliers.id, d.supplierId), eq24(suppliers.restaurantId, rid)));
     if (!s) return c.json({ error: "Fournisseur introuvable" }, 404);
   }
   for (const l of d.lines) {
     const item = byId.get(l.inventoryItemId);
     if (!item) continue;
     await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type: "reception", quantity: l.qty.toFixed(3), note: d.note ?? `Facture ${d.date ?? ""}`.trim(), createdBy: user.id });
-    await db.update(inventoryItems).set({ quantity: (n11(item.quantity) + l.qty).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq23(inventoryItems.id, item.id));
+    await db.update(inventoryItems).set({ quantity: (n12(item.quantity) + l.qty).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq24(inventoryItems.id, item.id));
     received++;
     if (d.supplierId && l.unitPrice) {
       const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid, supplierId: d.supplierId, productId: item.productId, packLabel: "facture", packQty: "1.000", packPriceEur: l.unitPrice.toFixed(2), inStock: true }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packPriceEur: l.unitPrice.toFixed(2), lastSeenAt: /* @__PURE__ */ new Date() } }).returning();
@@ -7181,13 +7410,13 @@ init_marketplace();
 // apps/api/src/routes/shopping.ts
 init_src();
 init_auth();
-import { Hono as Hono18 } from "hono";
-import { z as z17 } from "zod";
-import { and as and20, desc as desc13, eq as eq24, inArray as inArray10, isNull as isNull8, or as or3, sql as sql18 } from "drizzle-orm";
+import { Hono as Hono19 } from "hono";
+import { z as z18 } from "zod";
+import { and as and21, desc as desc14, eq as eq25, inArray as inArray10, isNull as isNull8, or as or3, sql as sql19 } from "drizzle-orm";
 init_marketplace();
-var shoppingRoutes = new Hono18();
+var shoppingRoutes = new Hono19();
 shoppingRoutes.use("*", requireAuth, requireRestaurant);
-var n12 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var n13 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var servesZone2 = (v, zones) => v.deliveryZones.length === 0 || v.deliveryZones.some((d) => zones.has(d.trim().toLowerCase()) || zones.has(d));
 function toBase(qty3, unit2, baseUnit) {
   if (!unit2 || unit2 === baseUnit) return { qty: qty3 };
@@ -7214,21 +7443,21 @@ function rankProducts(label, prods, mine, withOffers) {
 shoppingRoutes.post("/shopping/parse", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z17.object({ text: z17.string().min(1).max(2e3) }).safeParse(await c.req.json());
+  const body3 = z18.object({ text: z18.string().min(1).max(2e3) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Texte requis" }, 400);
-  const [r] = await db.select().from(restaurants).where(eq24(restaurants.id, rid));
+  const [r] = await db.select().from(restaurants).where(eq25(restaurants.id, rid));
   const zones = restaurantZones(r);
-  const prods = await db.select().from(products).where(or3(isNull8(products.restaurantId), eq24(products.restaurantId, rid)));
-  const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq24(inventoryItems.restaurantId, rid))).map((x) => x.productId));
+  const prods = await db.select().from(products).where(or3(isNull8(products.restaurantId), eq25(products.restaurantId, rid)));
+  const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq25(inventoryItems.restaurantId, rid))).map((x) => x.productId));
   const tokens = tokenize(body3.data.text);
   if (!tokens.length) return c.json({ lines: [], unmatched: [], hint: "\xC9crivez une quantit\xE9 puis un produit : \xAB 10 kg piment, 5 kg riz, 2 cartons poisson fum\xE9 \xBB." });
-  const activeVendors = (await db.select().from(vendors).where(eq24(vendors.status, "actif"))).filter((v) => servesZone2(v, zones));
+  const activeVendors = (await db.select().from(vendors).where(eq25(vendors.status, "actif"))).filter((v) => servesZone2(v, zones));
   const vById = new Map(activeVendors.map((v) => [v.id, v]));
-  const vo = activeVendors.length ? await db.select().from(vendorOffers).where(and20(inArray10(vendorOffers.vendorId, activeVendors.map((v) => v.id)), eq24(vendorOffers.inStock, true))) : [];
-  const mySups = await db.select().from(suppliers).where(and20(eq24(suppliers.restaurantId, rid), eq24(suppliers.isActive, true)));
+  const vo = activeVendors.length ? await db.select().from(vendorOffers).where(and21(inArray10(vendorOffers.vendorId, activeVendors.map((v) => v.id)), eq25(vendorOffers.inStock, true))) : [];
+  const mySups = await db.select().from(suppliers).where(and21(eq25(suppliers.restaurantId, rid), eq25(suppliers.isActive, true)));
   const sById = new Map(mySups.map((s) => [s.id, s]));
   const linkedVendorIds = new Set(mySups.map((s) => s.vendorId).filter(Boolean));
-  const so = mySups.length ? await db.select().from(supplierOffers).where(and20(eq24(supplierOffers.restaurantId, rid), eq24(supplierOffers.inStock, true), inArray10(supplierOffers.supplierId, mySups.map((s) => s.id)))) : [];
+  const so = mySups.length ? await db.select().from(supplierOffers).where(and21(eq25(supplierOffers.restaurantId, rid), eq25(supplierOffers.inStock, true), inArray10(supplierOffers.supplierId, mySups.map((s) => s.id)))) : [];
   const lines = tokens.map((t) => {
     const cands = rankProducts(t.label, prods, mine, /* @__PURE__ */ new Set([...vo.map((o) => o.productId), ...so.map((o) => o.productId)]));
     const top = cands[0];
@@ -7241,13 +7470,13 @@ shoppingRoutes.post("/shopping/parse", async (c) => {
     for (const o of vo.filter((x) => x.productId === p.id)) {
       const v = vById.get(o.vendorId);
       if (linkedVendorIds.has(v.id)) continue;
-      const packs = asPacks ? Math.max(1, Math.round(needed)) : Math.max(1, Math.ceil(needed / n12(o.packQty)));
-      offers.push({ key: `v:${o.id}`, kind: "vendor", offerId: o.id, sellerId: v.id, sellerName: v.name, packLabel: o.packLabel, packQty: n12(o.packQty), packPrice: n12(o.packPriceEur), unitPrice: n12(o.packPriceEur) / n12(o.packQty), leadTimeHours: v.leadTimeHours, minOrderEur: n12(v.minOrderEur), deliveryFeeEur: n12(v.deliveryFeeEur), packs, lineTotal: packs * n12(o.packPriceEur), linked: false });
+      const packs = asPacks ? Math.max(1, Math.round(needed)) : Math.max(1, Math.ceil(needed / n13(o.packQty)));
+      offers.push({ key: `v:${o.id}`, kind: "vendor", offerId: o.id, sellerId: v.id, sellerName: v.name, packLabel: o.packLabel, packQty: n13(o.packQty), packPrice: n13(o.packPriceEur), unitPrice: n13(o.packPriceEur) / n13(o.packQty), leadTimeHours: v.leadTimeHours, minOrderEur: n13(v.minOrderEur), deliveryFeeEur: n13(v.deliveryFeeEur), packs, lineTotal: packs * n13(o.packPriceEur), linked: false });
     }
     for (const o of so.filter((x) => x.productId === p.id)) {
       const s = sById.get(o.supplierId);
-      const packs = asPacks ? Math.max(1, Math.round(needed)) : Math.max(1, Math.ceil(needed / n12(o.packQty)));
-      offers.push({ key: `s:${o.id}`, kind: "supplier", offerId: o.id, sellerId: s.id, sellerName: s.name, packLabel: o.packLabel, packQty: n12(o.packQty), packPrice: n12(o.packPriceEur), unitPrice: n12(o.packPriceEur) / n12(o.packQty), leadTimeHours: s.leadTimeHours, minOrderEur: n12(s.minOrderEur), deliveryFeeEur: n12(s.deliveryFeeEur), packs, lineTotal: packs * n12(o.packPriceEur), linked: true });
+      const packs = asPacks ? Math.max(1, Math.round(needed)) : Math.max(1, Math.ceil(needed / n13(o.packQty)));
+      offers.push({ key: `s:${o.id}`, kind: "supplier", offerId: o.id, sellerId: s.id, sellerName: s.name, packLabel: o.packLabel, packQty: n13(o.packQty), packPrice: n13(o.packPriceEur), unitPrice: n13(o.packPriceEur) / n13(o.packQty), leadTimeHours: s.leadTimeHours, minOrderEur: n13(s.minOrderEur), deliveryFeeEur: n13(s.deliveryFeeEur), packs, lineTotal: packs * n13(o.packPriceEur), linked: true });
     }
     offers.sort((a, b) => a.unitPrice - b.unitPrice);
     const best = offers[0];
@@ -7271,13 +7500,13 @@ var fmtQ = (q2) => Number.isInteger(q2) ? String(q2) : q2.toFixed(1).replace("."
 shoppingRoutes.get("/shopping/lists", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const lists = await db.select().from(shoppingLists).where(eq24(shoppingLists.restaurantId, rid)).orderBy(desc13(shoppingLists.lastUsedAt), desc13(shoppingLists.createdAt));
+  const lists = await db.select().from(shoppingLists).where(eq25(shoppingLists.restaurantId, rid)).orderBy(desc14(shoppingLists.lastUsedAt), desc14(shoppingLists.createdAt));
   return c.json({ lists });
 });
 shoppingRoutes.post("/shopping/lists", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z17.object({ name: z17.string().min(1).max(60), text: z17.string().min(1).max(2e3) }).safeParse(await c.req.json());
+  const body3 = z18.object({ name: z18.string().min(1).max(60), text: z18.string().min(1).max(2e3) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Nom et contenu requis" }, 400);
   const [list] = await db.insert(shoppingLists).values({ restaurantId: rid, ...body3.data }).returning();
   return c.json({ list, message: `Liste \xAB ${list.name} \xBB enregistr\xE9e.` }, 201);
@@ -7285,40 +7514,40 @@ shoppingRoutes.post("/shopping/lists", async (c) => {
 shoppingRoutes.put("/shopping/lists/:id", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z17.object({ name: z17.string().min(1).max(60).optional(), text: z17.string().min(1).max(2e3).optional(), used: z17.boolean().optional() }).safeParse(await c.req.json());
+  const body3 = z18.object({ name: z18.string().min(1).max(60).optional(), text: z18.string().min(1).max(2e3).optional(), used: z18.boolean().optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const set = { updatedAt: /* @__PURE__ */ new Date() };
   if (body3.data.name) set.name = body3.data.name;
   if (body3.data.text) set.text = body3.data.text;
   if (body3.data.used) {
     set.lastUsedAt = /* @__PURE__ */ new Date();
-    set.useCount = sql18`${shoppingLists.useCount} + 1`;
+    set.useCount = sql19`${shoppingLists.useCount} + 1`;
   }
-  const [list] = await db.update(shoppingLists).set(set).where(and20(eq24(shoppingLists.id, c.req.param("id")), eq24(shoppingLists.restaurantId, rid))).returning();
+  const [list] = await db.update(shoppingLists).set(set).where(and21(eq25(shoppingLists.id, c.req.param("id")), eq25(shoppingLists.restaurantId, rid))).returning();
   if (!list) return c.json({ error: "Liste introuvable" }, 404);
   return c.json({ list });
 });
 shoppingRoutes.delete("/shopping/lists/:id", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const del = await db.delete(shoppingLists).where(and20(eq24(shoppingLists.id, c.req.param("id")), eq24(shoppingLists.restaurantId, rid))).returning({ id: shoppingLists.id });
+  const del = await db.delete(shoppingLists).where(and21(eq25(shoppingLists.id, c.req.param("id")), eq25(shoppingLists.restaurantId, rid))).returning({ id: shoppingLists.id });
   return del.length ? c.json({ ok: true }) : c.json({ error: "Liste introuvable" }, 404);
 });
 shoppingRoutes.get("/shopping/suggestions", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const inv = await db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq24(products.id, inventoryItems.productId)).where(eq24(inventoryItems.restaurantId, rid));
-  const low = inv.filter(({ item }) => n12(item.quantity) <= n12(item.criticalLevel) || item.targetLevel !== null && n12(item.quantity) < n12(item.targetLevel) * 0.5).map(({ item, product }) => {
-    const target = item.targetLevel !== null ? n12(item.targetLevel) : Math.max(n12(item.criticalLevel) * 2, n12(item.avgDailyUse) * 7);
-    const need = Math.max(0, target - n12(item.quantity));
+  const inv = await db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq25(products.id, inventoryItems.productId)).where(eq25(inventoryItems.restaurantId, rid));
+  const low = inv.filter(({ item }) => n13(item.quantity) <= n13(item.criticalLevel) || item.targetLevel !== null && n13(item.quantity) < n13(item.targetLevel) * 0.5).map(({ item, product }) => {
+    const target = item.targetLevel !== null ? n13(item.targetLevel) : Math.max(n13(item.criticalLevel) * 2, n13(item.avgDailyUse) * 7);
+    const need = Math.max(0, target - n13(item.quantity));
     return { name: product.name, unit: product.baseUnit, need: Math.ceil(need * 10) / 10 };
   }).filter((x) => x.need > 0);
-  const lastOrders = await db.select().from(orders).where(and20(eq24(orders.restaurantId, rid), inArray10(orders.status, ["envoyee", "confirmee", "livree", "livree_partiel"]))).orderBy(desc13(orders.createdAt)).limit(5);
+  const lastOrders = await db.select().from(orders).where(and21(eq25(orders.restaurantId, rid), inArray10(orders.status, ["envoyee", "confirmee", "livree", "livree_partiel"]))).orderBy(desc14(orders.createdAt)).limit(5);
   let last = null;
   if (lastOrders.length) {
     const o = lastOrders[0];
-    const ls = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq24(products.id, orderLines.productId)).where(eq24(orderLines.orderId, o.id));
-    last = { reference: o.reference, date: o.createdAt.toISOString().slice(0, 10), text: ls.map(({ line, product }) => `${fmtQ(n12(line.quantity))} ${product.baseUnit} ${product.name}`).join(", ") };
+    const ls = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq25(products.id, orderLines.productId)).where(eq25(orderLines.orderId, o.id));
+    last = { reference: o.reference, date: o.createdAt.toISOString().slice(0, 10), text: ls.map(({ line, product }) => `${fmtQ(n13(line.quantity))} ${product.baseUnit} ${product.name}`).join(", ") };
   }
   return c.json({ restock: { count: low.length, text: low.map((x) => `${fmtQ(x.need)} ${x.unit} ${x.name}`).join(", ") }, last });
 });
@@ -7327,9 +7556,9 @@ shoppingRoutes.get("/shopping/suggestions", async (c) => {
 init_src();
 init_ops();
 init_mailer();
-import { Hono as Hono19 } from "hono";
-import { desc as desc14, eq as eq25, sql as sql19 } from "drizzle-orm";
-var statusRoutes = new Hono19();
+import { Hono as Hono20 } from "hono";
+import { desc as desc15, eq as eq26, sql as sql20 } from "drizzle-orm";
+var statusRoutes = new Hono20();
 statusRoutes.get("/status", async (c) => {
   const t0 = Date.now();
   let dbOk = false;
@@ -7337,10 +7566,10 @@ statusRoutes.get("/status", async (c) => {
   let lastJob = null;
   try {
     const db = await getDb();
-    await db.execute(sql19`select 1`);
+    await db.execute(sql20`select 1`);
     dbMs = Date.now() - t0;
     dbOk = true;
-    const [j] = await db.select().from(jobRuns).where(eq25(jobRuns.job, "daily")).orderBy(desc14(jobRuns.startedAt)).limit(1);
+    const [j] = await db.select().from(jobRuns).where(eq26(jobRuns.job, "daily")).orderBy(desc15(jobRuns.startedAt)).limit(1);
     if (j) lastJob = { status: j.status, finishedAt: j.finishedAt, durationMs: j.durationMs, sent: j.summary?.sent, count: j.summary?.count };
   } catch {
     dbOk = false;
@@ -7366,12 +7595,12 @@ statusRoutes.get("/status/jobs", async (c) => {
   const given = c.req.header("x-cron-secret") ?? (auth?.startsWith("Bearer ") ? auth.slice(7) : void 0);
   if (!process.env.CRON_SECRET || given !== process.env.CRON_SECRET) return c.json({ error: "Non autoris\xE9" }, 401);
   const db = await getDb();
-  return c.json({ runs: await db.select().from(jobRuns).orderBy(desc14(jobRuns.startedAt)).limit(Math.min(100, Number(c.req.query("limit") ?? 30))) });
+  return c.json({ runs: await db.select().from(jobRuns).orderBy(desc15(jobRuns.startedAt)).limit(Math.min(100, Number(c.req.query("limit") ?? 30))) });
 });
 
 // apps/api/src/app.ts
 init_ops();
-var app = new Hono20();
+var app = new Hono21();
 if (process.env.NODE_ENV !== "test") app.use("*", logger());
 app.use("*", securityHeaders);
 app.use("/api/auth/login", rateLimit({ windowMs: 6e4, max: 10 }));
@@ -7390,6 +7619,8 @@ app.route("/api/auth", authRoutes);
 app.route("/api", referenceRequestRoutes);
 app.route("/api", referenceAdminRoutes);
 app.route("/api", adminDashboardRoutes);
+app.route("/api", adminClaimRoutes);
+app.route("/api", vendorClaimRoutes);
 app.route("/api", vendorRoutes);
 app.route("/api", vendorAdminRoutes);
 app.route("/api", billingAdminRoutes);
@@ -7399,6 +7630,7 @@ app.route("/api", restaurantRoutes);
 app.route("/api", catalogRoutes);
 app.route("/api", intelligenceRoutes);
 app.route("/api", manageRoutes);
+app.route("/api", claimRoutes);
 app.route("/api", settingsRoutes);
 app.route("/api", accountRoutes);
 app.route("/api", quickRoutes);

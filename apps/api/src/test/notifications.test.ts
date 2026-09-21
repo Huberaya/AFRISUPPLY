@@ -126,3 +126,32 @@ describe('chantier 24 — recommander & récurrent', () => {
     expect((await call('DELETE', `/api/recurring/${after.id}`, undefined, R)).json.ok).toBe(true);
   });
 });
+
+describe('chantier 26 — litiges & avoirs', () => {
+  it('écart → litige → réponse partielle → escalade → arbitrage ; avoir total → clos', async () => {
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Carton 6', packQty: 6, packPrice: 30 }, V)).json.offer;
+    const mk = async () => { const o = (await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 2 }] }, R)).json.order; await call('POST', `/api/vendor/orders/${o.id}/confirm`, {}, V); const line = (await call('GET', '/api/orders', undefined, R)).json.orders.find((x: Json) => x.id === o.id).lines[0]; const rc = await call('POST', `/api/orders/${o.id}/receive`, { lines: [{ lineId: line.id, receivedQty: 6 }] }, R); expect(rc.status).toBe(200); const disc = (await call('GET', '/api/discrepancies', undefined, R)).json.items.find((d: Json) => d.orderId === o.id); expect(disc.vendorId).toBe(vid); return { o, disc }; };
+    const { o, disc } = await mk();
+    const cl = await call('POST', '/api/claims', { discrepancyId: disc.id, kind: 'manquant', message: 'Il manque un carton' }, R); expect(cl.status).toBe(201); expect(Number(cl.json.claim.claimedEur)).toBe(30); expect(cl.json.claim.reference).toMatch(/^LIT-/);
+    expect((await call('POST', '/api/claims', { discrepancyId: disc.id }, R)).status).toBe(409);
+    expect((await call('POST', `/api/claims/${cl.json.claim.id}/close`, { action: 'accept' }, R)).status).toBe(400); // pas encore de réponse
+    const vc = await call('GET', '/api/vendor/claims', undefined, V); expect(vc.json.openCount).toBe(1); expect(vc.json.items[0].restaurantName).toBe('Resto N');
+    expect((await call('POST', `/api/vendor/claims/${cl.json.claim.id}/respond`, { resolution: 'refus' }, V)).status).toBe(400); // refus non motivé
+    const partial = await call('POST', `/api/vendor/claims/${cl.json.claim.id}/respond`, { resolution: 'avoir', creditEur: 10, message: 'Geste commercial' }, V); expect(partial.json.claim.status).toBe('propose');
+    const esc = await call('POST', `/api/claims/${cl.json.claim.id}/close`, { action: 'escalate', message: 'Insuffisant' }, R); expect(esc.json.claim.status).toBe('escalade');
+    expect((await call('GET', '/api/admin/claims', undefined, R)).status).toBe(403);
+    const ADM = (await reg('admin@afrisupply.fr', 'Admin')).h;
+    const all = await call('GET', '/api/admin/claims', undefined, ADM); expect(all.json.items.some((c: Json) => c.status === 'escalade')).toBe(true);
+    const arb = await call('POST', `/api/admin/claims/${cl.json.claim.id}/arbitrate`, { resolution: 'avoir', creditEur: 30, message: 'Photo probante, avoir intégral' }, ADM); expect(arb.json.claim.status).toBe('clos'); expect(Number(arb.json.claim.creditEur)).toBe(30);
+    expect((await call('GET', '/api/discrepancies?all=1', undefined, R)).json.items.find((d: Json) => d.id === disc.id).resolved).toBe(true);
+    const tl = await call('GET', `/api/orders/${o.id}/timeline`, undefined, R); expect(tl.json.events.filter((e: Json) => e.type === 'note').length).toBeGreaterThanOrEqual(3);
+    // avoir total → accepte → clos par le restaurant
+    const { disc: d2 } = await mk();
+    const c2 = (await call('POST', '/api/claims', { discrepancyId: d2.id }, R)).json.claim;
+    expect((await call('POST', `/api/vendor/claims/${c2.id}/respond`, { resolution: 'avoir' }, V)).json.claim.status).toBe('accepte');
+    const mine = await call('GET', '/api/claims', undefined, R); expect(mine.json.creditsEur).toBe(60);
+    expect((await call('POST', `/api/claims/${c2.id}/close`, { action: 'accept' }, R)).json.claim.status).toBe('clos');
+  });
+});
