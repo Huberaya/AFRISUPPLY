@@ -100,9 +100,51 @@ export default function AppLayout() {
           </div>
         </header>
         <TrialBanner />
+        <EmailVerifyBanner />
         <main id="main-content" className="px-4 py-6 lg:px-8 lg:py-8 max-w-7xl"><Outlet /></main>
         <FeedbackWidget /><UsageBeacon />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Chantier 5 (audit) — l'adresse e-mail n'est pas confirmée.
+ * On ne bloque rien (un restaurateur doit pouvoir travailler tout de suite) mais on le dit clairement
+ * et on donne le bouton pour renvoyer le lien. Aucun message ne promet un envoi qui n'a pas eu lieu.
+ */
+export function EmailVerifyBanner() {
+  const { user, refresh } = useAuth();
+  const [msg, setMsg] = useState<string | null>(null);
+  const [devLink, setDevLink] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  if (!user || user.emailVerified !== false || hidden) return null;
+  const resend = async () => {
+    setBusy(true); setMsg(null); setDevLink(null);
+    try {
+      const r = await api<{ message: string; devLink?: string }>('/auth/resend-verification', { method: 'POST' });
+      setMsg(r.message); setDevLink(r.devLink ?? null);
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 lg:px-8">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span>
+          📧 <b>Confirmez votre adresse e-mail</b> ({user.email}) pour recevoir les alertes de rupture, les rappels de commande et le mail du matin.
+        </span>
+        <span className="flex items-center gap-2">
+          <button className="btn-ghost !py-1" disabled={busy} onClick={() => void resend()}>{busy ? 'Envoi…' : 'Renvoyer le lien'}</button>
+          <button className="text-xs underline opacity-70" onClick={() => setHidden(true)}>Plus tard</button>
+        </span>
+      </div>
+      {msg && <p className="mt-2 text-xs">{msg}</p>}
+      {devLink && (
+        <p className="mt-2 rounded-lg border border-amber-300 bg-white/70 p-2 text-xs">
+          Développement (aucun e-mail réel envoyé) : <a className="break-all underline" href={devLink}>{devLink}</a>
+        </p>
+      )}
+      <p className="mt-1 text-[11px] opacity-80">Vérifié par erreur ? <button className="underline" onClick={() => void refresh()}>Rafraîchir l’état</button></p>
     </div>
   );
 }

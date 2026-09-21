@@ -36,6 +36,7 @@ const Sales = lazy(() => import('./pages/Sales'));
 const Discrepancies = lazy(() => import('./pages/Discrepancies'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Team = lazy(() => import('./pages/Team'));
+const VerifyEmail = lazy(() => import('./pages/VerifyEmail'));   // chantier 5 : confirmation d'adresse
 const Forgot = lazy(() => import('./pages/Forgot'));
 const Reset = lazy(() => import('./pages/Reset'));
 const Express = lazy(() => import('./pages/Express'));
@@ -85,6 +86,7 @@ export default function App() {
             <Route path="/mot-de-passe-oublie" element={<Forgot />} />
             <Route path="/reinitialiser" element={<Reset />} />
             <Route path="/bienvenue" element={<Reset />} />
+            <Route path="/verifier-email" element={<VerifyEmail />} />
             <Route path="/fournisseur" element={<VendorSpace />} />
             <Route path="/inscription" element={<Register />} />
             <Route element={<Protected />}>

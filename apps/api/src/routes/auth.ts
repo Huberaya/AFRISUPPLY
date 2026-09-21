@@ -3,11 +3,11 @@ import { z } from 'zod';
 import { and, eq, isNull, gt } from 'drizzle-orm';
 import { createHash, randomBytes } from 'node:crypto';
 import { setCookie, deleteCookie } from 'hono/cookie';
-import { getDb, users, restaurants, restaurantMembers, leads, passwordResets } from '@afrisupply/db';
+import { getDb, users, restaurants, restaurantMembers, leads, passwordResets, emailVerifications } from '@afrisupply/db';
 import { hashPassword, verifyPassword, signToken, requireAuth, tokenTtlSeconds, type Env } from '../lib/auth.js';
 import { passwordProblem, PASSWORD_MIN_LENGTH } from '../lib/security.js';
-import { issuePasswordLink } from '../lib/reset-link.js';
-import { sendMail } from '../lib/mailer.js';
+import { issuePasswordLink, issueEmailVerification, hashEmailToken } from '../lib/reset-link.js';
+import { sendMail, mailerConfig, devLinksAllowed, type MailResult } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 
 const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -17,6 +17,28 @@ const RESET_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TTL_MINUTES ?? 60);
 const hashResetToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
 export const authRoutes = new Hono<Env>();
+
+/**
+ * Chantier 5 (audit) — dire la vérité sur un envoi d'e-mail.
+ * Le transport « log » (production sans RESEND_API_KEY) ne remet RIEN : on ne peut donc pas
+ * répondre « e-mail envoyé ». On distingue « remis » de « non configuré », et en développement
+ * on renvoie le lien pour pouvoir tester le parcours de bout en bout.
+ */
+const mailStatus = (res: MailResult, link: string, kind: 'verification' | 'reset' | 'invitation') => {
+  const delivered = res.ok && res.transport !== 'log';
+  const { transport } = res;
+  return {
+    delivered, transport,
+    ...(delivered ? {} : {
+      code: 'mail_not_delivered',
+      warning: kind === 'verification'
+        ? "Votre adresse n'a pas encore pu être confirmée : l'envoi d'e-mails n'est pas configuré sur ce serveur."
+        : "L'e-mail n'a pas pu être envoyé : l'envoi d'e-mails n'est pas configuré sur ce serveur. Prévenez le support.",
+    }),
+    ...(devLinksAllowed() ? { devLink: link } : {}),
+  };
+};
+
 
 authRoutes.post('/register', async (c) => {
   const body = z.object({
@@ -44,9 +66,83 @@ authRoutes.post('/register', async (c) => {
   if (founder) await db.update(leads).set({ restaurantId: restaurant.id, status: 'client' }).where(eq(leads.id, lead.id));
   await db.insert(restaurantMembers).values({ restaurantId: restaurant.id, userId: user.id, role: 'owner' });
 
+  // Chantier 5 (audit) : adresse e-mail à confirmer. On n'empêche PAS l'usage (un restaurateur
+  // ne doit jamais être bloqué à l'ouverture), mais on le lui demande et on le trace.
+  const { link } = await issueEmailVerification(user.id, user.email, { requestedIp: c.req.header('x-forwarded-for') ?? null });
+  const TTL_H = Number(process.env.EMAIL_VERIFY_TTL_HOURS ?? 48);
+  const mail = await sendMail({
+    to: user.email, subject: 'AFRISUPPLY — confirmez votre adresse e-mail',
+    text: `Bonjour ${user.fullName.split(' ')[0] || 'chef'},\n\nBienvenue sur AFRISUPPLY. Confirmez votre adresse e-mail en ouvrant ce lien (valable ${TTL_H} heures) : ${link}\n\nTant que l'adresse n'est pas confirmée, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.`,
+    html: `<p>Bonjour ${user.fullName.split(' ')[0] || 'chef'},</p><p>Bienvenue sur AFRISUPPLY. <a href="${link}">Confirmez votre adresse e-mail</a> (lien valable ${TTL_H} heures).</p><p>Tant que l'adresse n'est pas confirmée, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.</p>`,
+    tags: { type: 'email_verification' },
+  });
+  void audit('email.verification.sent', { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== 'log' } });
+
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, 'afs_token', token, cookieOpts);
-  return c.json({ token, user: { id: user.id, email: user.email, fullName: user.fullName }, restaurant }, 201);
+  return c.json({
+    token, user: { id: user.id, email: user.email, fullName: user.fullName },
+    restaurant, emailVerified: false, emailVerification: mailStatus(mail, link, 'verification'),
+  }, 201);
+});
+
+/**
+ * Chantier 5 (audit) — confirmation de l'adresse e-mail.
+ * Jeton à usage unique, expiré au bout de 48 h, avec invalidation des autres jetons en attente.
+ */
+authRoutes.post('/verify-email', async (c) => {
+  const body = z.object({ token: z.string().min(10) }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: 'Lien de confirmation incomplet.', code: 'verify_invalid' }, 400);
+  const db = await getDb();
+  const [row] = await db.select().from(emailVerifications)
+    .where(eq(emailVerifications.tokenHash, hashEmailToken(body.data.token))).limit(1);
+  if (!row) return c.json({ error: 'Ce lien de confirmation n’est pas reconnu. Demandez-en un nouveau.', code: 'verify_invalid' }, 400);
+  const [user] = await db.select().from(users).where(eq(users.id, row.userId));
+  if (!user) return c.json({ error: 'Compte introuvable.', code: 'verify_invalid' }, 400);
+  // Deuxième clic sur le même lien : ce n'est pas une erreur, l'adresse est simplement déjà confirmée.
+  if (row.usedAt || user.emailVerifiedAt) {
+    if (user.emailVerifiedAt) return c.json({ ok: true, email: user.email, alreadyVerified: true, message: 'Cette adresse est déjà confirmée : rien à faire.' }, 200);
+    return c.json({ error: 'Ce lien a déjà été utilisé. Demandez un nouveau lien depuis vos paramètres.', code: 'verify_invalid' }, 400);
+  }
+  if (row.expiresAt.getTime() <= Date.now()) {
+    return c.json({ error: 'Ce lien de confirmation a expiré (48 heures). Demandez-en un nouveau depuis vos paramètres.', code: 'verify_expired' }, 400);
+  }
+
+  await db.update(emailVerifications).set({ usedAt: new Date() }).where(eq(emailVerifications.userId, user.id));
+  const already = user.emailVerifiedAt !== null;
+  if (!already) await db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, user.id));
+  void audit('email.verified', { actorEmail: user.email, target: user.id });
+  return c.json({
+    ok: true, email: user.email, alreadyVerified: already,
+    message: already
+      ? 'Cette adresse était déjà confirmée : vous pouvez envoyer et recevoir les alertes par e-mail.'
+      : 'Adresse e-mail confirmée. Vous recevrez désormais les alertes de rupture et les rappels de commande.',
+  });
+});
+
+/** Chantier 5 (audit) — renvoyer le lien de confirmation (personne connectée, jamais bloquante). */
+authRoutes.post('/resend-verification', requireAuth, async (c) => {
+  const db = await getDb(); const me = c.get('user');
+  const [user] = await db.select().from(users).where(eq(users.id, me.id));
+  if (!user) return c.json({ error: 'Utilisateur inconnu' }, 401);
+  if (user.emailVerifiedAt) return c.json({ ok: true, alreadyVerified: true, message: 'Votre adresse e-mail est déjà confirmée.' }, 200);
+
+  const { link } = await issueEmailVerification(user.id, user.email, { requestedIp: c.req.header('x-forwarded-for') ?? null });
+  const TTL_H = Number(process.env.EMAIL_VERIFY_TTL_HOURS ?? 48);
+  const mail = await sendMail({
+    to: user.email, subject: 'AFRISUPPLY — votre lien de confirmation',
+    text: `Bonjour ${user.fullName.split(' ')[0] || 'chef'},\n\nVoici un nouveau lien pour confirmer votre adresse (valable ${TTL_H} heures) : ${link}\n\nLes liens précédents ne fonctionnent plus.`,
+    html: `<p>Bonjour ${user.fullName.split(' ')[0] || 'chef'},</p><p><a href="${link}">Confirmer mon adresse e-mail</a> (valable ${TTL_H} heures). Les liens précédents ne fonctionnent plus.</p>`,
+    tags: { type: 'email_verification' },
+  });
+  void audit('email.verification.resent', { actorEmail: user.email, target: user.id, meta: { transport: mail.transport } });
+  const status = mailStatus(mail, link, 'verification');
+  return c.json({
+    ok: true, ...status,
+    message: status.delivered
+      ? `Nouveau lien envoyé à ${user.email} (valable ${TTL_H} heures).`
+      : status.warning,
+  });
 });
 
 authRoutes.post('/login', async (c) => {
@@ -58,7 +154,10 @@ authRoutes.post('/login', async (c) => {
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, 'afs_token', token, cookieOpts);
-  return c.json({ token, user: { id: user.id, email: user.email, fullName: user.fullName } });
+  return c.json({
+    token, user: { id: user.id, email: user.email, fullName: user.fullName },
+    emailVerified: user.emailVerifiedAt !== null,
+  });
 });
 
 authRoutes.post('/logout', (c) => { deleteCookie(c, 'afs_token', { path: '/' }); return c.json({ ok: true }); });
@@ -93,8 +192,15 @@ authRoutes.post('/forgot-password', async (c) => {
     tags: { type: 'password_reset' },
   });
   void audit('password.forgot', { actorEmail: email, target: user.id, meta: { transport: res.transport } });
-  const devLink = !process.env.RESEND_API_KEY && process.env.NODE_ENV !== 'production';
-  return c.json({ ...generic, ...(devLink ? { devLink: link } : {}) });
+  const status = mailStatus(res, link, 'reset');
+  return c.json({
+    ...generic,
+    ...status,
+    // Chantier 5 : on ne prétend plus « lien envoyé » quand aucun e-mail ne peut partir.
+    message: status.delivered
+      ? generic.message
+      : 'Compte trouvé, mais l’envoi d’e-mails n’est pas configuré sur ce serveur : demandez au support de vous transmettre votre lien, ou réessayez plus tard.',
+  });
 });
 
 /** Chantier 2 (audit) — réinitialisation : jeton à usage unique, expiration, révocation des sessions ouvertes. */
@@ -110,7 +216,11 @@ authRoutes.post('/reset-password', async (c) => {
   const [user] = await db.select().from(users).where(eq(users.id, row.userId)).limit(1);
   if (!user) return c.json({ error: 'Compte introuvable', code: 'reset_invalid' }, 400);
 
-  await db.update(users).set({ passwordHash: await hashPassword(body.data.password), tokenVersion: (user.tokenVersion ?? 0) + 1 }).where(eq(users.id, user.id));
+  await db.update(users).set({
+    passwordHash: await hashPassword(body.data.password), tokenVersion: (user.tokenVersion ?? 0) + 1,
+    // Chantier 5 : ouvrir un lien reçu par e-mail prouve la maîtrise de la boîte → adresse confirmée.
+    ...(user.emailVerifiedAt === null ? { emailVerifiedAt: new Date() } : {}),
+  }).where(eq(users.id, user.id));
   await db.update(passwordResets).set({ usedAt: new Date() }).where(eq(passwordResets.userId, user.id));
   void audit('password.reset', { actorEmail: user.email, target: user.id, meta: { ip: c.req.header('x-forwarded-for') } });
   deleteCookie(c, 'afs_token', { path: '/' });
@@ -154,5 +264,11 @@ authRoutes.get('/me', requireAuth, async (c) => {
     .from(restaurantMembers).innerJoin(restaurants, eq(restaurants.id, restaurantMembers.restaurantId))
     .where(eq(restaurantMembers.userId, user.id));
   const isAdmin = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
-  return c.json({ user: { ...user, isAdmin }, restaurants: rows.map((r) => ({ ...r.restaurant, role: r.role })) });
+  const [row] = await db.select({ emailVerifiedAt: users.emailVerifiedAt }).from(users).where(eq(users.id, user.id));
+  const emailVerifiedAt = row?.emailVerifiedAt ?? null;
+  return c.json({
+    user: { ...user, isAdmin, emailVerified: emailVerifiedAt !== null, emailVerifiedAt },
+    restaurants: rows.map((r) => ({ ...r.restaurant, role: r.role })),
+    mailTransport: mailerConfig().transport,
+  });
 });

@@ -127,6 +127,13 @@
       "when": 1789985764879,
       "tag": "0017_prix_facture",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789988524369,
+      "tag": "0018_verification_email",
+      "breakpoints": true
     }
   ]
 }

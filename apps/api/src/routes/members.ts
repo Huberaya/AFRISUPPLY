@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { getDb, users, restaurants, restaurantMembers } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, hashPassword, type Env } from '../lib/auth.js';
 import { issuePasswordLink } from '../lib/reset-link.js';
-import { sendMail } from '../lib/mailer.js';
+import { sendMail, devLinksAllowed } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 
 export const memberRoutes = new Hono<Env>();
@@ -75,7 +75,7 @@ memberRoutes.post('/members', requireMinRole('owner'), async (c) => {
   if (existing.length) return c.json({ error: `${user.fullName} fait déjà partie de l'équipe (${existing[0].role === 'owner' ? 'propriétaire' : existing[0].role === 'manager' ? 'responsable' : 'équipe'}).` }, 409);
 
   await db.insert(restaurantMembers).values({ restaurantId: rid, userId: user.id, role: body.data.role });
-  let devLink: string | undefined;
+  let devLink: string | undefined; let delivered = true;
   if (invited) {
     const { link, expiryMinutes } = await issuePasswordLink(user.id, { path: 'bienvenue', requestedIp: c.req.header('x-forwarded-for') ?? null, ttlMinutes: 7 * 24 * 60 });
     const res = await sendMail({
@@ -84,16 +84,22 @@ memberRoutes.post('/members', requireMinRole('owner'), async (c) => {
       html: `<p>Bonjour,</p><p><b>${me.fullName}</b> vous ouvre l’accès à AFRISUPPLY pour « ${r?.name ?? 'le restaurant'} » avec le rôle <b>${body.data.role}</b>.</p><p><a href="${link}">Choisir mon mot de passe</a> (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours).</p><p>À bientôt,<br/>AFRISUPPLY</p>`,
       tags: { type: 'member_invite' },
     });
-    if (!process.env.RESEND_API_KEY && process.env.NODE_ENV !== 'production') devLink = link;
-    void audit('member.invite', { actorEmail: me.email, target: email, meta: { role: body.data.role, transport: res.transport } });
+    // Chantier 5 (audit) : le lien n'est renvoyé que sur un poste de développement, et le message
+    // ne prétend jamais que l'invitation est partie quand aucun e-mail ne peut être remis.
+    delivered = res.ok && res.transport !== 'log';
+    if (devLinksAllowed()) devLink = link;
+    void audit('member.invite', { actorEmail: me.email, target: email, meta: { role: body.data.role, transport: res.transport, delivered } });
   } else {
     void audit('member.add', { actorEmail: me.email, target: email, meta: { role: body.data.role } });
   }
   return c.json({
-    ok: true, invited,
+    ok: true, invited, delivered,
     message: invited
-      ? `${email} a reçu un lien pour choisir son mot de passe et rejoindre l'équipe (${body.data.role}).`
+      ? delivered
+        ? `${email} a reçu un lien pour choisir son mot de passe et rejoindre l'équipe (${body.data.role}).`
+        : `${user.fullName} est enregistré comme ${body.data.role}, mais l'e-mail d'invitation n'a pas pu être envoyé (envoi d'e-mails non configuré sur ce serveur). Demandez au support de vous transmettre le lien.`
       : `${user.fullName} a été ajouté à l'équipe avec le rôle ${body.data.role}.`,
+    ...(delivered ? {} : { code: 'mail_not_delivered' }),
     ...(devLink ? { devLink } : {}),
   }, 201);
 });

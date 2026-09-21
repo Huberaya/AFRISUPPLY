@@ -2,7 +2,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, tokenStore } from './api';
 
-export type User = { id: string; email: string; fullName: string; isAdmin?: boolean };
+export type User = { id: string; email: string; fullName: string; isAdmin?: boolean; emailVerified?: boolean; emailVerifiedAt?: string | null };
 export type Restaurant = { id: string; name: string; city: string | null; plan: string; trialEndsAt: string | null; coversPerDay: number | null; role: string };
 
 type Ctx = {

@@ -44,7 +44,25 @@ export const users = pgTable('users', {
   tokenVersion: integer('token_version').default(0).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+  // Chantier 5 (audit) : l'adresse e-mail est-elle prouvée ? NULL = jamais confirmée.
+  emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
 });
+
+/**
+ * Chantier 5 (audit) : jetons de confirmation d'adresse e-mail.
+ * Même discipline que les jetons de mot de passe : aléatoires, stockés HACHÉS,
+ * à usage unique, avec expiration, et un seul actif à la fois par personne.
+ */
+export const emailVerifications = pgTable('email_verifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  requestedIp: text('requested_ip'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('email_verifications_user_idx').on(t.userId, t.createdAt)]);
 
 /** Chantier 2 (audit) : jetons de réinitialisation de mot de passe (stockés hachés, usage unique, expiration 1 h). */
 export const passwordResets = pgTable('password_resets', {

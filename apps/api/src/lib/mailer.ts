@@ -16,6 +16,14 @@ export function mailerConfig() {
   };
 }
 
+/**
+ * Chantier 5 (audit) — un jeton en clair dans une réponse HTTP n'est tolérable que sur un poste
+ * de développement : ni clé d'envoi, ni NODE_ENV=production, ni déploiement (VERCEL).
+ * Évalué à chaque appel : un environnement qui change ne doit pas continuer à exposer des jetons.
+ */
+export const devLinksAllowed = () =>
+  !process.env.RESEND_API_KEY && process.env.NODE_ENV !== 'production' && !process.env.VERCEL;
+
 export async function sendMail(m: Mail): Promise<MailResult> {
   const cfg = mailerConfig();
   if (cfg.transport === 'resend') {

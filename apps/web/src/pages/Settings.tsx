@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { Mail, Save, Send, Eye, Download, Trash2 } from 'lucide-react';
+import { Mail, Save, Send, Eye, Download, Trash2, MailCheck, MailWarning } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Stat } from '../components/ui';
+import { useAuth } from '../lib/auth';
 import { Field } from '../components/Modal';
 
 type S = { restaurant: { name: string; city: string | null; coversPerDay: number | null; plan: string; trialEndsAt: string | null }; settings: { priceIncreaseAlertPct: number; forecastHorizonDays: number; autoReorderEnabled: boolean; dailyDigestEnabled: boolean; digestRecipients: string[]; closedWeekdays: number[]; notifyPhone: string }; mail: { transport: 'resend' | 'file'; from: string }; sms?: { configured: boolean; whatsapp: boolean } };
@@ -11,6 +12,8 @@ const DAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
 export default function Settings() {
   const { data, loading, error, reload } = useApi<S>('/settings');
+  const { user, refresh } = useAuth();
+  const [mailMsg, setMailMsg] = useState<string | null>(null); const [mailDevLink, setMailDevLink] = useState<string | null>(null);
   const [f, setF] = useState<S['settings'] & { name: string; city: string; coversPerDay: string; recipientsText: string } | null>(null);
   const [msg, setMsg] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   const [del, setDel] = useState(false); const [delPw, setDelPw] = useState(''); const [delConfirm, setDelConfirm] = useState('');
@@ -67,6 +70,23 @@ export default function Settings() {
         {preview && <div className="rounded-xl border border-stone-200 overflow-hidden"><p className="bg-stone-50 px-3 py-2 text-sm font-semibold">{preview.subject}</p><iframe title="Aperçu du mail" srcDoc={preview.html} sandbox="" className="h-[520px] w-full bg-white" /></div>}
       </section>
       <div className="flex justify-end"><button className="btn-primary" disabled={busy} onClick={() => void save()}><Save size={16} /> Enregistrer</button></div>
+      <section className="card space-y-3">
+        <h2 className="font-bold">Mon compte</h2>
+        {/* Chantier 5 : l'état de l'adresse est réel, pas décoratif — et le renvoi dit s'il a pu partir. */}
+        {user?.emailVerified
+          ? <p className="flex items-center gap-2 text-sm text-emerald-800"><MailCheck size={16} /> Adresse confirmée{user.emailVerifiedAt ? ` le ${new Date(user.emailVerifiedAt).toLocaleDateString('fr-FR')}` : ''} — vos alertes peuvent partir par e-mail.</p>
+          : <>
+              <p className="flex items-center gap-2 text-sm text-amber-800"><MailWarning size={16} /> Adresse non confirmée : nous ne pouvons pas vous envoyer les alertes de rupture ni le mail du matin.</p>
+              <button className="btn-ghost" disabled={!user} onClick={async () => {
+                setMailMsg(null); setMailDevLink(null);
+                try { const r = await api<{ message: string; devLink?: string }>('/auth/resend-verification', { method: 'POST' }); setMailMsg(r.message); setMailDevLink(r.devLink ?? null); await refresh().catch(() => null); }
+                catch (e) { setMailMsg((e as Error).message); }
+              }}><Mail size={16} /> M’envoyer un nouveau lien de confirmation</button>
+              {mailMsg && <p className="text-sm text-stone-600">{mailMsg}</p>}
+              {mailDevLink && <p className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">Développement (aucun e-mail réel envoyé) : <a className="break-all underline" href={mailDevLink}>{mailDevLink}</a></p>}
+            </>}
+        <p className="text-xs text-stone-500">Votre mot de passe : <Link to="/app/equipe" className="underline">Équipe &amp; sécurité</Link> (changement de mot de passe, déconnexion de tous les appareils).</p>
+      </section>
       <section className="card space-y-3">
         <h2 className="font-bold">Mes données (RGPD)</h2>
         <p className="text-sm text-stone-600">Vos données vous appartiennent. Exportez tout (fournisseurs, prix, stock, commandes, ventes, recettes) en un fichier JSON, ou supprimez définitivement votre compte.</p>

@@ -25,6 +25,7 @@ __export(schema_exports, {
   deliveriesRelations: () => deliveriesRelations,
   deliveryDiscrepancies: () => deliveryDiscrepancies,
   deliveryDiscrepanciesRelations: () => deliveryDiscrepanciesRelations,
+  emailVerifications: () => emailVerifications,
   feedback: () => feedback,
   forecasts: () => forecasts,
   groupBuyParticipations: () => groupBuyParticipations,
@@ -97,7 +98,7 @@ import {
   uniqueIndex
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
-var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, passwordResets, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, feedback, usageEvents, prospects, shoppingLists, notifications, orderEvents, recurringOrders, claims, vendorPriceTiers, vendorCustomerPrices, vendorReviews;
+var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, emailVerifications, passwordResets, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, feedback, usageEvents, prospects, shoppingLists, notifications, orderEvents, recurringOrders, claims, vendorPriceTiers, vendorCustomerPrices, vendorReviews;
 var init_schema = __esm({
   "packages/db/src/schema.ts"() {
     "use strict";
@@ -135,8 +136,20 @@ var init_schema = __esm({
       // passe / déconnexion globale → tous les jetons déjà émis deviennent invalides (révocation immédiate).
       tokenVersion: integer("token_version").default(0).notNull(),
       createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-      lastLoginAt: timestamp("last_login_at", { withTimezone: true })
+      lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+      // Chantier 5 (audit) : l'adresse e-mail est-elle prouvée ? NULL = jamais confirmée.
+      emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true })
     });
+    emailVerifications = pgTable("email_verifications", {
+      id: uuid("id").primaryKey().defaultRandom(),
+      userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+      email: text("email").notNull(),
+      tokenHash: text("token_hash").notNull().unique(),
+      expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+      usedAt: timestamp("used_at", { withTimezone: true }),
+      requestedIp: text("requested_ip"),
+      createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    }, (t) => [index("email_verifications_user_idx").on(t.userId, t.createdAt)]);
     passwordResets = pgTable("password_resets", {
       id: uuid("id").primaryKey().defaultRandom(),
       userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -2006,6 +2019,7 @@ __export(src_exports, {
   deliveriesRelations: () => deliveriesRelations,
   deliveryDiscrepancies: () => deliveryDiscrepancies,
   deliveryDiscrepanciesRelations: () => deliveryDiscrepanciesRelations,
+  emailVerifications: () => emailVerifications,
   feedback: () => feedback,
   findReferenceProduct: () => findReferenceProduct,
   forecasts: () => forecasts,
@@ -2458,9 +2472,11 @@ ${m.text}`, "utf8");
     return { ok: false, error: e.message, transport: "file" };
   }
 }
+var devLinksAllowed;
 var init_mailer = __esm({
   "apps/api/src/lib/mailer.ts"() {
     "use strict";
+    devLinksAllowed = () => !process.env.RESEND_API_KEY && process.env.NODE_ENV !== "production" && !process.env.VERCEL;
   }
 });
 
@@ -5521,6 +5537,22 @@ async function issuePasswordLink(userId, opts = {}) {
   const appUrl = (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   return { token, link: `${appUrl}/${opts.path ?? "reinitialiser"}?token=${token}`, expiryMinutes: ttlMinutes };
 }
+var hashEmailToken = (t) => createHash("sha256").update(t).digest("hex");
+async function issueEmailVerification(userId, email, opts = {}) {
+  const db = await getDb();
+  const ttlHours = opts.ttlHours ?? Number(process.env.EMAIL_VERIFY_TTL_HOURS ?? 48);
+  await db.update(emailVerifications).set({ usedAt: /* @__PURE__ */ new Date() }).where(and4(eq5(emailVerifications.userId, userId), isNull2(emailVerifications.usedAt)));
+  const token = randomBytes(32).toString("base64url");
+  await db.insert(emailVerifications).values({
+    userId,
+    email,
+    tokenHash: hashEmailToken(token),
+    expiresAt: new Date(Date.now() + ttlHours * 36e5),
+    requestedIp: opts.requestedIp ?? null
+  });
+  const appUrl = (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return { token, link: `${appUrl}/verifier-email?token=${token}`, expiryHours: ttlHours };
+}
 
 // apps/api/src/routes/auth.ts
 init_mailer();
@@ -5530,6 +5562,19 @@ var cookieOpts = { httpOnly: true, sameSite: "Lax", path: "/", maxAge: tokenTtlS
 var RESET_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TTL_MINUTES ?? 60);
 var hashResetToken2 = (t) => createHash2("sha256").update(t).digest("hex");
 var authRoutes = new Hono();
+var mailStatus = (res, link, kind) => {
+  const delivered = res.ok && res.transport !== "log";
+  const { transport } = res;
+  return {
+    delivered,
+    transport,
+    ...delivered ? {} : {
+      code: "mail_not_delivered",
+      warning: kind === "verification" ? "Votre adresse n'a pas encore pu \xEAtre confirm\xE9e : l'envoi d'e-mails n'est pas configur\xE9 sur ce serveur." : "L'e-mail n'a pas pu \xEAtre envoy\xE9 : l'envoi d'e-mails n'est pas configur\xE9 sur ce serveur. Pr\xE9venez le support."
+    },
+    ...devLinksAllowed() ? { devLink: link } : {}
+  };
+};
 authRoutes.post("/register", async (c) => {
   const body3 = z.object({
     email: z.string().email(),
@@ -5556,9 +5601,82 @@ authRoutes.post("/register", async (c) => {
   const [restaurant] = await db.insert(restaurants).values({ name: d.restaurantName, slug, city: d.city, coversPerDay: d.coversPerDay, plan: "trial", trialEndsAt, founder, inviteCode: founder ? code : null }).returning();
   if (founder) await db.update(leads).set({ restaurantId: restaurant.id, status: "client" }).where(eq6(leads.id, lead.id));
   await db.insert(restaurantMembers).values({ restaurantId: restaurant.id, userId: user.id, role: "owner" });
+  const { link } = await issueEmailVerification(user.id, user.email, { requestedIp: c.req.header("x-forwarded-for") ?? null });
+  const TTL_H = Number(process.env.EMAIL_VERIFY_TTL_HOURS ?? 48);
+  const mail = await sendMail({
+    to: user.email,
+    subject: "AFRISUPPLY \u2014 confirmez votre adresse e-mail",
+    text: `Bonjour ${user.fullName.split(" ")[0] || "chef"},
+
+Bienvenue sur AFRISUPPLY. Confirmez votre adresse e-mail en ouvrant ce lien (valable ${TTL_H} heures) : ${link}
+
+Tant que l'adresse n'est pas confirm\xE9e, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.`,
+    html: `<p>Bonjour ${user.fullName.split(" ")[0] || "chef"},</p><p>Bienvenue sur AFRISUPPLY. <a href="${link}">Confirmez votre adresse e-mail</a> (lien valable ${TTL_H} heures).</p><p>Tant que l'adresse n'est pas confirm\xE9e, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.</p>`,
+    tags: { type: "email_verification" }
+  });
+  void audit("email.verification.sent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== "log" } });
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, "afs_token", token, cookieOpts);
-  return c.json({ token, user: { id: user.id, email: user.email, fullName: user.fullName }, restaurant }, 201);
+  return c.json({
+    token,
+    user: { id: user.id, email: user.email, fullName: user.fullName },
+    restaurant,
+    emailVerified: false,
+    emailVerification: mailStatus(mail, link, "verification")
+  }, 201);
+});
+authRoutes.post("/verify-email", async (c) => {
+  const body3 = z.object({ token: z.string().min(10) }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body3.success) return c.json({ error: "Lien de confirmation incomplet.", code: "verify_invalid" }, 400);
+  const db = await getDb();
+  const [row] = await db.select().from(emailVerifications).where(eq6(emailVerifications.tokenHash, hashEmailToken(body3.data.token))).limit(1);
+  if (!row) return c.json({ error: "Ce lien de confirmation n\u2019est pas reconnu. Demandez-en un nouveau.", code: "verify_invalid" }, 400);
+  const [user] = await db.select().from(users).where(eq6(users.id, row.userId));
+  if (!user) return c.json({ error: "Compte introuvable.", code: "verify_invalid" }, 400);
+  if (row.usedAt || user.emailVerifiedAt) {
+    if (user.emailVerifiedAt) return c.json({ ok: true, email: user.email, alreadyVerified: true, message: "Cette adresse est d\xE9j\xE0 confirm\xE9e : rien \xE0 faire." }, 200);
+    return c.json({ error: "Ce lien a d\xE9j\xE0 \xE9t\xE9 utilis\xE9. Demandez un nouveau lien depuis vos param\xE8tres.", code: "verify_invalid" }, 400);
+  }
+  if (row.expiresAt.getTime() <= Date.now()) {
+    return c.json({ error: "Ce lien de confirmation a expir\xE9 (48 heures). Demandez-en un nouveau depuis vos param\xE8tres.", code: "verify_expired" }, 400);
+  }
+  await db.update(emailVerifications).set({ usedAt: /* @__PURE__ */ new Date() }).where(eq6(emailVerifications.userId, user.id));
+  const already = user.emailVerifiedAt !== null;
+  if (!already) await db.update(users).set({ emailVerifiedAt: /* @__PURE__ */ new Date() }).where(eq6(users.id, user.id));
+  void audit("email.verified", { actorEmail: user.email, target: user.id });
+  return c.json({
+    ok: true,
+    email: user.email,
+    alreadyVerified: already,
+    message: already ? "Cette adresse \xE9tait d\xE9j\xE0 confirm\xE9e : vous pouvez envoyer et recevoir les alertes par e-mail." : "Adresse e-mail confirm\xE9e. Vous recevrez d\xE9sormais les alertes de rupture et les rappels de commande."
+  });
+});
+authRoutes.post("/resend-verification", requireAuth, async (c) => {
+  const db = await getDb();
+  const me = c.get("user");
+  const [user] = await db.select().from(users).where(eq6(users.id, me.id));
+  if (!user) return c.json({ error: "Utilisateur inconnu" }, 401);
+  if (user.emailVerifiedAt) return c.json({ ok: true, alreadyVerified: true, message: "Votre adresse e-mail est d\xE9j\xE0 confirm\xE9e." }, 200);
+  const { link } = await issueEmailVerification(user.id, user.email, { requestedIp: c.req.header("x-forwarded-for") ?? null });
+  const TTL_H = Number(process.env.EMAIL_VERIFY_TTL_HOURS ?? 48);
+  const mail = await sendMail({
+    to: user.email,
+    subject: "AFRISUPPLY \u2014 votre lien de confirmation",
+    text: `Bonjour ${user.fullName.split(" ")[0] || "chef"},
+
+Voici un nouveau lien pour confirmer votre adresse (valable ${TTL_H} heures) : ${link}
+
+Les liens pr\xE9c\xE9dents ne fonctionnent plus.`,
+    html: `<p>Bonjour ${user.fullName.split(" ")[0] || "chef"},</p><p><a href="${link}">Confirmer mon adresse e-mail</a> (valable ${TTL_H} heures). Les liens pr\xE9c\xE9dents ne fonctionnent plus.</p>`,
+    tags: { type: "email_verification" }
+  });
+  void audit("email.verification.resent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport } });
+  const status = mailStatus(mail, link, "verification");
+  return c.json({
+    ok: true,
+    ...status,
+    message: status.delivered ? `Nouveau lien envoy\xE9 \xE0 ${user.email} (valable ${TTL_H} heures).` : status.warning
+  });
 });
 authRoutes.post("/login", async (c) => {
   const body3 = z.object({ email: z.string().email(), password: z.string() }).safeParse(await c.req.json());
@@ -5572,7 +5690,11 @@ authRoutes.post("/login", async (c) => {
   await db.update(users).set({ lastLoginAt: /* @__PURE__ */ new Date() }).where(eq6(users.id, user.id));
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, "afs_token", token, cookieOpts);
-  return c.json({ token, user: { id: user.id, email: user.email, fullName: user.fullName } });
+  return c.json({
+    token,
+    user: { id: user.id, email: user.email, fullName: user.fullName },
+    emailVerified: user.emailVerifiedAt !== null
+  });
 });
 authRoutes.post("/logout", (c) => {
   deleteCookie(c, "afs_token", { path: "/" });
@@ -5609,8 +5731,13 @@ Si vous n'\xEAtes pas \xE0 l'origine de cette demande, ignorez ce message : votr
     tags: { type: "password_reset" }
   });
   void audit("password.forgot", { actorEmail: email, target: user.id, meta: { transport: res.transport } });
-  const devLink = !process.env.RESEND_API_KEY && process.env.NODE_ENV !== "production";
-  return c.json({ ...generic, ...devLink ? { devLink: link } : {} });
+  const status = mailStatus(res, link, "reset");
+  return c.json({
+    ...generic,
+    ...status,
+    // Chantier 5 : on ne prétend plus « lien envoyé » quand aucun e-mail ne peut partir.
+    message: status.delivered ? generic.message : "Compte trouv\xE9, mais l\u2019envoi d\u2019e-mails n\u2019est pas configur\xE9 sur ce serveur : demandez au support de vous transmettre votre lien, ou r\xE9essayez plus tard."
+  });
 });
 authRoutes.post("/reset-password", async (c) => {
   const body3 = z.object({ token: z.string().min(10), password: z.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
@@ -5622,7 +5749,12 @@ authRoutes.post("/reset-password", async (c) => {
   if (!row) return c.json({ error: "Ce lien n\u2019est plus valable (expir\xE9 ou d\xE9j\xE0 utilis\xE9). Demandez-en un nouveau.", code: "reset_invalid" }, 400);
   const [user] = await db.select().from(users).where(eq6(users.id, row.userId)).limit(1);
   if (!user) return c.json({ error: "Compte introuvable", code: "reset_invalid" }, 400);
-  await db.update(users).set({ passwordHash: await hashPassword(body3.data.password), tokenVersion: (user.tokenVersion ?? 0) + 1 }).where(eq6(users.id, user.id));
+  await db.update(users).set({
+    passwordHash: await hashPassword(body3.data.password),
+    tokenVersion: (user.tokenVersion ?? 0) + 1,
+    // Chantier 5 : ouvrir un lien reçu par e-mail prouve la maîtrise de la boîte → adresse confirmée.
+    ...user.emailVerifiedAt === null ? { emailVerifiedAt: /* @__PURE__ */ new Date() } : {}
+  }).where(eq6(users.id, user.id));
   await db.update(passwordResets).set({ usedAt: /* @__PURE__ */ new Date() }).where(eq6(passwordResets.userId, user.id));
   void audit("password.reset", { actorEmail: user.email, target: user.id, meta: { ip: c.req.header("x-forwarded-for") } });
   deleteCookie(c, "afs_token", { path: "/" });
@@ -5660,7 +5792,13 @@ authRoutes.get("/me", requireAuth, async (c) => {
   const user = c.get("user");
   const rows = await db.select({ restaurant: restaurants, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(restaurants, eq6(restaurants.id, restaurantMembers.restaurantId)).where(eq6(restaurantMembers.userId, user.id));
   const isAdmin8 = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
-  return c.json({ user: { ...user, isAdmin: isAdmin8 }, restaurants: rows.map((r) => ({ ...r.restaurant, role: r.role })) });
+  const [row] = await db.select({ emailVerifiedAt: users.emailVerifiedAt }).from(users).where(eq6(users.id, user.id));
+  const emailVerifiedAt = row?.emailVerifiedAt ?? null;
+  return c.json({
+    user: { ...user, isAdmin: isAdmin8, emailVerified: emailVerifiedAt !== null, emailVerifiedAt },
+    restaurants: rows.map((r) => ({ ...r.restaurant, role: r.role })),
+    mailTransport: mailerConfig().transport
+  });
 });
 
 // apps/api/src/app.ts
@@ -8710,6 +8848,7 @@ memberRoutes.post("/members", requireMinRole("owner"), async (c) => {
   if (existing.length) return c.json({ error: `${user.fullName} fait d\xE9j\xE0 partie de l'\xE9quipe (${existing[0].role === "owner" ? "propri\xE9taire" : existing[0].role === "manager" ? "responsable" : "\xE9quipe"}).` }, 409);
   await db.insert(restaurantMembers).values({ restaurantId: rid, userId: user.id, role: body3.data.role });
   let devLink;
+  let delivered = true;
   if (invited) {
     const { link, expiryMinutes } = await issuePasswordLink(user.id, { path: "bienvenue", requestedIp: c.req.header("x-forwarded-for") ?? null, ttlMinutes: 7 * 24 * 60 });
     const res = await sendMail({
@@ -8726,15 +8865,18 @@ AFRISUPPLY`,
       html: `<p>Bonjour,</p><p><b>${me.fullName}</b> vous ouvre l\u2019acc\xE8s \xE0 AFRISUPPLY pour \xAB ${r?.name ?? "le restaurant"} \xBB avec le r\xF4le <b>${body3.data.role}</b>.</p><p><a href="${link}">Choisir mon mot de passe</a> (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours).</p><p>\xC0 bient\xF4t,<br/>AFRISUPPLY</p>`,
       tags: { type: "member_invite" }
     });
-    if (!process.env.RESEND_API_KEY && process.env.NODE_ENV !== "production") devLink = link;
-    void audit("member.invite", { actorEmail: me.email, target: email, meta: { role: body3.data.role, transport: res.transport } });
+    delivered = res.ok && res.transport !== "log";
+    if (devLinksAllowed()) devLink = link;
+    void audit("member.invite", { actorEmail: me.email, target: email, meta: { role: body3.data.role, transport: res.transport, delivered } });
   } else {
     void audit("member.add", { actorEmail: me.email, target: email, meta: { role: body3.data.role } });
   }
   return c.json({
     ok: true,
     invited,
-    message: invited ? `${email} a re\xE7u un lien pour choisir son mot de passe et rejoindre l'\xE9quipe (${body3.data.role}).` : `${user.fullName} a \xE9t\xE9 ajout\xE9 \xE0 l'\xE9quipe avec le r\xF4le ${body3.data.role}.`,
+    delivered,
+    message: invited ? delivered ? `${email} a re\xE7u un lien pour choisir son mot de passe et rejoindre l'\xE9quipe (${body3.data.role}).` : `${user.fullName} est enregistr\xE9 comme ${body3.data.role}, mais l'e-mail d'invitation n'a pas pu \xEAtre envoy\xE9 (envoi d'e-mails non configur\xE9 sur ce serveur). Demandez au support de vous transmettre le lien.` : `${user.fullName} a \xE9t\xE9 ajout\xE9 \xE0 l'\xE9quipe avec le r\xF4le ${body3.data.role}.`,
+    ...delivered ? {} : { code: "mail_not_delivered" },
     ...devLink ? { devLink } : {}
   }, 201);
 });
@@ -9113,6 +9255,8 @@ app.use("/api/auth/forgot-password", rateLimit({ windowMs: 15 * 6e4, max: 5 }));
 app.use("/api/auth/reset-password", rateLimit({ windowMs: 15 * 6e4, max: 10 }));
 app.use("/api/auth/password", rateLimit({ windowMs: 15 * 6e4, max: 10 }));
 app.use("/api/auth/logout-all", rateLimit({ windowMs: 15 * 6e4, max: 20 }));
+app.use("/api/auth/verify-email", rateLimit({ windowMs: 15 * 6e4, max: 20 }));
+app.use("/api/auth/resend-verification", rateLimit({ windowMs: 15 * 6e4, max: 5 }));
 app.use("/api/public/leads", rateLimit({ windowMs: 6e4, max: 5 }));
 app.use("/api/*", async (c, next) => {
   await next();

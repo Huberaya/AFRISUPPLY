@@ -38,6 +38,9 @@ app.use('/api/auth/forgot-password', rateLimit({ windowMs: 15 * 60_000, max: 5 }
 app.use('/api/auth/reset-password', rateLimit({ windowMs: 15 * 60_000, max: 10 }));
 app.use('/api/auth/password', rateLimit({ windowMs: 15 * 60_000, max: 10 }));
 app.use('/api/auth/logout-all', rateLimit({ windowMs: 15 * 60_000, max: 20 }));
+// Chantier 5 (audit) : confirmation d'adresse e-mail — mêmes limites que le reste de l'authentification.
+app.use('/api/auth/verify-email', rateLimit({ windowMs: 15 * 60_000, max: 20 }));
+app.use('/api/auth/resend-verification', rateLimit({ windowMs: 15 * 60_000, max: 5 }));
 app.use('/api/public/leads', rateLimit({ windowMs: 60_000, max: 5 }));
 // Chantier 2 (audit) : plus de « * » avec credentials — liste blanche explicite (ALLOWED_ORIGINS / APP_URL).
 app.use('/api/*', async (c, next) => { await next(); c.header('Cache-Control', 'no-store'); });
