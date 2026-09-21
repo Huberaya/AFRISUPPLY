@@ -10,5 +10,5 @@ export default defineConfig({
     proxy: { '/api': { target: process.env.API_URL ?? 'http://localhost:8787', changeOrigin: true } },
   },
   preview: { host: '0.0.0.0', port: 3000, allowedHosts: true },
-  test: { globals: true, environment: 'jsdom' },
+  test: { globals: true, environment: 'jsdom', setupFiles: './src/test/setup.ts' },
 });

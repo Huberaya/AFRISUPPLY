@@ -1,11 +1,13 @@
-// Client API minimal (remplace le client Supabase) — JWT en localStorage + header X-Restaurant-Id
-const TOKEN_KEY = 'afs_token';
+// Client API minimal — session par cookie HttpOnly (audit S2 : le jeton n'est JAMAIS lisible
+// par le JavaScript : ni localStorage, ni variable lisible). `afs_authed` est un simple indice
+// d'interface (pas un secret) ; l'authentification réelle = le cookie `afs_token` posé par l'API.
 const RESTAURANT_KEY = 'afs_restaurant';
+const AUTHED_KEY = 'afs_authed';
 
 export const tokenStore = {
-  get: () => localStorage.getItem(TOKEN_KEY),
-  set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
-  clear: () => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(RESTAURANT_KEY); },
+  authed: () => localStorage.getItem(AUTHED_KEY) === '1',
+  setAuthed: () => localStorage.setItem(AUTHED_KEY, '1'),
+  clear: () => { localStorage.removeItem(AUTHED_KEY); localStorage.removeItem(RESTAURANT_KEY); },
   restaurant: () => localStorage.getItem(RESTAURANT_KEY),
   setRestaurant: (id: string) => localStorage.setItem(RESTAURANT_KEY, id),
 };
@@ -14,7 +16,7 @@ export class ApiError extends Error { constructor(public status: number, message
 
 export async function api<T = unknown>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> ?? {}) };
-  const token = tokenStore.get(); if (token) headers.Authorization = `Bearer ${token}`;
+  // S2 : plus d'en-tête Authorization — le cookie HttpOnly `afs_token` accompagne la requête.
   const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
   let body = init.body;
   if (init.json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(init.json); }
@@ -37,7 +39,7 @@ export const STATUS_LABEL: Record<string, string> = { brouillon: 'Brouillon', pr
 
 /** Ouvre un PDF protégé par JWT dans un nouvel onglet (chantier 16). */
 export async function openPdf(path: string) {
-  const headers: Record<string, string> = {}; const t = tokenStore.get(); if (t) headers.Authorization = `Bearer ${t}`; const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
-  const res = await fetch(`/api${path}`, { headers }); if (!res.ok) throw new ApiError(res.status, 'PDF indisponible');
+  const headers: Record<string, string> = {}; const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
+  const res = await fetch(`/api${path}`, { headers, credentials: 'include' }); if (!res.ok) throw new ApiError(res.status, 'PDF indisponible');
   const url = URL.createObjectURL(await res.blob()); window.open(url, '_blank'); setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }

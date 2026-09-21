@@ -26,7 +26,7 @@ let recipeA = ''; let recipeB = '';
 
 beforeAll(async () => {
   await runMigrations();
-  _resetRateLimits();
+  await _resetRateLimits();
   const r = await call('POST', '/api/auth/register', { email: 'couts@resto.fr', password: 'Yassa-Poulet-42', fullName: 'Coûts Test', restaurantName: 'La Vérité des Coûts', city: 'Nantes', coversPerDay: 60 });
   token = r.json.token; rid = r.json.restaurant.id; auth = { authorization: `Bearer ${token}`, 'x-restaurant-id': rid };
   await call('GET', '/api/catalog', undefined, auth); // amorçage du référentiel produits (ensureReference)

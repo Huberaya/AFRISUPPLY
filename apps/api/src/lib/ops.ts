@@ -1,7 +1,8 @@
 // Exploitation : remontée d'erreurs (Sentry via API HTTP, zéro dépendance), rate limiting, en-têtes de sécurité, audit.
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
-import { getDb, auditLog } from '@afrisupply/db';
+import { sql } from 'drizzle-orm';
+import { getDb, auditLog, rateLimits } from '@afrisupply/db';
 
 // ---------- Sentry (envelope API) ----------
 function parseDsn(dsn: string) {
@@ -30,8 +31,28 @@ export async function captureException(err: unknown, ctx: { route?: string; meth
   } catch { /* la télémétrie ne doit jamais casser une requête */ }
 }
 
-// ---------- Rate limiting (mémoire par instance : suffisant pour freiner le brute-force sur une fonction serverless) ----------
-const buckets = new Map<string, { n: number; reset: number }>();
+// ---------- Rate limiting (Postgres PARTAGÉ entre instances — audit Chantier 5 / S1, B7) ----------
+// Un compteur mémoire se contourne en serverless : chaque instance froide redémarre avec son
+// propre compteur. Les compteurs vivent dans la table `rate_limits` (UPSERT incrémental atomique,
+// fenêtre à l'horloge de la base). Repli mémoire uniquement si la base est injoignable : la
+// limitation ne doit jamais servir de point de défaillance.
+const memBuckets = new Map<string, { n: number; reset: number }>();
+
+async function bumpCounter(key: string, windowMs: number): Promise<{ n: number; resetMs: number }> {
+  const db = await getDb();
+  const iso = new Date(Date.now() + windowMs).toISOString();
+  const res = await db.execute(sql`
+    INSERT INTO rate_limits (key, n, reset_at) VALUES (${key}, 1, ${iso}::timestamptz)
+    ON CONFLICT (key) DO UPDATE SET
+      n = CASE WHEN rate_limits.reset_at <= now() THEN 1 ELSE rate_limits.n + 1 END,
+      reset_at = CASE WHEN rate_limits.reset_at <= now() THEN ${iso}::timestamptz ELSE rate_limits.reset_at END
+    RETURNING n, reset_at`);
+  const row = (res.rows ?? [])[0] as { n: number | string; reset_at: Date | string } | undefined;
+  if (!row) throw new Error('rate_limits: RETURNING vide');
+  // purge opportuniste des fenêtres expirées (~1 % des requêtes limitées, jamais bloquant)
+  if (Math.random() < 0.01) { try { await db.execute(sql`DELETE FROM rate_limits WHERE reset_at <= now()`); } catch { /* rien */ } }
+  return { n: Number(row.n), resetMs: new Date(row.reset_at).getTime() };
+}
 
 /**
  * Adresse client fiable. `X-Forwarded-For` n'est utilisé que si l'on est réellement derrière un proxy
@@ -48,18 +69,28 @@ export function clientIp(c: Context): string {
 export function rateLimit(opts: { windowMs: number; max: number; key?: (c: Context) => string }): MiddlewareHandler {
   return async (c, next) => {
     const ip = clientIp(c);
-    const k = `${opts.key ? opts.key(c) : c.req.path}:${ip}`; const now = Date.now();
-    let b = buckets.get(k); if (!b || b.reset < now) { b = { n: 0, reset: now + opts.windowMs }; buckets.set(k, b); }
-    b.n += 1;
-    // Purge des compteurs expirés (évite la croissance mémoire sur un process longue durée).
-    if (buckets.size > 5000) for (const [kk, v] of buckets) if (v.reset < now) buckets.delete(kk);
-    if (buckets.size > 20_000) buckets.clear();
-    c.header('X-RateLimit-Limit', String(opts.max)); c.header('X-RateLimit-Remaining', String(Math.max(0, opts.max - b.n)));
-    if (b.n > opts.max) { c.header('Retry-After', String(Math.ceil((b.reset - now) / 1000))); return c.json({ error: 'Trop de tentatives, réessayez dans une minute.' }, 429); }
+    const k = `${opts.key ? opts.key(c) : c.req.path}:${ip}`;
+    let n: number; let resetMs: number;
+    try {
+      ({ n, resetMs } = await bumpCounter(k, opts.windowMs));
+    } catch {
+      // Repli mémoire (incident base ponctuel / dev sans base) : limite au niveau de l'instance.
+      const now = Date.now();
+      let b = memBuckets.get(k); if (!b || b.reset < now) { b = { n: 0, reset: now + opts.windowMs }; memBuckets.set(k, b); }
+      b.n += 1;
+      if (memBuckets.size > 20_000) memBuckets.clear();
+      n = b.n; resetMs = b.reset;
+    }
+    c.header('X-RateLimit-Limit', String(opts.max)); c.header('X-RateLimit-Remaining', String(Math.max(0, opts.max - n)));
+    if (n > opts.max) { c.header('Retry-After', String(Math.max(1, Math.ceil((resetMs - Date.now()) / 1000)))); return c.json({ error: 'Trop de tentatives, réessayez dans une minute.' }, 429); }
     await next();
   };
 }
-export const _resetRateLimits = () => buckets.clear();
+/** Purge les compteurs (mémoire + table) — utilisé par les tests entre deux scénarios. */
+export const _resetRateLimits = async () => {
+  memBuckets.clear();
+  try { const db = await getDb(); await db.delete(rateLimits); } catch { /* pas de base : la purge mémoire suffit */ }
+};
 
 // ---------- En-têtes de sécurité ----------
 export async function securityHeaders(c: Context, next: Next) {

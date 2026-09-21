@@ -10,7 +10,8 @@ async function main() {
   // une base éphémère ou le restaurant de démonstration activé.
   enforceSecureConfig();
   if (process.env.AUTO_MIGRATE !== 'false') await runMigrations();
-  if (process.env.SEED_DEMO === 'true') await seedDemo();
+  // SEED_DEMO=true : crée le restaurant démo s'il manque ; SEED_DEMO=purge : le supprime et le régénère.
+  if (process.env.SEED_DEMO === 'true' || process.env.SEED_DEMO === 'purge') await seedDemo({ force: process.env.SEED_DEMO === 'purge' });
   serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => console.log(`[api] AFRISUPPLY API → http://0.0.0.0:${port}`));
 }
 main().catch((e) => { console.error(e); process.exit(1); });

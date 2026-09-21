@@ -24,7 +24,7 @@ let prodA = '', prodB = '', itemA = '', itemB = '', recipeId = '', supplierId = 
 
 beforeAll(async () => {
   await runMigrations();
-  _resetRateLimits();
+  await _resetRateLimits();
   const r = await call('POST', '/api/auth/register', { email: 'prevision@resto.fr', password: 'Thieb-Dieuppeul-7', fullName: 'Prévision Test', restaurantName: 'La Prévision', city: 'Rouen', coversPerDay: 60 });
   auth = { authorization: `Bearer ${r.json.token}`, 'x-restaurant-id': r.json.restaurant.id };
   await call('GET', '/api/catalog', undefined, auth); // amorçage du référentiel (migrations 0013-0016)

@@ -49,8 +49,8 @@ export default function Team() {
     if (pw !== pw2) { setErrSec('Les deux mots de passe ne sont pas identiques.'); return; }
     setBusy(true);
     try {
-      const r = await api<{ token: string; message: string }>('/auth/password', { method: 'POST', json: { currentPassword: cur, newPassword: pw } });
-      tokenStore.set(r.token); setMsgSec(r.message); setCur(''); setPw(''); setPw2('');
+      const r = await api<{ message: string }>('/auth/password', { method: 'POST', json: { currentPassword: cur, newPassword: pw } });
+      tokenStore.setAuthed(); setMsgSec(r.message); setCur(''); setPw(''); setPw2('');
     } catch (e) { setErrSec((e as Error).message); } finally { setBusy(false); }
   };
   const logoutAll = async () => {

@@ -3,9 +3,117 @@
 > **Achetez mieux. Gaspillez moins. Gagnez plus.**
 > L'assistant d'approvisionnement intelligent des restaurants africains.
 
-Monorepo TypeScript — **React + Vite** (web) · **Hono** (API) · **Drizzle ORM** · **Neon Postgres** (prod) / **PGlite** (local).
+Monorepo TypeScript — **React 18 + Vite + Tailwind** (web) · **Hono** (API) · **Drizzle ORM** · **Neon Postgres** (prod) / **PGlite** (local et tests).
 
-Voir aussi : [`ROADMAP_MISE_SUR_LE_MARCHE.md`](./ROADMAP_MISE_SUR_LE_MARCHE.md) (les 10 chantiers).
+Voir aussi : [`ROADMAP_MISE_SUR_LE_MARCHE.md`](./ROADMAP_MISE_SUR_LE_MARCHE.md) · [`docs/`](./docs) (une fiche par chantier fonctionnel).
+
+---
+
+## Démarrage en 2 minutes (Node 20)
+
+```bash
+npm install
+npm run dev          # API sur :8787 + web sur :3000 (proxy /api → API)
+```
+
+Ouvrir http://localhost:3000 — compte démo : **awa@chezawa.fr / demo1234**
+(restaurant « Chez Awa », Nantes : référentiel produits africains, 5 fournisseurs, recettes, 60 jours de ventes, commandes).
+
+Sans `DATABASE_URL`, l'API utilise **PGlite** (Postgres WASM). Migrations et seed démo s'appliquent au démarrage (`SEED_DEMO=true`) ; `SEED_DEMO=purge` **supprime et régénère** le restaurant démo (`npm run db:seed -- --force` fait de même). En production le seed démo est refusé sauf `ALLOW_DEMO_SEED=true` (identifiants publics assumés).
+
+## Passer sur Neon
+
+1. Créer un projet Neon → copier la chaîne de connexion **pooler**.
+2. `cp .env.example .env` puis renseigner `DATABASE_URL` et `JWT_SECRET` (32 caractères minimum, `openssl rand -hex 32`).
+3. `npm run db:migrate && npm run db:seed` (ou laisser `AUTO_MIGRATE=true` / `SEED_DEMO=true`). Optionnel : `LLM_API_KEY` (API compatible OpenAI) pour que l'assistant reformule ses réponses — sans clé, tout fonctionne en local.
+
+Le code métier ne change pas : `getDb()` retourne le même client Drizzle dans les deux cas. Toutes les variables : **[`.env.example`](./.env.example)**.
+
+---
+
+## Structure
+
+```
+apps/
+  web/            React 18 + Vite + Tailwind — 25+ pages (gestion, achat, marketplace, admin, site)
+  api/            Hono (Node) — auth, endpoints métier, moteurs, jobs
+packages/
+  db/             Schéma Drizzle (46 tables), migrations SQL (drizzle/), seed démo, client Neon/PGlite
+                  + data/ : référentiel 324 produits africains (alias), 31 recettes types
+```
+
+### Schéma (46 tables — extrait)
+
+| Domaine | Tables |
+|---|---|
+| Comptes & tenancy | `users`, `restaurants`, `restaurant_members`, `audit_log`, `rate_limits` |
+| Référentiel & fournisseurs | `products` (partagé + privés), `suppliers`, `supplier_offers`, `price_history` |
+| Stock & mouvements | `inventory_items`, `stock_movements` |
+| Commandes & livraisons | `orders`, `order_lines`, `deliveries`, `delivery_discrepancies`, `order_events` |
+| Menu & prévision | `recipes`, `recipe_ingredients`, `sales`, `forecasts`, `forecast_events`, `alerts`, `reorder_rules` |
+| Marketplace & logistique | `vendors`, catalogues, tournées/créneaux, substitutions, litiges/avoirs, avis, encours |
+| Croissance & facturation | `leads`, `prospects`, pilots, abonnements Stripe, commissions |
+
+Isolation multi-tenant : chaque table métier porte `restaurant_id`, filtré par le middleware `requireRestaurant` (la sécurité vit dans l'API — Neon n'a pas d'auth intégrée).
+
+### API (`/api`) — extrait des routes
+
+| Route | Rôle |
+|---|---|
+| `POST /auth/register` `POST /auth/login` `GET /auth/me` `POST /auth/logout` | Auth bcrypt + JWT **7 j révocable** (`tokenVersion`), posé en **cookie HttpOnly** (le web n'a jamais le jeton : S2) |
+| `POST /auth/forgot-password` `POST /auth/reset-password` | Reset par e-mail (Resend ou boîte `.outbox` en dev) |
+| `GET /dashboard` | Compteurs 🟢🟠🔴, dépenses 30 j, alertes, dernières commandes |
+| `GET /stock` `POST /stock/:itemId/movements` `GET /stock/:itemId/movements` | Stock (conso/j, jours restants), mouvements signés + **journal** |
+| `GET /products` `GET /compare/:productId?qty=` | Catalogue ; **comparateur au coût total** (colis + livraison + minimum de commande) |
+| `GET /orders` `POST /orders` `POST /orders/:id/send` `POST /orders/:id/receive` | Commandes (plausibilité des quantités) ; réception → stock + prix + écarts + réclamation rédigée |
+| `GET /forecast` `PUT /forecast/events` `GET /forecast/events` | **Prévision** 7 j explicable (saisonnalité, événements) ; soirées privatisées (coef de fréquentation) |
+| `GET /smart-cart` `POST /smart-cart/checkout` | Panier intelligent multi-fournisseurs (livraison/minimum inclus) |
+| `GET /sales` `POST /sales` | Ventes du jour par plat |
+| `GET /assistant/examples` `POST /assistant/ask` | Assistant IA : chiffres locaux + reformulation LLM optionnelle |
+| `POST /alerts/refresh` `GET /alerts` | Alertes : rupture (**non déclenchée si la livraison couvre le creux**), stock bas, prix, opportunités |
+| `GET /reorder-rules` `POST /reorder-rules/run` | Auto-reorder (préparation seule, jamais d'envoi) |
+| Marketplace, vitrine, billing, pilotes, admin… | `docs/` (chantiers 6-29) |
+
+### Moteurs (`apps/api/src/lib/`)
+
+Fonctions pures testées — `engines.ts` (stock, alertes, **comparateur coût total**, coûts recette, fiabilité fournisseur), `forecast.ts` (moyenne mobile par jour de semaine + tendance, **saisonnalité ×1,2**, **événements ×coef**, fermetures, panier), `limits.ts` (plausibilité des quantités).
+
+---
+
+## Sécurité & exploitation (audits successifs)
+
+- **Session = cookie HttpOnly `afs_token`** — jamais dans `localStorage`, jamais lisible par le JavaScript (S2). Bearer accepté en plus pour les clients API/tests.
+- **Rate-limit Postgres partagé** (`rate_limits`, UPSERT atomique) : 10 connexions/min/IP → **429**, y compris en environnement serverless (S1/B7). Repli mémoire uniquement si la base est injoignable.
+- Mots de passe : politique stricte (dictionnaire, répétitions, longueur) · sessions **révocables** (changement de mot de passe + « déconnecter tous mes appareils ») · CORS liste blanche · en-têtes de sécurité · `audit_log` · secret JWT refusé faible en prod.
+- Exploitation : Sentry optionnel (`SENTRY_DSN`), `/api/status`, job quotidien (`X-Cron-Secret`), RGPD export/suppression.
+
+## Qualité — tests & CI
+
+```bash
+npm test --workspaces     # API (219 tests, 25 fichiers) + db (5) + web (5, Testing Library)
+npm run typecheck         # 0 erreur
+npm run lint
+npm run build
+```
+
+CI GitHub Actions : [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) (typecheck → lint → tests → build) sur chaque push `main` et PR.
+
+## E-mails (reset de mot de passe, notifications)
+
+- `RESEND_API_KEY` renseigné → envoi réel via Resend (`MAIL_FROM` obligatoire, domaine vérifié).
+- Sinon : boîte de sortie `MAIL_OUTBOX_DIR` (défaut `.outbox/`) en dev, journalisation en serverless.
+- **Vérification staging** (critère de mise en production) : demander un reset sur l'env de staging avec `RESEND_API_KEY` de test + `MAIL_FROM` vérifié → l'e-mail doit arriver dans la boîte réelle en < 1 min, le lien doit réinitialiser et reconnecter.
+
+## Scripts
+
+| Commande | Effet |
+|---|---|
+| `npm run dev` / `dev:api` / `dev:web` | API + web en parallèle |
+| `npm test` / `npm run typecheck` / `npm run lint` | Qualité (workspaces) |
+| `npm run db:generate` | Génère une migration SQL après modification de `schema.ts` |
+| `npm run db:migrate` / `npm run db:seed` | Applique / seed (`-- --force` = purge + régénération du démo) |
+| `npm run build` | db + api + web |
+| `npm run deploy:migrate` | Migrations au déploiement (Vercel) |
 
 ---
 

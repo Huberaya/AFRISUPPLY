@@ -10,14 +10,20 @@ interface SavedList { id: string; name: string; text: string; useCount: number; 
 interface Suggestions { restock: { count: number; text: string }; last: { reference: string; text: string; date: string } | null }
 
 /** Dictée vocale (Web Speech API, Chrome/Safari/Android). Retourne null si non supporté. */
+type SpeechRec = {
+  lang: string; continuous: boolean; interimResults: boolean;
+  onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>>; resultIndex: number }) => void;
+  onend: () => void; onerror: () => void; start: () => void; stop: () => void;
+};
 function useDictation(onText: (t: string) => void) {
-  const recRef = useRef<any>(null); const [on, setOn] = useState(false);
-  const SR = typeof window !== 'undefined' ? ((window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition) : null;
+  const recRef = useRef<{ stop: () => void } | null>(null); const [on, setOn] = useState(false);
+  const w = typeof window !== 'undefined' ? (window as unknown as { SpeechRecognition?: new () => SpeechRec; webkitSpeechRecognition?: new () => SpeechRec }) : {};
+  const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
   const toggle = () => {
     if (!SR) return;
     if (on) { recRef.current?.stop(); setOn(false); return; }
     const rec = new SR(); rec.lang = 'fr-FR'; rec.continuous = true; rec.interimResults = false;
-    rec.onresult = (e: any) => { const t = Array.from(e.results).slice(e.resultIndex).map((r: any) => r[0].transcript).join(' ').trim(); if (t) onText(t.replace(/\s+(virgule|et puis|ensuite|puis)\s+/gi, ', ')); };
+    rec.onresult = (e) => { const t = Array.from(e.results).slice(e.resultIndex).map((r) => r[0].transcript).join(' ').trim(); if (t) onText(t.replace(/\s+(virgule|et puis|ensuite|puis)\s+/gi, ', ')); };
     rec.onend = () => setOn(false); rec.onerror = () => setOn(false);
     recRef.current = rec; rec.start(); setOn(true);
   };
@@ -40,7 +46,7 @@ export default function ShoppingList() {
   const [saveName, setSaveName] = useState(''); const [usedList, setUsedList] = useState<string | null>(null);
   const saveList = async () => { if (!saveName.trim() || !text.trim()) return; const r = await api<{ message: string }>('/shopping/lists', { method: 'POST', json: { name: saveName.trim(), text } }); setMsg(r.message); setSaveName(''); lists.reload(); };
   const delList = async (id: string) => { if (!confirm('Supprimer cette liste ?')) return; await api(`/shopping/lists/${id}`, { method: 'DELETE' }); lists.reload(); };
-  const useList = (l: SavedList) => { setText(l.text); setUsedList(l.id); setData(null); };
+  const applySavedList = (l: SavedList) => { setText(l.text); setUsedList(l.id); setData(null); };
 
   const search = async () => { if (!text.trim()) return; setBusy(true); setMsg(null); try { const r = await api<Parsed>('/shopping/parse', { method: 'POST', json: { text } }); setData(r); setSel({}); setPacks({}); } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); } };
   const chosen = (i: number, l: Line) => { const k = i in sel ? sel[i] : l.selected; return l.offers.find((o) => o.key === k) ?? null; };
@@ -86,7 +92,7 @@ export default function ShoppingList() {
         <div className="flex flex-wrap gap-2">
           {sugg.data && sugg.data.restock.count > 0 && <button className="pill border border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100" onClick={() => { setText(sugg.data!.restock.text); setUsedList(null); setData(null); }}><PackageOpen size={12} /> Réassort : {sugg.data.restock.count} produit{sugg.data.restock.count > 1 ? 's' : ''} sous le seuil</button>}
           {sugg.data?.last && <button className="pill border border-stone-200 bg-white text-stone-700 hover:bg-stone-50" onClick={() => { setText(sugg.data!.last!.text); setUsedList(null); setData(null); }}><RotateCcw size={12} /> Refaire la dernière commande ({sugg.data.last.reference})</button>}
-          {lists.data?.lists.map((l) => <span key={l.id} className="pill border border-brand-200 bg-brand-50 text-brand-900"><button onClick={() => useList(l)} title={l.text}><ListChecks size={12} className="mr-1 inline" />{l.name}{l.useCount ? ` · ${l.useCount}×` : ''}</button><button className="ml-1 text-stone-400 hover:text-red-600" onClick={() => void delList(l.id)} title="Supprimer"><Trash2 size={12} /></button></span>)}
+          {lists.data?.lists.map((l) => <span key={l.id} className="pill border border-brand-200 bg-brand-50 text-brand-900"><button onClick={() => applySavedList(l)} title={l.text}><ListChecks size={12} className="mr-1 inline" />{l.name}{l.useCount ? ` · ${l.useCount}×` : ''}</button><button className="ml-1 text-stone-400 hover:text-red-600" onClick={() => void delList(l.id)} title="Supprimer"><Trash2 size={12} /></button></span>)}
         </div>
       )}
       {msg && <p className="rounded-xl border border-brand-100 bg-brand-50 p-3 text-sm text-brand-900">{msg}</p>}

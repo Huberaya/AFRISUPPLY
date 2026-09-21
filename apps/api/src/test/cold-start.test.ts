@@ -27,7 +27,7 @@ let productId = ''; let itemId = '';
 
 beforeAll(async () => {
   await runMigrations();
-  _resetRateLimits();
+  await _resetRateLimits();
   const r = await call('POST', '/api/auth/register', { email: 'neuf@resto.fr', password: 'Plantain-Yassa-42', fullName: 'Neuf Test', restaurantName: 'Le Tout Neuf', city: 'Nantes', coversPerDay: 40 });
   expect(r.status).toBe(201);
   token = r.json.token; rid = r.json.restaurant.id; auth = { authorization: `Bearer ${token}`, 'x-restaurant-id': rid };

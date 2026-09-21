@@ -110,9 +110,9 @@ describe('5. Exploitation : cron, statut, RGPD, sécurité', () => {
     expect((await call('GET', '/api/nimporte', undefined, A())).status).toBe(404);
   });
   it('rate limit : 11ᵉ tentative de connexion en une minute → 429', async () => {
-    _resetRateLimits();
+    await _resetRateLimits();
     let last = 0; for (let i = 0; i < 11; i++) last = (await call('POST', '/api/auth/login', { email: 'x@y.fr', password: 'nope' })).status;
-    expect(last).toBe(429); _resetRateLimits();
+    expect(last).toBe(429); await _resetRateLimits();
   });
   it('export RGPD contient le restaurant et ses commandes ; suppression exige le mot de passe puis efface tout', async () => {
     const ex = await call('GET', '/api/account/export', undefined, A()); expect(ex.status).toBe(200); expect(ex.json.user.email).toBe('test@resto.fr'); expect(ex.json.restaurants[0].orders.length).toBe(1);

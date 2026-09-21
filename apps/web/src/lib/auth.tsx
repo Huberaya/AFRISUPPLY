@@ -20,7 +20,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = async () => {
-    if (!tokenStore.get()) { setUser(null); setRestaurants([]); setLoading(false); return; }
+    if (!tokenStore.authed()) { setUser(null); setRestaurants([]); setLoading(false); return; }
     try {
       const me = await api<{ user: User; restaurants: Restaurant[] }>('/auth/me');
       setUser(me.user); setRestaurants(me.restaurants);
@@ -32,12 +32,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => { void refresh();   }, []);
 
   const login = async (email: string, password: string) => {
-    const r = await api<{ token: string }>('/auth/login', { method: 'POST', json: { email, password } });
-    tokenStore.set(r.token); setLoading(true); await refresh();
+    await api('/auth/login', { method: 'POST', json: { email, password } });
+    tokenStore.setAuthed(); setLoading(true); await refresh();
   };
   const register: Ctx['register'] = async (p) => {
-    const r = await api<{ token: string }>('/auth/register', { method: 'POST', json: p });
-    tokenStore.set(r.token); setLoading(true); await refresh();
+    await api('/auth/register', { method: 'POST', json: p });
+    tokenStore.setAuthed(); setLoading(true); await refresh();
   };
   const logout = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => null); tokenStore.clear(); setUser(null); setRestaurants([]); };
   const switchRestaurant = (id: string) => { tokenStore.setRestaurant(id); setRestaurantId(id); window.location.reload(); };
