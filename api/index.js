@@ -27,6 +27,7 @@ __export(schema_exports, {
   deliveryDiscrepanciesRelations: () => deliveryDiscrepanciesRelations,
   emailVerifications: () => emailVerifications,
   feedback: () => feedback,
+  forecastEvents: () => forecastEvents,
   forecasts: () => forecasts,
   groupBuyParticipations: () => groupBuyParticipations,
   groupBuyStatus: () => groupBuyStatus,
@@ -101,7 +102,7 @@ import {
   uniqueIndex
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
-var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, emailVerifications, passwordResets, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, subscriptionInvoices, feedback, usageEvents, prospects, shoppingLists, notifications, orderEvents, recurringOrders, claims, vendorPriceTiers, vendorCustomerPrices, vendorReviews, vendorRoutes, vendorCreditTerms;
+var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, emailVerifications, passwordResets, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, forecastEvents, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, subscriptionInvoices, feedback, usageEvents, prospects, shoppingLists, notifications, orderEvents, recurringOrders, claims, vendorPriceTiers, vendorCustomerPrices, vendorReviews, vendorRoutes, vendorCreditTerms;
 var init_schema = __esm({
   "packages/db/src/schema.ts"() {
     "use strict";
@@ -457,6 +458,17 @@ var init_schema = __esm({
       explanation: text("explanation"),
       computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull()
     }, (t) => [index("forecasts_restaurant_idx").on(t.restaurantId, t.computedAt)]);
+    forecastEvents = pgTable("forecast_events", {
+      id: uuid("id").primaryKey().defaultRandom(),
+      restaurantId: uuid("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+      day: date("day").notNull(),
+      // 'YYYY-MM-DD'
+      label: text("label").notNull(),
+      // « Soirée privatisée »
+      multiplier: numeric("multiplier", { precision: 4, scale: 2 }).default("1").notNull(),
+      // 0,05 – 5,00
+      createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    }, (t) => [uniqueIndex("forecast_events_unique").on(t.restaurantId, t.day)]);
     leadStatus = pgEnum("lead_status", ["nouveau", "contacte", "demo", "pilote", "client", "perdu"]);
     leads = pgTable("leads", {
       id: uuid("id").primaryKey().defaultRandom(),
@@ -2150,6 +2162,7 @@ __export(src_exports, {
   emailVerifications: () => emailVerifications,
   feedback: () => feedback,
   findReferenceProduct: () => findReferenceProduct,
+  forecastEvents: () => forecastEvents,
   forecasts: () => forecasts,
   getDb: () => getDb,
   groupBuyParticipations: () => groupBuyParticipations,
@@ -3455,8 +3468,11 @@ function alertsFromStock(stocks, today2 = /* @__PURE__ */ new Date()) {
       });
       continue;
     }
+    const covers = s.nextDeliveryInDays !== void 0 && s.nextDeliveryInDays !== null && days2 !== null && s.nextDeliveryInDays <= days2;
+    if (covers) continue;
+    const deliveryNote = s.nextDeliveryInDays === void 0 || s.nextDeliveryInDays === null ? "" : days2 !== null && s.nextDeliveryInDays > days2 ? ` Votre commande arrive dans ${s.nextDeliveryInDays} j, apr\xE8s la rupture pr\xE9vue.` : ` Une commande arrive dans ${s.nextDeliveryInDays} j.`;
     if (status === "critique") {
-      const reason = s.quantity <= s.criticalLevel ? `Stock actuel ${fmtQty(s.quantity, s.unit)}, sous votre seuil critique de ${fmtQty(s.criticalLevel, s.unit)}.` : `Stock actuel ${fmtQty(s.quantity, s.unit)} pour une consommation d'environ ${fmtQty(s.avgDailyUse, s.unit)}/jour : rupture dans ~${days2} jour${days2 && days2 > 1 ? "s" : ""}.`;
+      const reason = (s.quantity <= s.criticalLevel ? `Stock actuel ${fmtQty(s.quantity, s.unit)}, sous votre seuil critique de ${fmtQty(s.criticalLevel, s.unit)}.` : `Stock actuel ${fmtQty(s.quantity, s.unit)} pour une consommation d'environ ${fmtQty(s.avgDailyUse, s.unit)}/jour : rupture dans ~${days2} jour${days2 && days2 > 1 ? "s" : ""}.`) + deliveryNote;
       out.push({
         dedupeKey: `rupture:${s.productId}:${dayKey}`,
         kind: "rupture",
@@ -3473,7 +3489,7 @@ function alertsFromStock(stocks, today2 = /* @__PURE__ */ new Date()) {
         kind: "stock_bas",
         severity: "orange",
         title: `\u{1F7E0} Stock bas \u2014 ${s.productName}`,
-        message: days2 !== null ? `Il vous reste environ ${days2} jours de ${s.productName.toLowerCase()} (${fmtQty(s.quantity, s.unit)}). Pensez \xE0 commander.` : `Stock de ${s.productName.toLowerCase()} \xE0 ${fmtQty(s.quantity, s.unit)}, proche du seuil critique.`,
+        message: (days2 !== null ? `Il vous reste environ ${days2} jours de ${s.productName.toLowerCase()} (${fmtQty(s.quantity, s.unit)}). Pensez \xE0 commander.` : `Stock de ${s.productName.toLowerCase()} \xE0 ${fmtQty(s.quantity, s.unit)}, proche du seuil critique.`) + deliveryNote,
         productId: s.productId,
         actionUrl: `/stock`,
         payload: { quantity: s.quantity, daysLeft: days2 }
@@ -3541,37 +3557,50 @@ function alertsFromOpportunities(items, offers, minGainPct = 5) {
 }
 function compareOffers(offers, ctx) {
   if (!offers.length) return { ranked: [], headline: "Aucune offre disponible", justification: [] };
-  const minPrice = Math.min(...offers.map((o) => o.unitPrice));
-  const maxPrice = Math.max(...offers.map((o) => o.unitPrice));
+  const need = ctx.neededQty > 0 ? ctx.neededQty : 1;
+  const sized = offers.map((o) => {
+    const deliveryFee = Number(o.deliveryFee) || 0;
+    const minOrder = Number(o.minOrder) || 0;
+    const packs = Math.max(1, Math.ceil(need / (o.packQty || 1)));
+    const goodsEur = Math.round(packs * o.packPrice * 100) / 100;
+    const underMin = minOrder > 0 && goodsEur < minOrder;
+    const totalCostEur = Math.round((Math.max(goodsEur, minOrder) + deliveryFee) * 100) / 100;
+    return { ...o, deliveryFee, minOrder, packs, goodsEur, totalCostEur, underMin };
+  });
+  const minTotal = Math.min(...sized.map((o) => o.totalCostEur));
+  const maxTotal = Math.max(...sized.map((o) => o.totalCostEur));
   const urgencyHours = ctx.daysOfStockLeft !== null ? Math.max(0, ctx.daysOfStockLeft * 24) : Infinity;
-  const ranked = offers.map((o) => {
-    const priceScore = maxPrice === minPrice ? 100 : Math.round(100 - (o.unitPrice - minPrice) / (maxPrice - minPrice) * 100);
+  const ranked = sized.map((o) => {
+    const priceScore = maxTotal === minTotal ? 100 : Math.round(100 - (o.totalCostEur - minTotal) / (maxTotal - minTotal) * 100);
     const tooLate = o.leadTimeHours > urgencyHours;
     const delayScore = tooLate ? 0 : Math.max(0, Math.round(100 - o.leadTimeHours / 168 * 100));
     const reliabilityScore = Math.round(o.reliabilityPct);
     const stockPenalty = o.inStock ? 1 : 0.2;
-    const score = Math.round((priceScore * 0.5 + delayScore * 0.3 + reliabilityScore * 0.2) * stockPenalty);
+    const minPenalty = o.underMin ? 0.9 : 1;
+    const score = Math.round((priceScore * 0.5 + delayScore * 0.3 + reliabilityScore * 0.2) * stockPenalty * minPenalty);
     const strengths = [];
     const weaknesses = [];
-    if (o.unitPrice === minPrice) strengths.push("Prix le plus bas du panel");
+    if (o.totalCostEur === minTotal) strengths.push("Co\xFBt total le plus bas du panel");
+    if (!o.deliveryFee) strengths.push("Livraison offerte");
     if (o.leadTimeHours <= 24) strengths.push("Livraison sous 24 h");
     if (o.reliabilityPct >= 90) strengths.push(`Fiabilit\xE9 ${o.reliabilityPct.toFixed(0)} %`);
     if (!o.inStock) weaknesses.push("Rupture chez le fournisseur");
     if (tooLate) weaknesses.push(`D\xE9lai de ${Math.round(o.leadTimeHours / 24)} j incompatible avec votre stock (${ctx.daysOfStockLeft} j restants)`);
-    if (o.unitPrice === maxPrice && maxPrice !== minPrice) weaknesses.push("Prix le plus \xE9lev\xE9 du panel");
+    if (o.underMin) weaknesses.push(`Sous le minimum de commande (${fmtEur(o.minOrder)}) \u2014 \xE0 regrouper avec d'autres besoins`);
+    if (o.totalCostEur === maxTotal && maxTotal !== minTotal) weaknesses.push("Co\xFBt total le plus \xE9lev\xE9 du panel");
     if (o.reliabilityPct < 80) weaknesses.push("Fiabilit\xE9 en dessous de 80 %");
     return { ...o, score, priceScore, delayScore, reliabilityScore, strengths, weaknesses };
   }).sort((a, b) => b.score - a.score);
   const best = ranked[0];
-  const cheapest = ranked.find((o) => o.unitPrice === minPrice);
+  const cheapest = [...ranked].sort((a, b) => a.totalCostEur - b.totalCostEur)[0];
+  const withFee = (o) => `${fmtEur(o.totalCostEur)}${o.deliveryFee ? ` dont ${fmtEur(o.deliveryFee)} de livraison` : ""}`;
   const justification = [];
-  justification.push(`${best.supplierName} obtient le meilleur score global (${best.score}/100) en combinant prix (${fmtEur(best.unitPrice)}/${ctx.unit}), d\xE9lai (${Math.round(best.leadTimeHours / 24)} j) et fiabilit\xE9 (${best.reliabilityPct.toFixed(0)} %).`);
+  justification.push(`${best.supplierName} obtient le meilleur score global (${best.score}/100) en combinant co\xFBt total pour ${fmtQty(need, ctx.unit)} (${withFee(best)}, soit ${fmtEur(best.unitPrice)}/${ctx.unit}), d\xE9lai (${Math.round(best.leadTimeHours / 24)} j) et fiabilit\xE9 (${best.reliabilityPct.toFixed(0)} %).`);
   if (cheapest.offerId !== best.offerId) {
     const why = cheapest.weaknesses[0] ?? "un score global inf\xE9rieur";
-    justification.push(`${cheapest.supplierName} est moins cher (${fmtEur(cheapest.unitPrice)}/${ctx.unit}) mais pr\xE9sente ${why.charAt(0).toLowerCase() + why.slice(1)}.`);
+    justification.push(`${cheapest.supplierName} est moins cher au total (${withFee(cheapest)}) mais pr\xE9sente ${why.charAt(0).toLowerCase() + why.slice(1)}.`);
   }
-  const packs = Math.max(1, Math.ceil(ctx.neededQty / best.packQty));
-  justification.push(`Pour couvrir ${fmtQty(ctx.neededQty, ctx.unit)} : ${packs} \xD7 ${best.packLabel} = ${fmtEur(packs * best.packPrice + best.deliveryFee)}${best.deliveryFee ? ` (dont ${fmtEur(best.deliveryFee)} de livraison)` : ""}.`);
+  justification.push(`Pour couvrir ${fmtQty(need, ctx.unit)} : ${best.packs} \xD7 ${best.packLabel} = ${fmtEur(best.totalCostEur)}${best.deliveryFee ? ` (dont ${fmtEur(best.deliveryFee)} de livraison)` : ""}${best.underMin ? `, minimum de commande ${fmtEur(best.minOrder)} non atteint` : ""}.`);
   return { ranked, recommended: best, headline: `Meilleur choix : ${best.supplierName}`, justification };
 }
 function recipeCost(ingredients, lastUnitPrices) {
@@ -3580,14 +3609,88 @@ function recipeCost(ingredients, lastUnitPrices) {
     return { ...i, unitPrice, cost: Math.round(i.quantity * unitPrice * 1e3) / 1e3, priced: lastUnitPrices.has(i.productId) };
   });
   const total = Math.round(lines.reduce((a, l) => a + l.cost, 0) * 100) / 100;
-  return { lines, total, unpriced: lines.filter((l) => !l.priced).map((l) => l.productName) };
+  const unpriced = lines.filter((l) => !l.priced).map((l) => l.productName);
+  const coverage = lines.length ? (lines.length - unpriced.length) / lines.length : 1;
+  return {
+    lines,
+    total,
+    unpriced,
+    status: unpriced.length ? "incomplet" : "complet",
+    coverage: Math.round(coverage * 100) / 100,
+    reliable: coverage >= 0.7
+  };
 }
-function marginAnalysis(cost, sellingPrice, targetMarginPct = 70) {
-  if (!sellingPrice) return { grossMargin: null, marginPct: null, suggestedPrice: Math.round(cost / (1 - targetMarginPct / 100) * 10) / 10 };
+function marginAnalysis(cost, sellingPrice, targetMarginPct = 70, costComplete = true) {
+  if (!costComplete) return { grossMargin: null, marginPct: null, suggestedPrice: null, status: "incomplet" };
+  if (!sellingPrice) return { grossMargin: null, marginPct: null, suggestedPrice: Math.round(cost / (1 - targetMarginPct / 100) * 10) / 10, status: "complet" };
   const grossMargin = Math.round((sellingPrice - cost) * 100) / 100;
   const marginPct = Math.round(grossMargin / sellingPrice * 1e3) / 10;
   const suggestedPrice = marginPct < targetMarginPct ? Math.round(cost / (1 - targetMarginPct / 100) * 10) / 10 : null;
-  return { grossMargin, marginPct, suggestedPrice };
+  return { grossMargin, marginPct, suggestedPrice, status: "complet" };
+}
+function priceAtMonth(priceByMonth, month) {
+  const direct = priceByMonth.get(month);
+  if (direct !== void 0) return direct;
+  let best = null;
+  for (const m of priceByMonth.keys()) if (m < month && (best === null || m > best)) best = m;
+  return best === null ? null : priceByMonth.get(best);
+}
+function marginSeries(input) {
+  const sell = input.sellingPriceEur;
+  let portionsSold = 0;
+  let revenueEur = 0;
+  const points = input.months.map((month) => {
+    const portions = input.portionsByMonth.get(month) ?? 0;
+    portionsSold += portions;
+    const revenue = sell ? Math.round(sell * portions * 100) / 100 : 0;
+    revenueEur = Math.round((revenueEur + revenue) * 100) / 100;
+    let cost = 0;
+    for (const ing of input.ingredients) {
+      const p = priceAtMonth(input.priceByMonth.get(ing.productId) ?? /* @__PURE__ */ new Map(), month);
+      if (p === null) {
+        cost = null;
+        break;
+      }
+      cost += ing.quantity * p;
+    }
+    const costPerPortion = cost === null ? null : Math.round(cost * 100) / 100;
+    const grossMarginPerPortion = costPerPortion !== null && sell ? Math.round((sell - costPerPortion) * 100) / 100 : null;
+    const marginPct = grossMarginPerPortion !== null && sell ? Math.round(grossMarginPerPortion / sell * 1e3) / 10 : null;
+    return { month, costPerPortion, marginPct, grossMarginPerPortion, portionsSold: portions, revenueEur: revenue };
+  });
+  return {
+    recipeId: input.recipeId,
+    name: input.name,
+    sellingPriceEur: sell,
+    status: input.currentUnpriced.length ? "incomplet" : "complet",
+    points,
+    portionsSold,
+    revenueEur
+  };
+}
+function priceIndexByCategory(input) {
+  const byCat = /* @__PURE__ */ new Map();
+  for (const p of input.products) {
+    if (!byCat.has(p.category)) byCat.set(p.category, []);
+    byCat.get(p.category).push(p);
+  }
+  const out = [];
+  for (const [category, prods] of [...byCat.entries()].sort()) {
+    const baseMonth = input.months.find((m) => prods.some((p) => priceAtMonth(p.priceByMonth, m) !== null)) ?? null;
+    const points = input.months.map((month) => {
+      if (!baseMonth) return { month, index: null };
+      const ratios = [];
+      for (const p of prods) {
+        const base = priceAtMonth(p.priceByMonth, baseMonth);
+        const cur = priceAtMonth(p.priceByMonth, month);
+        if (base !== null && base > 0 && cur !== null) ratios.push(cur / base);
+      }
+      const index2 = ratios.length ? Math.round(ratios.reduce((a, b) => a + b, 0) / ratios.length * 1e3) / 10 : null;
+      return { month, index: index2 };
+    });
+    out.push({ category, baseMonth, points });
+  }
+  return out;
 }
 function supplierReliability(stats3) {
   if (!stats3.delivered) return 85;
@@ -3690,12 +3793,23 @@ async function refreshAlerts(rid2) {
   const db = await getDb();
   const [restaurant] = await db.select().from(restaurants).where(eq10(restaurants.id, rid2));
   const threshold = restaurant.settings?.priceIncreaseAlertPct ?? 8;
-  const [stocks, offers, invRows, ph] = await Promise.all([
+  const [stocks, offers, invRows, ph, openLines] = await Promise.all([
     loadStockSnapshots(rid2),
     loadOffers(rid2),
     db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq10(products.id, inventoryItems.productId)).where(eq10(inventoryItems.restaurantId, rid2)),
-    db.select({ p: priceHistory, offer: supplierOffers, supplier: suppliers, product: products }).from(priceHistory).innerJoin(supplierOffers, eq10(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq10(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq10(products.id, supplierOffers.productId)).where(and7(eq10(priceHistory.restaurantId, rid2), gte2(priceHistory.recordedAt, new Date(Date.now() - 90 * 864e5))))
+    db.select({ p: priceHistory, offer: supplierOffers, supplier: suppliers, product: products }).from(priceHistory).innerJoin(supplierOffers, eq10(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq10(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq10(products.id, supplierOffers.productId)).where(and7(eq10(priceHistory.restaurantId, rid2), gte2(priceHistory.recordedAt, new Date(Date.now() - 90 * 864e5)))),
+    // Chantier 4 (audit) — lignes des commandes pas encore livrées (hors brouillon / annulée) :
+    // la prochaine livraison attendue par produit couvre-t-elle le creux prévu ?
+    db.select({ productId: orderLines.productId, expectedAt: orders.expectedAt, createdAt: orders.createdAt }).from(orderLines).innerJoin(orders, eq10(orders.id, orderLines.orderId)).where(and7(eq10(orders.restaurantId, rid2), inArray3(orders.status, ["preparee", "envoyee", "confirmee", "livree_partiel"])))
   ]);
+  const nextByProduct = /* @__PURE__ */ new Map();
+  for (const l of openLines) {
+    const eta = l.expectedAt ? new Date(l.expectedAt).getTime() : l.createdAt.getTime() + 2 * 864e5;
+    const d = Math.max(0, Math.ceil((eta - Date.now()) / 864e5));
+    const prev = nextByProduct.get(l.productId);
+    if (prev === void 0 || d < prev) nextByProduct.set(l.productId, d);
+  }
+  const stocksWithDelivery = stocks.map((s) => ({ ...s, nextDeliveryInDays: nextByProduct.get(s.productId) }));
   const points = ph.map((r) => ({ offerId: r.offer.id, supplierId: r.supplier.id, supplierName: r.supplier.name, productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, unitPrice: n(r.p.unitPriceEur), recordedAt: r.p.recordedAt.toISOString() }));
   const alternatives = /* @__PURE__ */ new Map();
   for (const o of offers) {
@@ -3710,7 +3824,7 @@ async function refreshAlerts(rid2) {
     alternatives.get(o.productId).push(pp);
   }
   const computed = [
-    ...alertsFromStock(stocks),
+    ...alertsFromStock(stocksWithDelivery),
     ...alertsFromPrices(points, threshold, alternatives),
     ...alertsFromOpportunities(invRows.map((r) => ({ productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, preferredSupplierId: r.item.preferredSupplierId })), offers)
   ];
@@ -3825,6 +3939,26 @@ var init_restaurant = __esm({
       await db.insert(stockMovements).values({ restaurantId: rid2, inventoryItemId: item.id, type, quantity: delta.toFixed(3), note, createdBy: user.id });
       await db.update(inventoryItems).set({ quantity: newQty.toFixed(3), updatedAt: /* @__PURE__ */ new Date(), ...type === "ajustement" ? { lastCountedAt: /* @__PURE__ */ new Date() } : {} }).where(eq10(inventoryItems.id, item.id));
       return c.json({ ok: true, quantity: newQty });
+    });
+    restaurantRoutes.get("/stock/:itemId/movements", async (c) => {
+      const rid2 = c.get("restaurantId");
+      const db = await getDb();
+      const [item] = await db.select().from(inventoryItems).where(and7(eq10(inventoryItems.id, c.req.param("itemId")), eq10(inventoryItems.restaurantId, rid2)));
+      if (!item) return c.json({ error: "Article introuvable" }, 404);
+      const rows = await db.select({ m: stockMovements, by: users.fullName }).from(stockMovements).leftJoin(users, eq10(users.id, stockMovements.createdBy)).where(and7(eq10(stockMovements.restaurantId, rid2), eq10(stockMovements.inventoryItemId, item.id))).orderBy(desc3(stockMovements.createdAt)).limit(20);
+      return c.json({
+        item: { id: item.id, productId: item.productId, quantity: n(item.quantity) },
+        movements: rows.map(({ m, by }) => ({
+          id: m.id,
+          type: m.type,
+          quantity: n(m.quantity),
+          unitCostEur: m.unitCostEur ? n(m.unitCostEur) : null,
+          orderId: m.orderId,
+          note: m.note,
+          createdBy: by,
+          createdAt: m.createdAt
+        }))
+      });
     });
     restaurantRoutes.get("/suppliers", async (c) => {
       const rid2 = c.get("restaurantId");
@@ -4120,7 +4254,7 @@ var init_restaurant = __esm({
           }
           if (discrepancies.length) {
             const [sup] = await tx.select().from(suppliers).where(eq10(suppliers.id, order.supplierId));
-            claimMessage = `Bonjour ${sup?.contactName ?? ""},
+            claimMessage = `Bonjour${sup?.contactName ? ` ${sup.contactName}` : ""},
 
 Nous avons constat\xE9 un \xE9cart sur la livraison ${order.reference} :
 ` + discrepancies.map((d) => `\u2022 ${d.productName} : command\xE9 ${d.ordered} ${d.unit}, re\xE7u ${d.received} ${d.unit} (${d.ordered - d.received > 0 ? "manquant" : "exc\xE9dent"} ${Math.abs(d.ordered - d.received)} ${d.unit})`).join("\n") + `
@@ -4221,11 +4355,84 @@ ${user.fullName}`;
         recipes: recs.map((r) => {
           const list = ings.filter((i) => i.ing.recipeId === r.id).map((i) => ({ productId: i.product.id, productName: i.product.name, quantity: n(i.ing.quantity), unit: i.product.baseUnit }));
           const cost = recipeCost(list, prices);
-          const margin = marginAnalysis(cost.total, r.sellingPriceEur ? n(r.sellingPriceEur) : null, n(r.targetMarginPct) || 70);
+          const margin = marginAnalysis(cost.total, r.sellingPriceEur ? n(r.sellingPriceEur) : null, n(r.targetMarginPct) || 70, cost.status === "complet");
           const drifting = cost.lines.filter((l) => (drift.get(l.productId) ?? 0) >= 5).map((l) => ({ productName: l.productName, pct: drift.get(l.productId) }));
-          return { ...r, sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null, ingredients: cost.lines, cost: cost.total, unpriced: cost.unpriced, ...margin, drifting };
+          return {
+            ...r,
+            sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null,
+            ingredients: cost.lines,
+            cost: cost.total,
+            costStatus: cost.status,
+            coverage: cost.coverage,
+            unpriced: cost.unpriced,
+            grossMargin: margin.grossMargin,
+            marginPct: margin.marginPct,
+            suggestedPrice: margin.suggestedPrice,
+            marginStatus: margin.status,
+            drifting
+          };
         })
       });
+    });
+    restaurantRoutes.get("/analysis/margins", async (c) => {
+      const rid2 = c.get("restaurantId");
+      const db = await getDb();
+      const q2 = Number(c.req.query("months"));
+      const monthsCount = q2 >= 12 ? 12 : q2 >= 3 ? Math.round(q2) : 6;
+      const today2 = /* @__PURE__ */ new Date();
+      const months = [];
+      for (let k = monthsCount - 1; k >= 0; k--) {
+        months.push(new Date(Date.UTC(today2.getUTCFullYear(), today2.getUTCMonth() - k, 1)).toISOString().slice(0, 7));
+      }
+      const windowStart = `${months[0]}-01`;
+      const [recs, ings, salesRows, priceRows, offers] = await Promise.all([
+        db.select().from(recipes).where(eq10(recipes.restaurantId, rid2)).orderBy(recipes.name),
+        db.select({ ing: recipeIngredients, product: products }).from(recipeIngredients).innerJoin(products, eq10(products.id, recipeIngredients.productId)).innerJoin(recipes, eq10(recipes.id, recipeIngredients.recipeId)).where(eq10(recipes.restaurantId, rid2)),
+        db.select({ recipeId: sales.recipeId, day: sales.day, portions: sales.portions }).from(sales).where(and7(eq10(sales.restaurantId, rid2), gte2(sales.day, windowStart))),
+        db.select({ productId: supplierOffers.productId, category: products.category, unitPrice: priceHistory.unitPriceEur, recordedAt: priceHistory.recordedAt }).from(priceHistory).innerJoin(supplierOffers, eq10(supplierOffers.id, priceHistory.offerId)).innerJoin(products, eq10(products.id, supplierOffers.productId)).where(eq10(priceHistory.restaurantId, rid2)),
+        loadOffers(rid2)
+      ]);
+      const now = /* @__PURE__ */ new Map();
+      for (const o of offers) if (o.inStock && (!now.has(o.productId) || o.unitPrice < now.get(o.productId))) now.set(o.productId, o.unitPrice);
+      const acc = /* @__PURE__ */ new Map();
+      for (const p of priceRows) {
+        const month = new Date(p.recordedAt).toISOString().slice(0, 7);
+        if (!acc.has(p.productId)) acc.set(p.productId, /* @__PURE__ */ new Map());
+        const m = acc.get(p.productId);
+        const a = m.get(month) ?? { sum: 0, cnt: 0 };
+        a.sum += n(p.unitPrice);
+        a.cnt++;
+        m.set(month, a);
+      }
+      const priceByMonth = /* @__PURE__ */ new Map();
+      for (const [pid, m] of acc) priceByMonth.set(pid, new Map([...m.entries()].map(([month, a]) => [month, Math.round(a.sum / a.cnt * 1e4) / 1e4])));
+      const portions = /* @__PURE__ */ new Map();
+      for (const s of salesRows) {
+        const month = String(s.day).slice(0, 7);
+        if (!portions.has(s.recipeId)) portions.set(s.recipeId, /* @__PURE__ */ new Map());
+        const m = portions.get(s.recipeId);
+        m.set(month, (m.get(month) ?? 0) + s.portions);
+      }
+      const dishes = recs.map((r) => {
+        const list = ings.filter((i) => i.ing.recipeId === r.id).map((i) => ({ productId: i.product.id, productName: i.product.name, quantity: n(i.ing.quantity), unit: i.product.baseUnit }));
+        const currentUnpriced = list.filter((i) => !now.has(i.productId)).map((i) => i.productName);
+        return marginSeries({
+          recipeId: r.id,
+          name: r.name,
+          ingredients: list,
+          sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null,
+          months,
+          portionsByMonth: portions.get(r.id) ?? /* @__PURE__ */ new Map(),
+          priceByMonth,
+          currentUnpriced
+        });
+      });
+      const catOf = new Map(priceRows.map((p) => [p.productId, p.category]));
+      const priceIndex = priceIndexByCategory({
+        months,
+        products: [...priceByMonth.entries()].map(([productId, pbm]) => ({ productId, category: catOf.get(productId) ?? "autre", priceByMonth: pbm }))
+      });
+      return c.json({ months, windowStart, dishes, priceIndex });
     });
     restaurantRoutes.post("/alerts/refresh", async (c) => {
       const rid2 = c.get("restaurantId");
@@ -4258,21 +4465,27 @@ ${user.fullName}`;
 });
 
 // apps/api/src/lib/forecast.ts
-function parseSeasonality(text2) {
-  if (!text2) return null;
-  const t = text2.trim();
-  try {
-    const v = JSON.parse(t);
-    if (Array.isArray(v)) {
-      const months = v.map((x) => Number(x)).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12);
-      return months.length ? { months, coef: 1.3 } : null;
+function parseSeasonality(v) {
+  const moisValides = (liste) => Array.isArray(liste) ? liste.map((x) => Number(x)).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12) : [];
+  const src = typeof v === "string" ? v.trim() : v;
+  if (src === null || src === void 0 || src === "") return null;
+  if (Array.isArray(src)) {
+    const months = moisValides(src);
+    return months.length ? { months, coef: SEASON_PEAK_MULTIPLIER } : null;
+  }
+  if (typeof src === "object") {
+    const o = src;
+    const months = moisValides(o.months);
+    const coef = Number(o.coef);
+    if (months.length) return { months, coef: Number.isFinite(coef) && coef > 1 && coef <= 3 ? coef : SEASON_PEAK_MULTIPLIER };
+    return null;
+  }
+  if (typeof src === "string" && (src.startsWith("[") || src.startsWith("{"))) {
+    try {
+      return parseSeasonality(JSON.parse(src));
+    } catch {
+      return null;
     }
-    if (v && typeof v === "object") {
-      const months = Array.isArray(v.months) ? v.months.map((x) => Number(x)).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12) : [];
-      const coef = Number(v.coef);
-      if (months.length) return { months, coef: Number.isFinite(coef) && coef > 1 && coef <= 3 ? coef : 1.3 };
-    }
-  } catch {
   }
   return null;
 }
@@ -4388,7 +4601,7 @@ function forecastProducts(recipeForecasts, ingredients, stocks, opts = {}) {
   for (const ing of ingredients) {
     const rf = recipeForecasts.get(ing.recipeId);
     if (!rf) continue;
-    const acc = perProduct.get(ing.productId) ?? { perDay: new Array(horizon).fill(0), conf: [], recipes: 0, basis: "ventes_28j", usedCovers: false, daysWithData: 0 };
+    const acc = perProduct.get(ing.productId) ?? { perDay: new Array(horizon).fill(0), conf: [], recipes: 0, basis: "ventes_28j", usedCovers: false, daysWithData: 0, season: /* @__PURE__ */ new Set() };
     rf.perDay.forEach((p, i) => {
       acc.perDay[i] += p * ing.quantity;
     });
@@ -4397,17 +4610,23 @@ function forecastProducts(recipeForecasts, ingredients, stocks, opts = {}) {
     acc.basis = acc.recipes === 1 ? rf.basis : weakestBasis(acc.basis, rf.basis);
     if (rf.basis === "couverts") acc.usedCovers = true;
     acc.daysWithData = Math.max(acc.daysWithData, rf.daysWithData);
+    for (const m of parseSeasonality(ing.seasonality)?.months ?? []) acc.season.add(m);
     perProduct.set(ing.productId, acc);
   }
   const out = [];
   for (const s of stocks) {
     const acc = perProduct.get(s.productId);
-    const perDay = acc ? acc.perDay.map((v) => Math.round(v * 1e3) / 1e3) : new Array(horizon).fill(0);
     const season = parseSeasonality(s.seasonality);
-    if (season) perDay.forEach((v, i) => {
+    const seasonMonths = new Set(acc ? acc.season : []);
+    for (const m of season?.months ?? []) seasonMonths.add(m);
+    const seasonCoefApplique = season ? season.coef : SEASON_PEAK_MULTIPLIER;
+    let seasonalDays = 0;
+    const perDay = acc ? acc.perDay.map((v, i) => {
       const month = new Date(today2.getTime() + (i + 1) * DAY_MS).getUTCMonth() + 1;
-      if (season.months.includes(month)) perDay[i] = Math.round(v * season.coef * 1e3) / 1e3;
-    });
+      const inSeason = seasonMonths.has(month);
+      if (inSeason && v > 0) seasonalDays++;
+      return Math.round(v * (inSeason ? seasonCoefApplique : 1) * 1e3) / 1e3;
+    }) : new Array(horizon).fill(0);
     for (let i = 0; i < perDay.length; i++) if (closed.has(new Date(today2.getTime() + (i + 1) * DAY_MS).getUTCDay())) perDay[i] = 0;
     const need = perDay.reduce((a, b) => a + b, 0);
     const avg = need / horizon;
@@ -4445,8 +4664,9 @@ function forecastProducts(recipeForecasts, ingredients, stocks, opts = {}) {
       const base = `Besoin estim\xE9 de ${fmt(Math.round(need * 10) / 10)} sur ${horizon} jours, calcul\xE9 \xE0 partir de ${acc.recipes} recette${acc.recipes > 1 ? "s" : ""} et de ${source}`;
       const ventes = basis === "ventes_28j" || basis === "ventes_7j";
       const preambule = daysWithData === 0 ? `Pas encore assez de ventes pour pr\xE9voir ${s.productName.toLowerCase()} sur ${horizon} jours. ` : "";
-      explanation = preambule + base + (basis === "ventes_28j" ? ` (pic ${peakDay})` : "") + ". " + (basis === "seuils" ? `Aucune vente ni couvert renseign\xE9 : la commande recommand\xE9e vient uniquement de votre seuil critique. ` : basis === "couverts" ? `Estimation de repli \xE0 partir de vos couverts : saisissez vos ventes pour l\u2019affiner jour par jour. ` : "") + (ventes && daysWithData < 7 ? `Donn\xE9es encore l\xE9g\xE8res (${daysWithData} jour${daysWithData > 1 ? "s" : ""}). ` : "") + `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null && need > 0 ? ` \u2192 rupture pr\xE9vue ${DOW_FR[new Date(today2.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ", suffisant sur la p\xE9riode.") + (season ? ` Coefficient de saisonnalit\xE9 ${season.coef} appliqu\xE9 (mois ${season.months.join(", ")}).` : "") + (recommended > 0 ? ` Commande recommand\xE9e : ${fmt(recommended)}${parObjectif} (inclut ${safetyDays} j de s\xE9curit\xE9).` : "");
+      explanation = preambule + base + (basis === "ventes_28j" ? ` (pic ${peakDay})` : "") + ". " + (basis === "seuils" ? `Aucune vente ni couvert renseign\xE9 : la commande recommand\xE9e vient uniquement de votre seuil critique. ` : basis === "couverts" ? `Estimation de repli \xE0 partir de vos couverts : saisissez vos ventes pour l\u2019affiner jour par jour. ` : "") + (ventes && daysWithData < 7 ? `Donn\xE9es encore l\xE9g\xE8res (${daysWithData} jour${daysWithData > 1 ? "s" : ""}). ` : "") + `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null && need > 0 ? ` \u2192 rupture pr\xE9vue ${DOW_FR[new Date(today2.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ", suffisant sur la p\xE9riode.") + (recommended > 0 ? ` Commande recommand\xE9e : ${fmt(recommended)}${parObjectif} (inclut ${safetyDays} j de s\xE9curit\xE9).` : "");
     }
+    if (seasonalDays > 0) explanation += ` Saisonnalit\xE9 ${seasonCoefApplique} appliqu\xE9e sur ${seasonalDays} jour${seasonalDays > 1 ? "s" : ""} de pleine saison de la fen\xEAtre.`;
     out.push({
       productId: s.productId,
       productName: s.productName,
@@ -4463,7 +4683,7 @@ function forecastProducts(recipeForecasts, ingredients, stocks, opts = {}) {
       avgDailyNeed: Math.round(avg * 1e3) / 1e3,
       perDay,
       basis,
-      seasonCoef: season ? season.coef : 1
+      seasonCoef: seasonalDays > 0 ? seasonCoefApplique : 1
     });
   }
   return out.sort((a, b) => (a.stockoutDay ?? "9").localeCompare(b.stockoutDay ?? "9") || b.recommendedOrder - a.recommendedOrder);
@@ -4538,7 +4758,7 @@ function buildSmartCart(needs, offers) {
   const total = Math.round(suppliers2.reduce((a, g) => a + g.total, 0) * 100) / 100;
   return { suppliers: suppliers2, total, baselineTotal: Math.round(baseline * 100) / 100, saving: Math.round(Math.max(0, baseline - suppliers2.reduce((a, g) => a + g.subtotal, 0)) * 100) / 100, unavailable, notes };
 }
-var BASIS_LABEL, BASIS_CONFIDENCE, BASIS_ORDER, weakestBasis, DAY_MS, DOW_FR, isoDay2, dayToTime;
+var BASIS_LABEL, BASIS_CONFIDENCE, BASIS_ORDER, weakestBasis, DAY_MS, DOW_FR, isoDay2, dayToTime, SEASON_PEAK_MULTIPLIER;
 var init_forecast = __esm({
   "apps/api/src/lib/forecast.ts"() {
     "use strict";
@@ -4555,6 +4775,7 @@ var init_forecast = __esm({
     DOW_FR = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
     isoDay2 = (d) => d.toISOString().slice(0, 10);
     dayToTime = (day) => (/* @__PURE__ */ new Date(`${day}T00:00:00Z`)).getTime();
+    SEASON_PEAK_MULTIPLIER = 1.2;
   }
 });
 
@@ -4652,17 +4873,19 @@ var init_assistant = __esm({
 // apps/api/src/routes/intelligence.ts
 import { Hono as Hono4 } from "hono";
 import { z as z4 } from "zod";
-import { and as and9, eq as eq12, desc as desc4, gte as gte3, sql as sql8, inArray as inArray5 } from "drizzle-orm";
+import { and as and9, eq as eq12, desc as desc4, gte as gte3, asc as asc3, sql as sql8, inArray as inArray5 } from "drizzle-orm";
 async function loadContext(rid2) {
   const db = await getDb();
   const [restaurant] = await db.select().from(restaurants).where(eq12(restaurants.id, rid2));
-  const [inv, salesRows, ingRows, recs, offerRows, statRows] = await Promise.all([
+  const [inv, salesRows, ingRows, recs, offerRows, statRows, eventRows] = await Promise.all([
     db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq12(products.id, inventoryItems.productId)).where(eq12(inventoryItems.restaurantId, rid2)),
     db.select({ recipeId: sales.recipeId, day: sales.day, portions: sales.portions }).from(sales).where(and9(eq12(sales.restaurantId, rid2), gte3(sales.day, new Date(Date.now() - 70 * 864e5).toISOString().slice(0, 10)))),
-    db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, quantity: recipeIngredients.quantity }).from(recipeIngredients).innerJoin(recipes, eq12(recipes.id, recipeIngredients.recipeId)).where(and9(eq12(recipes.restaurantId, rid2), eq12(recipes.isActive, true))),
+    db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, quantity: recipeIngredients.quantity, seasonality: products.seasonality }).from(recipeIngredients).innerJoin(recipes, eq12(recipes.id, recipeIngredients.recipeId)).innerJoin(products, eq12(products.id, recipeIngredients.productId)).where(and9(eq12(recipes.restaurantId, rid2), eq12(recipes.isActive, true))),
     db.select().from(recipes).where(eq12(recipes.restaurantId, rid2)),
     db.select({ offer: supplierOffers, supplier: suppliers }).from(supplierOffers).innerJoin(suppliers, eq12(suppliers.id, supplierOffers.supplierId)).where(and9(eq12(supplierOffers.restaurantId, rid2), eq12(suppliers.isActive, true))),
-    db.select({ supplierId: orders.supplierId, delivered: sql8`count(*) filter (where ${orders.status} in ('livree','livree_partiel'))`, late: sql8`count(*) filter (where ${deliveries.isLate})`, disc: sql8`count(*) filter (where ${deliveries.hasDiscrepancy})`, spent: sql8`coalesce(sum(${orders.totalEur}),0)` }).from(orders).leftJoin(deliveries, eq12(deliveries.orderId, orders.id)).where(eq12(orders.restaurantId, rid2)).groupBy(orders.supplierId)
+    db.select({ supplierId: orders.supplierId, delivered: sql8`count(*) filter (where ${orders.status} in ('livree','livree_partiel'))`, late: sql8`count(*) filter (where ${deliveries.isLate})`, disc: sql8`count(*) filter (where ${deliveries.hasDiscrepancy})`, spent: sql8`coalesce(sum(${orders.totalEur}),0)` }).from(orders).leftJoin(deliveries, eq12(deliveries.orderId, orders.id)).where(eq12(orders.restaurantId, rid2)).groupBy(orders.supplierId),
+    // Chantier 4 (audit) — événements déclarés (soirées privatisées…) à venir
+    db.select().from(forecastEvents).where(and9(eq12(forecastEvents.restaurantId, rid2), gte3(forecastEvents.day, (/* @__PURE__ */ new Date()).toISOString().slice(0, 10))))
   ]);
   const stats3 = new Map(statRows.map((r) => [r.supplierId, { delivered: n3(r.delivered), late: n3(r.late), discrepancies: n3(r.disc), spent: n3(r.spent), reliability: supplierReliability({ delivered: n3(r.delivered), late: n3(r.late), discrepancies: n3(r.disc) }) }]));
   const offers = offerRows.map(({ offer, supplier }) => ({ offerId: offer.id, supplierId: supplier.id, supplierName: supplier.name, productId: offer.productId, packLabel: offer.packLabel, packQty: n3(offer.packQty), packPrice: n3(offer.packPriceEur), unitPrice: n3(offer.packPriceEur) / n3(offer.packQty), inStock: offer.inStock, leadTimeHours: supplier.leadTimeHours, deliveryFee: n3(supplier.deliveryFeeEur), minOrder: n3(supplier.minOrderEur), reliabilityPct: stats3.get(supplier.id)?.reliability ?? 85 }));
@@ -4670,12 +4893,18 @@ async function loadContext(rid2) {
   const ingredients = ingRows.map((i) => ({ ...i, quantity: n3(i.quantity) }));
   const cfg = restaurant.settings ?? {};
   const horizon = cfg.forecastHorizonDays ?? 7;
+  const eventMultipliers = {};
+  for (const e of eventRows) {
+    const m = Number(e.multiplier);
+    if (m !== 1) eventMultipliers[String(e.day)] = m;
+  }
   const forecastOpts = {
     horizonDays: horizon,
     coversPerDay: restaurant.coversPerDay ?? null,
     closedWeekdays: cfg.closedWeekdays ?? [],
     peakMonths: cfg.peakMonths ?? [],
-    peakCoef: cfg.peakCoef ?? 1.2
+    peakCoef: cfg.peakCoef ?? 1.2,
+    eventMultipliers
   };
   const rf = forecastRecipes(salesRows, recs.map((r) => r.id), forecastOpts);
   const pf = forecastProducts(rf, ingredients, stocks, forecastOpts);
@@ -4691,7 +4920,12 @@ async function loadContext(rid2) {
     peakCoef: cfg.peakCoef ?? 1.2,
     sources: ["ventes_28j", "ventes_7j", "couverts", "seuils"].reduce((acc, k) => ({ ...acc, [k]: pf.filter((f) => f.basis === k).length }), {})
   };
-  return { restaurant, stocks, offers, stats: stats3, recipes: recs, ingredients, sales: salesRows, recipeForecasts: rf, productForecasts: pf, horizon, dataQuality };
+  const evNotes = eventRows.filter((e) => Number(e.multiplier) !== 1).map((e) => `${e.label} \xD7${String(Number(e.multiplier)).replace(".", ",")} le ${String(e.day).slice(8, 10)}/${String(e.day).slice(5, 7)}`);
+  if (evNotes.length) {
+    const note = ` \xC9v\xE9nements d\xE9clar\xE9s sur la fen\xEAtre : ${evNotes.join(" ; ")} \u2014 portions pr\xE9vues ajust\xE9es en cons\xE9quence.`;
+    for (const p of pf) if (p.predictedNeed > 0) p.explanation += note;
+  }
+  return { restaurant, stocks, offers, stats: stats3, recipes: recs, ingredients, sales: salesRows, recipeForecasts: rf, productForecasts: pf, horizon, dataQuality, events: eventRows };
 }
 async function runAutoReorder(rid2, userId = null) {
   const db = await getDb();
@@ -4734,7 +4968,7 @@ async function runAutoReorder(rid2, userId = null) {
   }
   return { prepared, skipped };
 }
-var intelligenceRoutes, n3;
+var intelligenceRoutes, n3, DAY_RE;
 var init_intelligence = __esm({
   "apps/api/src/routes/intelligence.ts"() {
     "use strict";
@@ -4758,8 +4992,53 @@ var init_intelligence = __esm({
         products: ctx.productForecasts,
         recipes: recipeView,
         salesDays: ctx.dataQuality.salesDays,
-        dataQuality: ctx.dataQuality
+        dataQuality: ctx.dataQuality,
+        events: ctx.events.map((e) => ({ id: e.id, day: e.day, label: e.label, multiplier: Number(e.multiplier) }))
       });
+    });
+    DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+    intelligenceRoutes.get("/forecast/events", async (c) => {
+      const rid2 = c.get("restaurantId");
+      const db = await getDb();
+      const rows = await db.select().from(forecastEvents).where(and9(eq12(forecastEvents.restaurantId, rid2), gte3(forecastEvents.day, (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)))).orderBy(asc3(forecastEvents.day)).limit(60);
+      return c.json({ events: rows.map((e) => ({ id: e.id, day: e.day, label: e.label, multiplier: Number(e.multiplier) })) });
+    });
+    intelligenceRoutes.put("/forecast/events", async (c) => {
+      const rid2 = c.get("restaurantId");
+      const body3 = await c.req.json().catch(() => null);
+      const events = Array.isArray(body3?.events) ? body3.events : null;
+      if (!events || events.length < 1 || events.length > 60) {
+        return c.json({ error: 'Envoyez 1 \xE0 60 \xE9v\xE9nements : { events: [{ day: "YYYY-MM-DD", label, multiplier }] }' }, 400);
+      }
+      const rows = [];
+      for (const raw of events) {
+        const e = raw ?? {};
+        const day = String(e.day ?? "");
+        const label = String(e.label ?? "").trim();
+        const mult = Number(e.multiplier ?? NaN);
+        if (!DAY_RE.test(day) || !label || label.length > 80 || !(mult >= 0.05 && mult <= 5)) {
+          return c.json({ error: "\xC9v\xE9nement invalide : day YYYY-MM-DD, label 1-80 car., multiplier entre 0,05 et 5 (1,5 = +50 % de couverts)." }, 400);
+        }
+        rows.push({ restaurantId: rid2, day, label, multiplier: String(Math.round(mult * 100) / 100) });
+      }
+      const db = await getDb();
+      for (const r of rows) {
+        await db.insert(forecastEvents).values(r).onConflictDoUpdate({
+          target: [forecastEvents.restaurantId, forecastEvents.day],
+          set: { label: r.label, multiplier: r.multiplier }
+        });
+      }
+      return c.json({ saved: rows.length });
+    });
+    intelligenceRoutes.delete("/forecast/events/:id", async (c) => {
+      const rid2 = c.get("restaurantId");
+      const id = c.req.param("id");
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        return c.json({ error: "Identifiant d\u2019\xE9v\xE9nement invalide." }, 400);
+      }
+      const db = await getDb();
+      await db.delete(forecastEvents).where(and9(eq12(forecastEvents.id, id), eq12(forecastEvents.restaurantId, rid2)));
+      return c.json({ deleted: true });
     });
     intelligenceRoutes.post("/forecast/snapshot", async (c) => {
       const rid2 = c.get("restaurantId");
@@ -4946,11 +5225,15 @@ var init_intelligence = __esm({
           });
           const cost = recipeCost(list, prices);
           const sell = r.sellingPriceEur ? n3(r.sellingPriceEur) : null;
-          const m = marginAnalysis(cost.total, sell, n3(r.targetMarginPct) || 70);
+          const target = n3(r.targetMarginPct) || 70;
+          const m = marginAnalysis(cost.total, sell, target, cost.status === "complet");
           const top = [...cost.lines].sort((a, b) => b.cost - a.cost).slice(0, 3);
-          facts.push(`${r.name} : co\xFBt mati\xE8re ${eur2(cost.total)}, prix de vente ${sell ? eur2(sell) : "non renseign\xE9"}, marge brute ${m.grossMargin !== null ? eur2(m.grossMargin) : "n/a"} (${m.marginPct ?? "n/a"} %), objectif ${n3(r.targetMarginPct) || 70} %`, `Top ingr\xE9dients : ${top.map((l) => `${l.productName} ${eur2(l.cost)}`).join(", ")}`, ...cost.unpriced.length ? [`Sans prix connu : ${cost.unpriced.join(", ")}`] : []);
-          if (cls.intent === "dish_cost") draft = `Ton **${r.name}** te co\xFBte **${eur2(cost.total)}** de mati\xE8res par portion${sell ? `, pour un prix de vente de ${eur2(sell)} : marge brute **${eur2(m.grossMargin)}** (${m.marginPct} %)` : ""}. Les postes principaux : ${top.map((l) => `${l.productName.toLowerCase()} (${eur2(l.cost)})`).join(", ")}.${cost.unpriced.length ? ` Attention, ${cost.unpriced.length} ingr\xE9dient${cost.unpriced.length > 1 ? "s" : ""} sans prix connu (${cost.unpriced.slice(0, 3).join(", ")}) : le co\xFBt r\xE9el est un peu plus \xE9lev\xE9.` : ""}`;
-          else draft = !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un co\xFBt mati\xE8re de ${eur2(cost.total)} et un objectif de ${n3(r.targetMarginPct) || 70} % de marge, le prix conseill\xE9 serait **${eur2(m.suggestedPrice)}**.` : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur2(sell)} pour ${eur2(cost.total)} de mati\xE8res, soit ${m.marginPct} % de marge, sous ton objectif de ${n3(r.targetMarginPct) || 70} %. **Prix conseill\xE9 : ${eur2(m.suggestedPrice)}**. Alternative : r\xE9duire le poste ${top[0].productName.toLowerCase()} (${eur2(top[0].cost)}).` : `Pas n\xE9cessaire : \xE0 ${eur2(sell)}, ton ${r.name} d\xE9gage ${m.marginPct} % de marge brute (${eur2(m.grossMargin)}), au-dessus de ton objectif. Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de co\xFBt.`;
+          facts.push(`${r.name} : co\xFBt mati\xE8re ${cost.status === "complet" ? "" : "\u2265 "}${eur2(cost.total)}, prix de vente ${sell ? eur2(sell) : "non renseign\xE9"}, marge brute ${m.grossMargin !== null ? eur2(m.grossMargin) : "\xE0 calculer"} (${m.marginPct ?? "\u2014"} %), objectif ${target} %`, `Top ingr\xE9dients : ${top.map((l) => `${l.productName} ${eur2(l.cost)}`).join(", ")}`, ...cost.unpriced.length ? [`Sans prix connu : ${cost.unpriced.join(", ")}`] : []);
+          if (cls.intent === "dish_cost") {
+            draft = !cost.reliable ? `Je ne peux pas chiffrer ton **${r.name}** de fa\xE7on fiable : ${cost.unpriced.length} des ${cost.lines.length} ingr\xE9dients sont sans prix (${cost.unpriced.slice(0, 3).join(", ")}) \u2014 plus de 30 % du co\xFBt est inconnu. Ajoute leurs prix (import fournisseurs ou fiche offre) et je te donne le co\xFBt mati\xE8re et la marge.` : cost.status === "incomplet" ? `Ton **${r.name}** co\xFBte **au moins ${eur2(cost.total)}** de mati\xE8res par portion${sell ? `, pour un prix de vente de ${eur2(sell)}` : ""}. ${cost.unpriced.length} ingr\xE9dient${cost.unpriced.length > 1 ? "s" : ""} sans prix (${cost.unpriced.slice(0, 3).join(", ")}) : le co\xFBt r\xE9el est un peu plus \xE9lev\xE9, et la marge reste \xE0 calculer. Les postes d\xE9j\xE0 chiffr\xE9s : ${top.map((l) => `${l.productName.toLowerCase()} (${eur2(l.cost)})`).join(", ")}.` : `Ton **${r.name}** te co\xFBte **${eur2(cost.total)}** de mati\xE8res par portion${sell ? `, pour un prix de vente de ${eur2(sell)} : marge brute **${eur2(m.grossMargin)}** (${m.marginPct} %)` : ""}. Les postes principaux : ${top.map((l) => `${l.productName.toLowerCase()} (${eur2(l.cost)})`).join(", ")}.`;
+          } else {
+            draft = cost.status !== "complet" ? `Je ne peux pas te conseiller sur le prix du **${r.name}** pour l'instant : ${cost.unpriced.length} ingr\xE9dient${cost.unpriced.length > 1 ? "s sont" : " est"} sans prix (${cost.unpriced.slice(0, 3).join(", ")}) et la marge reste \xE0 calculer. ${!cost.reliable ? "Plus de 30 % du co\xFBt est inconnu. " : ""}Compl\xE8te les prix et je comparerai \xE0 ton objectif de ${target} % de marge.` : !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un co\xFBt mati\xE8re de ${eur2(cost.total)} et un objectif de ${target} % de marge, le prix conseill\xE9 serait **${eur2(m.suggestedPrice)}**.` : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur2(sell)} pour ${eur2(cost.total)} de mati\xE8res, soit ${m.marginPct} % de marge, sous ton objectif de ${target} %. **Prix conseill\xE9 : ${eur2(m.suggestedPrice)}**. Alternative : r\xE9duire le poste ${top[0].productName.toLowerCase()} (${eur2(top[0].cost)}).` : `Pas n\xE9cessaire : \xE0 ${eur2(sell)}, ton ${r.name} d\xE9gage ${m.marginPct} % de marge brute (${eur2(m.grossMargin)}), au-dessus de ton objectif. Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de co\xFBt.`;
+          }
           actions.push({ label: "Voir les recettes", url: "/app/recettes" });
           break;
         }
@@ -8477,7 +8760,7 @@ function monthlySpend(purchases, months) {
   const byCategory = [...perCategory.entries()].map(([category, t]) => ({ category, totals: t.map(round2), total: round2(t.reduce(sum, 0)) })).sort((a, b) => b.total - a.total);
   return { months, totals: totals.map(round2), total: round2(totals.reduce(sum, 0)), byCategory };
 }
-function priceIndexByCategory(points, months, opts = {}) {
+function priceIndexByCategory2(points, months, opts = {}) {
   const index2 = new Map(months.map((m, i) => [m, i]));
   const kept = points.filter((p) => (!opts.invoicedOnly || p.source === "facture") && p.unitPrice > 0 && index2.has(monthKey(p.recordedAt)));
   if (kept.length === 0) return [];
@@ -8816,8 +9099,8 @@ analysisRoutes.get("/analysis", async (c) => {
     months: window,
     spend: { ...spend, currentMonth, currentMonthTotal: Math.round(currentSpend * 100) / 100, invoicedSharePct: invoicedShare },
     bySupplier,
-    prices: priceIndexByCategory(points, window),
-    pricesInvoiced: priceIndexByCategory(points, window, { invoicedOnly: true }),
+    prices: priceIndexByCategory2(points, window),
+    pricesInvoiced: priceIndexByCategory2(points, window, { invoicedOnly: true }),
     // Ce qui coûte réellement de l'argent (hausses × quantités achetées)…
     drifts: topPriceDrifts(points, purchases, 10),
     // …et les hausses pas encore chiffrables (aucun achat sur la période) : à surveiller, pas à chiffrer.
@@ -10192,6 +10475,26 @@ manageRoutes.post("/suppliers/:id/offers", async (c) => {
   await db.insert(priceHistory).values({ restaurantId: rid2, offerId: offer.id, unitPriceEur: (d.packPrice / d.packQty).toFixed(4), source: "manuel" });
   await trackProducts(rid2, [d.productId]);
   return c.json(offer, 201);
+});
+manageRoutes.post("/suppliers/:id/offers/batch", async (c) => {
+  const rid2 = c.get("restaurantId");
+  const db = await getDb();
+  const supplierId = c.req.param("id");
+  const body3 = z11.object({ items: z11.array(offerBody).min(1).max(50) }).safeParse(await c.req.json());
+  if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
+  const [sup] = await db.select({ id: suppliers.id }).from(suppliers).where(and25(eq27(suppliers.id, supplierId), eq27(suppliers.restaurantId, rid2)));
+  if (!sup) return c.json({ error: "Fournisseur introuvable" }, 404);
+  const existing = new Set((await db.select({ productId: supplierOffers.productId }).from(supplierOffers).where(and25(eq27(supplierOffers.supplierId, supplierId), eq27(supplierOffers.restaurantId, rid2)))).map((r) => r.productId));
+  let created = 0, updated = 0;
+  for (const d of body3.data.items) {
+    const before = existing.has(d.productId);
+    const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid2, supplierId, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, lastSeenAt: /* @__PURE__ */ new Date() } }).returning();
+    await db.insert(priceHistory).values({ restaurantId: rid2, offerId: offer.id, unitPriceEur: (d.packPrice / d.packQty).toFixed(4), source: "manuel" });
+    if (before) updated++;
+    else created++;
+  }
+  await trackProducts(rid2, body3.data.items.map((i) => i.productId));
+  return c.json({ saved: body3.data.items.length, created, updated }, 201);
 });
 manageRoutes.put("/offers/:id", async (c) => {
   const rid2 = c.get("restaurantId");

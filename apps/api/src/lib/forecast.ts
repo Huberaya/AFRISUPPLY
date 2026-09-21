@@ -16,7 +16,7 @@
 // =============================================================
 
 export interface SaleRow { recipeId: string; day: string; portions: number }
-export interface IngredientRow { recipeId: string; productId: string; quantity: number }
+export interface IngredientRow { recipeId: string; productId: string; quantity: number; seasonality?: number[] | string | null }
 export interface StockRow {
   productId: string; productName: string; unit: string; quantity: number; criticalLevel: number; targetLevel: number | null;
   shelfLifeDays?: number | null;
@@ -71,26 +71,38 @@ export interface ForecastOptions {
   peakCoef?: number;               // coefficient appliqué ces mois-là (défaut 1,2)
 }
 
-/** Lit `products.seasonality` et en tire des mois + un coefficient (tolérant aux formats). */
-export function parseSeasonality(text: string | null | undefined): { months: number[]; coef: number } | null {
-  if (!text) return null;
-  const t = text.trim();
-  try {
-    const v = JSON.parse(t);
-    if (Array.isArray(v)) {
-      const months = v.map((x) => Number(x)).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12);
-      return months.length ? { months, coef: 1.3 } : null;
-    }
-    if (v && typeof v === 'object') {
-      const months = Array.isArray(v.months) ? v.months.map((x: unknown) => Number(x)).filter((m: number) => Number.isInteger(m) && m >= 1 && m <= 12) : [];
-      const coef = Number(v.coef);
-      if (months.length) return { months, coef: Number.isFinite(coef) && coef > 1 && coef <= 3 ? coef : 1.3 };
-    }
-  } catch { /* texte libre : on n'invente rien */ }
-  return null;
-}
+/**
+ * Coefficient de pleine saison, appliqué quand la fiche produit ne donne que des mois
+ * (« [7,8] »). Chantier 4 (audit) : un coefficient unique, modeste et assumé — jamais un
+ * chiffre flatteur inventé. Il est systématiquement rappelé dans l'explication du produit.
+ */
+export const SEASON_PEAK_MULTIPLIER = 1.2;
 
-/** Prévision de ventes par plat, jour par jour — avec la source utilisée. */
+/**
+ * Lit la saisonnalité d'un produit et en tire les mois + le coefficient à appliquer.
+ * Accepte `number[]` (fiche produit), le JSON texte stocké en base
+ * (« {"months":[7,8],"coef":1.5} » ou « [7,8] »), et ignore le texte libre : on n'invente rien.
+ */
+export function parseSeasonality(v: unknown): { months: number[]; coef: number } | null {
+  const moisValides = (liste: unknown): number[] =>
+    Array.isArray(liste) ? liste.map((x) => Number(x)).filter((m) => Number.isInteger(m) && m >= 1 && m <= 12) : [];
+  const src: unknown = typeof v === 'string' ? v.trim() : v;
+  if (src === null || src === undefined || src === '') return null;
+  if (Array.isArray(src)) {
+    const months = moisValides(src);
+    return months.length ? { months, coef: SEASON_PEAK_MULTIPLIER } : null;
+  }
+  if (typeof src === 'object') {
+    const o = src as { months?: unknown; coef?: unknown };
+    const months = moisValides(o.months); const coef = Number(o.coef);
+    if (months.length) return { months, coef: Number.isFinite(coef) && coef > 1 && coef <= 3 ? coef : SEASON_PEAK_MULTIPLIER };
+    return null;
+  }
+  if (typeof src === 'string' && (src.startsWith('[') || src.startsWith('{'))) {
+    try { return parseSeasonality(JSON.parse(src)); } catch { return null; }
+  }
+  return null;   // texte libre (« saison des pluies ») : aucune invention
+}
 export function forecastRecipes(sales: SaleRow[], recipeIds: string[], opts: ForecastOptions = {}): Map<string, RecipeForecast> {
   const horizon = opts.horizonDays ?? 7; const today = opts.today ?? new Date();
   const closed = new Set(opts.closedWeekdays ?? []);
@@ -187,28 +199,42 @@ export function forecastProducts(
   recipeForecasts: Map<string, RecipeForecast>, ingredients: IngredientRow[], stocks: StockRow[], opts: ForecastOptions = {},
 ): ProductForecast[] {
   const horizon = opts.horizonDays ?? 7; const safetyDays = opts.safetyDays ?? 2; const today = opts.today ?? new Date();
+  // Jours de fermeture : besoin ramené à zéro (sans quoi on commande pour un jour où le restaurant est fermé).
   const closed = new Set(opts.closedWeekdays ?? []);
-  const perProduct = new Map<string, { perDay: number[]; conf: number[]; recipes: number; basis: ForecastBasis; usedCovers: boolean; daysWithData: number }>();
+  const perProduct = new Map<string, { perDay: number[]; conf: number[]; recipes: number; basis: ForecastBasis; usedCovers: boolean; daysWithData: number; season: Set<number> }>();
   for (const ing of ingredients) {
     const rf = recipeForecasts.get(ing.recipeId); if (!rf) continue;
-    const acc = perProduct.get(ing.productId) ?? { perDay: new Array<number>(horizon).fill(0), conf: [] as number[], recipes: 0, basis: 'ventes_28j' as ForecastBasis, usedCovers: false, daysWithData: 0 };
+    const acc = perProduct.get(ing.productId) ?? { perDay: new Array<number>(horizon).fill(0), conf: [] as number[], recipes: 0, basis: 'ventes_28j' as ForecastBasis, usedCovers: false, daysWithData: 0, season: new Set<number>() };
     rf.perDay.forEach((p, i) => { acc.perDay[i] += p * ing.quantity; });
     acc.conf.push(rf.confidence); acc.recipes++;
     acc.basis = acc.recipes === 1 ? rf.basis : weakestBasis(acc.basis, rf.basis);
     if (rf.basis === 'couverts') acc.usedCovers = true;
     acc.daysWithData = Math.max(acc.daysWithData, rf.daysWithData);
+    // Mois de pleine saison portés par la fiche produit (référentiel) : ils s'ajoutent à ceux
+    // éventuellement écrits sur la ligne de stock.
+    for (const m of parseSeasonality(ing.seasonality)?.months ?? []) acc.season.add(m);
     perProduct.set(ing.productId, acc);
   }
   const out: ProductForecast[] = [];
   for (const s of stocks) {
     const acc = perProduct.get(s.productId);
-    const perDay: number[] = acc ? acc.perDay.map((v) => Math.round(v * 1000) / 1000) : new Array<number>(horizon).fill(0);
-    // Saisonnalité du produit (ex. pic de la mangue en été) : appliquée jour par jour.
+    // Saisonnalité : un SEUL coefficient est appliqué, jamais deux multiplications pour la même raison.
+    // Les mois de pleine saison viennent de la fiche produit (ingrédient) et de la ligne de stock ;
+    // le coefficient retenu est celui écrit explicitement dans la fiche produit, sinon le coefficient
+    // de pleine saison (1,2) — dans le doute, on sous-estime plutôt que de gonfler une commande.
     const season = parseSeasonality(s.seasonality);
-    if (season) perDay.forEach((v, i) => {
-      const month = new Date(today.getTime() + (i + 1) * DAY_MS).getUTCMonth() + 1;
-      if (season.months.includes(month)) perDay[i] = Math.round(v * season.coef * 1000) / 1000;
-    });
+    const seasonMonths = new Set<number>(acc ? acc.season : []);
+    for (const m of season?.months ?? []) seasonMonths.add(m);
+    const seasonCoefApplique = season ? season.coef : SEASON_PEAK_MULTIPLIER;
+    let seasonalDays = 0;
+    const perDay: number[] = acc
+      ? acc.perDay.map((v, i) => {
+          const month = new Date(today.getTime() + (i + 1) * DAY_MS).getUTCMonth() + 1;
+          const inSeason = seasonMonths.has(month);
+          if (inSeason && v > 0) seasonalDays++;
+          return Math.round(v * (inSeason ? seasonCoefApplique : 1) * 1000) / 1000;
+        })
+      : new Array<number>(horizon).fill(0);
     for (let i = 0; i < perDay.length; i++) if (closed.has(new Date(today.getTime() + (i + 1) * DAY_MS).getUTCDay())) perDay[i] = 0;
     const need = perDay.reduce((a, b) => a + b, 0);
     const avg = need / horizon;
@@ -260,14 +286,16 @@ export function forecastProducts(
           : basis === 'couverts' ? `Estimation de repli à partir de vos couverts : saisissez vos ventes pour l’affiner jour par jour. ` : '') +
         (ventes && daysWithData < 7 ? `Données encore légères (${daysWithData} jour${daysWithData > 1 ? 's' : ''}). ` : '') +
         `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null && need > 0 ? ` → rupture prévue ${DOW_FR[new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ', suffisant sur la période.') +
-        (season ? ` Coefficient de saisonnalité ${season.coef} appliqué (mois ${season.months.join(', ')}).` : '') +
         (recommended > 0 ? ` Commande recommandée : ${fmt(recommended)}${parObjectif} (inclut ${safetyDays} j de sécurité).` : '');
     }
+    // Chantier 4 (audit) — la saisonnalité appliquée est systématiquement dite : aucun coefficient
+    // ne majore une commande sans que le restaurateur puisse le lire.
+    if (seasonalDays > 0) explanation += ` Saisonnalité ${seasonCoefApplique} appliquée sur ${seasonalDays} jour${seasonalDays > 1 ? 's' : ''} de pleine saison de la fenêtre.`;
     out.push({
       productId: s.productId, productName: s.productName, unit: s.unit, horizonDays: horizon,
       predictedNeed: Math.round(need * 10) / 10, currentStock: s.quantity, safetyStock: Math.round(safety * 10) / 10, recommendedOrder: recommended,
       daysOfStockLeft: daysLeft, stockoutDay: stockoutIdx === null ? null : isoDay(new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS)),
-      confidence, explanation, avgDailyNeed: Math.round(avg * 1000) / 1000, perDay, basis, seasonCoef: season ? season.coef : 1,
+      confidence, explanation, avgDailyNeed: Math.round(avg * 1000) / 1000, perDay, basis, seasonCoef: seasonalDays > 0 ? seasonCoefApplique : 1,
     });
   }
   return out.sort((a, b) => (a.stockoutDay ?? '9').localeCompare(b.stockoutDay ?? '9') || b.recommendedOrder - a.recommendedOrder);

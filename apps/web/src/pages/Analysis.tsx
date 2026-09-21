@@ -70,9 +70,58 @@ function IndexLine({ points }: { points: (number | null)[] }) {
   );
 }
 
+
+// Chantier 2 (audit, autre historique) — l'évolution des marges et des prix dans le temps.
+// Ces séries viennent de /analysis/margins : mêmes données réelles que le reste de la page.
+type MarginPoint = { month: string; costPerPortion: number | null; marginPct: number | null; grossMarginPerPortion: number | null; portionsSold: number; revenueEur: number };
+type Dish = { recipeId: string; name: string; sellingPriceEur: number | null; status: 'complet' | 'incomplet'; points: MarginPoint[]; portionsSold: number; revenueEur: number };
+type CatIndex = { category: string; baseMonth: string | null; points: { month: string; index: number | null }[] };
+type Margins = { months: string[]; windowStart: string; dishes: Dish[]; priceIndex: CatIndex[] };
+
+const COLORS = ['#b45309', '#0f766e', '#7c3aed', '#be123c', '#1d4ed8', '#4d7c0f'];
+
+/** Multi-courbes SVG inline — un trou (null) coupe la ligne : jamais d'extrapolation. */
+function MultiLineChart({ series, unit, ariaLabel }: { series: { label: string; points: { month: string; value: number | null }[] }[]; unit: string; ariaLabel: string }) {
+  const W = 620, H = 200, PAD = 26;
+  const all = series.flatMap((s) => s.points.map((p) => p.value).filter((v): v is number => v !== null));
+  if (all.length === 0) return null;
+  const n = Math.max(...series.map((s) => s.points.length), 2);
+  const vmin = Math.min(...all), vmax = Math.max(...all);
+  const pmin = vmin === vmax ? vmin - Math.abs(vmin || 1) * 0.1 : vmin - (vmax - vmin) * 0.15;
+  const pmax = vmin === vmax ? vmax + Math.abs(vmax || 1) * 0.1 : vmax + (vmax - vmin) * 0.15;
+  const x = (i: number) => PAD + (i / (n - 1)) * (W - 2 * PAD);
+  const y = (v: number) => H - PAD - ((v - pmin) / (pmax - pmin || 1)) * (H - 2 * PAD);
+  const months = series[0]?.points.map((p) => p.month) ?? [];
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="mt-3 h-52 w-full" role="img" aria-label={ariaLabel}>
+      {[0.25, 0.5, 0.75].map((f) => <line key={f} x1={PAD} x2={W - PAD} y1={PAD + f * (H - 2 * PAD)} y2={PAD + f * (H - 2 * PAD)} stroke="#e7e5e4" strokeDasharray="3 3" />)}
+      {[pmin, (pmin + pmax) / 2, pmax].map((v, i) => <text key={i} x={2} y={y(v) + 3} fontSize="9" fill="#a8a29e">{Math.round(v * 10) / 10}{unit}</text>)}
+      {months.map((m, i) => (i === 0 || i === months.length - 1 || months.length <= 6) && <text key={m} x={x(i)} y={H - 8} fontSize="9" fill="#a8a29e" textAnchor="middle">{monthLabel(m, true)}</text>)}
+      {series.map((s, si) => {
+        const color = COLORS[si % COLORS.length];
+        const runs: { i: number; v: number }[][] = [];
+        let cur: { i: number; v: number }[] = [];
+        s.points.forEach((p, i) => { if (p.value === null) { if (cur.length) runs.push(cur); cur = []; } else cur.push({ i, v: p.value }); });
+        if (cur.length) runs.push(cur);
+        return (
+          <g key={s.label}>
+            {runs.map((run, ri) => run.length >= 2 && <path key={ri} d={run.map((pt, k) => `${k ? 'L' : 'M'}${x(pt.i).toFixed(1)},${y(pt.v).toFixed(1)}`).join(' ')} fill="none" stroke={color} strokeWidth={2} />)}
+            {runs.flat().map((pt) => <circle key={`${s.label}-${pt.i}`} cx={x(pt.i)} cy={y(pt.v)} r={3} fill={color} />)}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** Dernière valeur connue d'une série (les mois sans donnée ne comptent pas). */
+const lastKnown = <T,>(pts: { month: string; value: T | null }[]): T | null => [...pts].reverse().find((p) => p.value !== null)?.value ?? null;
+
 export default function Analysis() {
   const [months, setMonths] = useState(6);
   const { data, loading, error, reload } = useApi<Analysis>(`/analysis?months=${months}`);
+  // Évolution dans le temps (marges par plat, indice de prix par catégorie) — autre apport fusionné.
+  const mg = useApi<Margins>(`/analysis/margins?months=${months}`);
   if (loading && !data) return <Loader />;
   if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   const a = data!;
@@ -81,6 +130,12 @@ export default function Analysis() {
   const maxSupplier = Math.max(...a.bySupplier.map((s) => s.total), 1);
   const worst = [...a.recipes].filter((r) => r.marginPct !== null).sort((x, y) => (x.marginPct ?? 0) - (y.marginPct ?? 0))[0];
   const historyByRecipe = new Map(a.recipeHistory.map((h) => [h.id, h]));
+  const m = mg.data;
+  const dishes = [...(m?.dishes ?? [])].sort((x, y) => y.revenueEur - x.revenueEur);
+  const drawnDishes = dishes.filter((x) => x.points.some((p) => p.marginPct !== null)).slice(0, 5);
+  const marginSeries = drawnDishes.map((x) => ({ label: x.name, points: x.points.map((p) => ({ month: p.month, value: p.marginPct })) }));
+  const idxSeries = (m?.priceIndex ?? []).filter((c) => c.points.some((p) => p.index !== null))
+    .map((c) => ({ label: cat(c.category), points: c.points.map((p) => ({ month: p.month, value: p.index })) }));
 
   return (
     <div className="animate-fade-up space-y-6">
@@ -199,6 +254,31 @@ export default function Analysis() {
           </section>
         )}
 
+        {/* 3 bis. Le même indice, mais toutes catégories sur un seul graphique (apport fusionné) */}
+        <section className="card">
+          <h2 className="font-bold">🧺 Indice de prix par catégorie, toutes catégories</h2>
+          <p className="text-xs text-stone-500">Base 100 = premier mois avec des données. Comme un indice des prix : 110 = +10 % sur la période.</p>
+          {mg.error ? (
+            <div className="mt-3"><ErrorBox message={mg.error} onRetry={() => void mg.reload()} /></div>
+          ) : mg.loading && !m ? (
+            <Loader />
+          ) : idxSeries.length > 0 ? (
+            <>
+              <MultiLineChart series={idxSeries} unit="" ariaLabel="Indice de prix par catégorie" />
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                {idxSeries.map((c, i) => (
+                  <li key={c.label} className="flex items-center gap-1.5">
+                    <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
+                    {c.label} <span className="text-stone-500">({lastKnown(c.points) !== null ? Math.round((lastKnown(c.points) as number) * 10) / 10 : '—'})</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-stone-500">Pas encore assez d’historique de prix : l’indice se construit à partir de vos réceptions et de vos offres fournisseurs.</p>
+          )}
+        </section>
+
         {/* 4. Les dérives qui coûtent le plus */}
         <section className="card">
           <h2 className="flex items-center gap-2 font-bold">Ce qui vous coûte le plus cher <AlertTriangle size={16} className="text-orange-500" /></h2>
@@ -232,6 +312,51 @@ export default function Analysis() {
               </ul>
               <p className="mt-1 text-xs text-stone-400">Le montant exact sera chiffré dès votre prochain achat de ces produits.</p>
             </div>
+          )}
+        </section>
+
+        {/* 4 bis. L'évolution des marges dans le temps (apport fusionné) */}
+        <section className="card">
+          <h2 className="font-bold">📈 Évolution des marges par plat</h2>
+          <p className="text-xs text-stone-500">Marge brute en % du prix de vente, recalculée chaque mois depuis les prix d’achat réels. Un trou = pas de prix connu ce mois-là.</p>
+          {mg.error ? (
+            <div className="mt-3"><ErrorBox message={mg.error} onRetry={() => void mg.reload()} /></div>
+          ) : mg.loading && !m ? (
+            <Loader />
+          ) : marginSeries.length > 0 ? (
+            <>
+              <MultiLineChart series={marginSeries} unit=" %" ariaLabel="Évolution des marges par plat" />
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                {drawnDishes.map((x, i) => {
+                  const lm = lastKnown(x.points.map((pp) => ({ month: pp.month, value: pp.marginPct })));
+                  return (
+                    <li key={x.recipeId} className="flex items-center gap-1.5">
+                      <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
+                      {x.name} <span className="text-stone-500">({lm !== null ? `${Math.round(lm * 10) / 10} %` : '—'}{x.status === 'incomplet' ? ', partiel' : ''})</span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <table className="mt-4 w-full text-xs">
+                <thead className="text-left text-stone-400"><tr><th className="py-1">Plat</th><th className="py-1 text-right">Portions ({months} m)</th><th className="py-1 text-right">Coût / portion</th><th className="py-1 text-right">Marge</th></tr></thead>
+                <tbody className="divide-y divide-stone-100">
+                  {dishes.slice(0, 8).map((x) => {
+                    const lc = lastKnown(x.points.map((pp) => ({ month: pp.month, value: pp.costPerPortion })));
+                    const lm = lastKnown(x.points.map((pp) => ({ month: pp.month, value: pp.marginPct })));
+                    return (
+                      <tr key={x.recipeId}>
+                        <td className="py-1.5 font-medium">{x.name}{x.status === 'incomplet' && <span className="ml-1 text-[9px] text-amber-700">prix partiels</span>}</td>
+                        <td className="py-1.5 text-right">{x.portionsSold}</td>
+                        <td className="py-1.5 text-right">{lc !== null ? `${x.status === 'incomplet' ? '≥ ' : ''}${fmtEur(lc)}` : <span className="text-stone-400">à calculer</span>}</td>
+                        <td className="py-1.5 text-right">{lm !== null ? `${Math.round(lm * 10) / 10} %` : <span className="text-stone-400">à calculer</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-stone-500">Pas encore assez d’historique pour tracer des marges : saisissez quelques jours de ventes et complétez les prix d’achat (les plats sans prix complet restent masqués plutôt qu’affichés faux).</p>
           )}
         </section>
 

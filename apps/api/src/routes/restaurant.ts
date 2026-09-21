@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { and, eq, desc, gte, sql, inArray } from 'drizzle-orm';
 import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements,
-  orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, restaurants,
+  orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, restaurants, users,
   quantityCeiling, defaultThresholds,
 } from '@afrisupply/db';
 import { insertWithFreshReference } from '../lib/reference.js';
@@ -13,7 +13,7 @@ import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib
 import { checkReceive, checkSend, isUniqueViolation } from '../lib/orders.js';
 import {
   computeDailyUse, stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, alertsFromOpportunities,
-  compareOffers, recipeCost, marginAnalysis, supplierReliability, type StockSnapshot, type PricePoint,
+  compareOffers, recipeCost, marginAnalysis, supplierReliability, marginSeries, priceIndexByCategory, type StockSnapshot, type PricePoint,
 } from '../lib/engines.js';
 
 export const restaurantRoutes = new Hono<Env>();
@@ -132,13 +132,27 @@ export async function refreshAlerts(rid: string) {
   const db = await getDb();
   const [restaurant] = await db.select().from(restaurants).where(eq(restaurants.id, rid));
   const threshold = restaurant.settings?.priceIncreaseAlertPct ?? 8;
-  const [stocks, offers, invRows, ph] = await Promise.all([
+  const [stocks, offers, invRows, ph, openLines] = await Promise.all([
     loadStockSnapshots(rid), loadOffers(rid),
     db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId)).where(eq(inventoryItems.restaurantId, rid)),
     db.select({ p: priceHistory, offer: supplierOffers, supplier: suppliers, product: products }).from(priceHistory)
       .innerJoin(supplierOffers, eq(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq(products.id, supplierOffers.productId))
       .where(and(eq(priceHistory.restaurantId, rid), gte(priceHistory.recordedAt, new Date(Date.now() - 90 * 86_400_000)))),
+    // Chantier 4 (audit) — lignes des commandes pas encore livrées (hors brouillon / annulée) :
+    // la prochaine livraison attendue par produit couvre-t-elle le creux prévu ?
+    db.select({ productId: orderLines.productId, expectedAt: orders.expectedAt, createdAt: orders.createdAt })
+      .from(orderLines).innerJoin(orders, eq(orders.id, orderLines.orderId))
+      .where(and(eq(orders.restaurantId, rid), inArray(orders.status, ['preparee', 'envoyee', 'confirmee', 'livree_partiel']))),
   ]);
+  // Chantier 4 (audit) — prochaine livraison (en jours) par produit, vue par les alertes de rupture.
+  const nextByProduct = new Map<string, number>();
+  for (const l of openLines) {
+    const eta = l.expectedAt ? new Date(l.expectedAt).getTime() : l.createdAt.getTime() + 2 * 86_400_000;
+    const d = Math.max(0, Math.ceil((eta - Date.now()) / 86_400_000));
+    const prev = nextByProduct.get(l.productId);
+    if (prev === undefined || d < prev) nextByProduct.set(l.productId, d);
+  }
+  const stocksWithDelivery = stocks.map((s) => ({ ...s, nextDeliveryInDays: nextByProduct.get(s.productId) }));
   const points: PricePoint[] = ph.map((r) => ({ offerId: r.offer.id, supplierId: r.supplier.id, supplierName: r.supplier.name, productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, unitPrice: n(r.p.unitPriceEur), recordedAt: r.p.recordedAt.toISOString() }));
   const alternatives = new Map<string, PricePoint[]>();
   for (const o of offers) {
@@ -148,7 +162,7 @@ export async function refreshAlerts(rid: string) {
     if (!alternatives.has(o.productId)) alternatives.set(o.productId, []); alternatives.get(o.productId)!.push(pp);
   }
   const computed = [
-    ...alertsFromStock(stocks),
+    ...alertsFromStock(stocksWithDelivery),
     ...alertsFromPrices(points, threshold, alternatives),
     ...alertsFromOpportunities(invRows.map((r) => ({ productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, preferredSupplierId: r.item.preferredSupplierId })), offers),
   ];
@@ -233,6 +247,24 @@ restaurantRoutes.post('/stock/:itemId/movements', async (c) => {
   await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type, quantity: delta.toFixed(3), note, createdBy: user.id });
   await db.update(inventoryItems).set({ quantity: newQty.toFixed(3), updatedAt: new Date(), ...(type === 'ajustement' ? { lastCountedAt: new Date() } : {}) }).where(eq(inventoryItems.id, item.id));
   return c.json({ ok: true, quantity: newQty });
+});
+
+// Chantier 3 (audit U2) — journal des mouvements : « qui a sorti 10 kg ? » doit avoir une réponse.
+restaurantRoutes.get('/stock/:itemId/movements', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const [item] = await db.select().from(inventoryItems).where(and(eq(inventoryItems.id, c.req.param('itemId')), eq(inventoryItems.restaurantId, rid)));
+  if (!item) return c.json({ error: 'Article introuvable' }, 404);
+  const rows = await db.select({ m: stockMovements, by: users.fullName })
+    .from(stockMovements).leftJoin(users, eq(users.id, stockMovements.createdBy))
+    .where(and(eq(stockMovements.restaurantId, rid), eq(stockMovements.inventoryItemId, item.id)))
+    .orderBy(desc(stockMovements.createdAt)).limit(20);
+  return c.json({
+    item: { id: item.id, productId: item.productId, quantity: n(item.quantity) },
+    movements: rows.map(({ m, by }) => ({
+      id: m.id, type: m.type, quantity: n(m.quantity), unitCostEur: m.unitCostEur ? n(m.unitCostEur) : null,
+      orderId: m.orderId, note: m.note, createdBy: by, createdAt: m.createdAt,
+    })),
+  });
 });
 
 // -------------------------------------------------------------
@@ -545,7 +577,8 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
 
       if (discrepancies.length) {
         const [sup] = await tx.select().from(suppliers).where(eq(suppliers.id, order.supplierId));
-        claimMessage = `Bonjour ${sup?.contactName ?? ''},\n\nNous avons constaté un écart sur la livraison ${order.reference} :\n` +
+        // Chantier 3 (audit B5) : plus jamais « Bonjour , » — la virgule orpheline partait tel quel au fournisseur.
+        claimMessage = `Bonjour${sup?.contactName ? ` ${sup.contactName}` : ''},\n\nNous avons constaté un écart sur la livraison ${order.reference} :\n` +
           discrepancies.map((d) => `• ${d.productName} : commandé ${d.ordered} ${d.unit}, reçu ${d.received} ${d.unit} (${d.ordered - d.received > 0 ? 'manquant' : 'excédent'} ${Math.abs(d.ordered - d.received)} ${d.unit})`).join('\n') +
           `\n\nMerci de nous indiquer la suite à donner (livraison complémentaire ou avoir).\n\nCordialement,\n${user.fullName}`;
         await tx.insert(deliveryDiscrepancies).values(discrepancies.map((d) => ({ deliveryId: delivery.id, orderLineId: d.lineId, orderedQty: d.ordered.toFixed(3), receivedQty: d.received.toFixed(3), reason: d.ordered > d.received ? 'manquant' : 'excédent', claimMessage })));
@@ -624,11 +657,82 @@ restaurantRoutes.get('/recipes', async (c) => {
     recipes: recs.map((r) => {
       const list = ings.filter((i) => i.ing.recipeId === r.id).map((i) => ({ productId: i.product.id, productName: i.product.name, quantity: n(i.ing.quantity), unit: i.product.baseUnit }));
       const cost = recipeCost(list, prices);
-      const margin = marginAnalysis(cost.total, r.sellingPriceEur ? n(r.sellingPriceEur) : null, n(r.targetMarginPct) || 70);
+      const margin = marginAnalysis(cost.total, r.sellingPriceEur ? n(r.sellingPriceEur) : null, n(r.targetMarginPct) || 70, cost.status === 'complet');
       const drifting = cost.lines.filter((l) => (drift.get(l.productId) ?? 0) >= 5).map((l) => ({ productName: l.productName, pct: drift.get(l.productId)! }));
-      return { ...r, sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null, ingredients: cost.lines, cost: cost.total, unpriced: cost.unpriced, ...margin, drifting };
+      // Chantier 2 (audit B3/U4) : coût partiel affiché « ≥ X € » (costStatus), marge masquée ('à calculer')
+      // dès qu'un ingrédient est sans prix — jamais « 0,00 € » ni « marge 100 % » présentés comme vrais.
+      return {
+        ...r, sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null,
+        ingredients: cost.lines, cost: cost.total, costStatus: cost.status, coverage: cost.coverage,
+        unpriced: cost.unpriced, grossMargin: margin.grossMargin, marginPct: margin.marginPct,
+        suggestedPrice: margin.suggestedPrice, marginStatus: margin.status, drifting,
+      };
     }),
   });
+});
+
+// -------------------------------------------------------------
+// Chantier 2 (audit) — vérité des coûts : courbe de marge par plat + indice de prix par catégorie
+// (les deux promesses du sous-titre de la page Analyse, désormais tenues plutôt que promues).
+// -------------------------------------------------------------
+restaurantRoutes.get('/analysis/margins', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const q = Number(c.req.query('months'));
+  const monthsCount = q >= 12 ? 12 : q >= 3 ? Math.round(q) : 6; // 3 | 6 | 12 (6 par défaut)
+  const today = new Date();
+  const months: string[] = [];
+  for (let k = monthsCount - 1; k >= 0; k--) {
+    months.push(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - k, 1)).toISOString().slice(0, 7));
+  }
+  const windowStart = `${months[0]}-01`;
+  const [recs, ings, salesRows, priceRows, offers] = await Promise.all([
+    db.select().from(recipes).where(eq(recipes.restaurantId, rid)).orderBy(recipes.name),
+    db.select({ ing: recipeIngredients, product: products }).from(recipeIngredients).innerJoin(products, eq(products.id, recipeIngredients.productId))
+      .innerJoin(recipes, eq(recipes.id, recipeIngredients.recipeId)).where(eq(recipes.restaurantId, rid)),
+    db.select({ recipeId: sales.recipeId, day: sales.day, portions: sales.portions }).from(sales)
+      .where(and(eq(sales.restaurantId, rid), gte(sales.day, windowStart))),
+    db.select({ productId: supplierOffers.productId, category: products.category, unitPrice: priceHistory.unitPriceEur, recordedAt: priceHistory.recordedAt })
+      .from(priceHistory).innerJoin(supplierOffers, eq(supplierOffers.id, priceHistory.offerId)).innerJoin(products, eq(products.id, supplierOffers.productId))
+      .where(eq(priceHistory.restaurantId, rid)),
+    loadOffers(rid),
+  ]);
+  // prix courants (offres en stock) = état « maintenant » pour complét/incomplet
+  const now = new Map<string, number>();
+  for (const o of offers) if (o.inStock && (!now.has(o.productId) || o.unitPrice < now.get(o.productId)!)) now.set(o.productId, o.unitPrice);
+  // séries de prix par produit : moyenne mensuelle 'YYYY-MM' (le report en avant se fait dans engines.priceAtMonth)
+  const acc = new Map<string, Map<string, { sum: number; cnt: number }>>();
+  for (const p of priceRows) {
+    const month = new Date(p.recordedAt).toISOString().slice(0, 7);
+    if (!acc.has(p.productId)) acc.set(p.productId, new Map());
+    const m = acc.get(p.productId)!; const a = m.get(month) ?? { sum: 0, cnt: 0 };
+    a.sum += n(p.unitPrice); a.cnt++; m.set(month, a);
+  }
+  const priceByMonth = new Map<string, Map<string, number>>();
+  for (const [pid, m] of acc) priceByMonth.set(pid, new Map([...m.entries()].map(([month, a]) => [month, Math.round((a.sum / a.cnt) * 10_000) / 10_000])));
+  // portions vendues par recette/mois
+  const portions = new Map<string, Map<string, number>>();
+  for (const s of salesRows) {
+    const month = String(s.day).slice(0, 7);
+    if (!portions.has(s.recipeId)) portions.set(s.recipeId, new Map());
+    const m = portions.get(s.recipeId)!; m.set(month, (m.get(month) ?? 0) + s.portions);
+  }
+  const dishes = recs.map((r) => {
+    const list = ings.filter((i) => i.ing.recipeId === r.id).map((i) => ({ productId: i.product.id, productName: i.product.name, quantity: n(i.ing.quantity), unit: i.product.baseUnit }));
+    const currentUnpriced = list.filter((i) => !now.has(i.productId)).map((i) => i.productName);
+    return marginSeries({
+      recipeId: r.id, name: r.name, ingredients: list,
+      sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null,
+      months, portionsByMonth: portions.get(r.id) ?? new Map(),
+      priceByMonth, currentUnpriced,
+    });
+  });
+  // indice de prix par catégorie : produits ayant au moins un prix historique
+  const catOf = new Map(priceRows.map((p) => [p.productId, p.category as string]));
+  const priceIndex = priceIndexByCategory({
+    months,
+    products: [...priceByMonth.entries()].map(([productId, pbm]) => ({ productId, category: catOf.get(productId) ?? 'autre', priceByMonth: pbm })),
+  });
+  return c.json({ months, windowStart, dishes, priceIndex });
 });
 
 // -------------------------------------------------------------

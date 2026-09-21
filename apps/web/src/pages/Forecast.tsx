@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ShoppingCart, Info, AlertTriangle } from 'lucide-react';
+import { ShoppingCart, Info, AlertTriangle, CalendarPlus, Trash2 } from 'lucide-react';
 import { useApi } from '../lib/useApi';
 import { fmtQty } from '../lib/api';
 import { PageTitle, Loader, ErrorBox, Empty, Stat } from '../components/ui';
@@ -17,8 +17,11 @@ const BASIS: Record<Basis, { label: string; short: string; tone: string }> = {
 const basisOf = (b: string) => BASIS[(b as Basis)] ?? BASIS.seuils;
 
 interface ProductForecast { productId: string; productName: string; unit: string; horizonDays: number; predictedNeed: number; currentStock: number; safetyStock: number; recommendedOrder: number; daysOfStockLeft: number | null; stockoutDay: string | null; confidence: number; explanation: string; perDay: number[]; basis: string; seasonCoef: number }
+// Chantier 4 (autre historique) — soirées privatisées : un coefficient de fréquentation par jour.
+interface ForecastEvent { id: string; day: string; label: string; multiplier: number }
 interface Data {
   horizonDays: number; salesDays: number;
+  events?: ForecastEvent[];
   products: ProductForecast[];
   recipes: { recipeId: string; name: string; total: number; confidence: number; perDay: number[]; basis?: string }[];
   dataQuality?: { salesDays: number; lastSaleDay: string | null; daysSinceLastSale: number | null; coversPerDay: number | null; closedWeekdays: number[]; peakMonths: number[]; sources: Record<string, number> };
@@ -29,6 +32,21 @@ const dayLabel = (offset: number) => { const d = new Date(); d.setDate(d.getDate
 export default function Forecast() {
   const { data, loading, error, reload } = useApi<Data>('/forecast');
   const [open, setOpen] = useState<string | null>(null);
+  // Chantier 4 (autre historique) — déclarer une soirée privatisée (coef de fréquentation du jour).
+  const [evDay, setEvDay] = useState(''); const [evLabel, setEvLabel] = useState(''); const [evMult, setEvMult] = useState('1.5');
+  const [evBusy, setEvBusy] = useState(false); const [evErr, setEvErr] = useState<string | null>(null);
+  const declareEvent = async () => {
+    if (!evDay) { setEvErr('Choisissez une date.'); return; }
+    setEvBusy(true); setEvErr(null);
+    try {
+      await api('/forecast/events', { method: 'PUT', json: { events: [{ day: evDay, label: evLabel.trim() || 'Soirée privatisée', multiplier: Number(evMult) || 1.5 }] } });
+      setEvLabel(''); await reload();
+    } catch (e) { setEvErr(e instanceof Error ? e.message : 'Erreur lors de l’enregistrement'); } finally { setEvBusy(false); }
+  };
+  const removeEvent = async (id: string) => {
+    setEvBusy(true); setEvErr(null);
+    try { await api(`/forecast/events/${id}`, { method: 'DELETE' }); await reload(); } catch (e) { setEvErr(e instanceof Error ? e.message : 'Erreur'); } finally { setEvBusy(false); }
+  };
   if (loading) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   const toOrder = data.products.filter((p) => p.recommendedOrder > 0);
   const ruptures = data.products.filter((p) => p.stockoutDay);
@@ -69,6 +87,36 @@ export default function Forecast() {
           </div>
         </div>
       )}
+
+      {/* Chantier 4 (autre historique) — soirées privatisées et pics déclarés : réellement appliqués,
+          et l'explication de chaque produit rappelle les événements de la fenêtre. */}
+      <div className="card mb-6">
+        <h3 className="font-semibold mb-1">📅 Déclarer une soirée privatisée (ou tout événement)</h3>
+        <p className="mb-3 text-xs text-stone-500">Le coef ajuste les portions prévues ce jour-là : ×1,5 = +50 % de couverts, ×0,3 pour une fermeture exceptionnelle. Le besoin en produits ci-dessous se recalcule aussitôt.</p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-xs text-stone-500">Date
+            <input type="date" className="input mt-1 block" value={evDay} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setEvDay(e.target.value)} />
+          </label>
+          <label className="text-xs text-stone-500">Intitulé
+            <input className="input mt-1 block w-48" placeholder="Soirée privatisée" value={evLabel} onChange={(e) => setEvLabel(e.target.value)} />
+          </label>
+          <label className="text-xs text-stone-500">Coef de fréquentation
+            <input type="number" step="0.1" min="0.05" max="5" className="input mt-1 block w-28" value={evMult} onChange={(e) => setEvMult(e.target.value)} />
+          </label>
+          <button className="btn-primary" disabled={evBusy || !evDay} onClick={declareEvent}><CalendarPlus size={16} /> Déclarer</button>
+        </div>
+        {evErr && <p className="mt-2 text-xs text-red-600" role="alert">{evErr}</p>}
+        {(data.events?.length ?? 0) > 0 && (
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {data.events!.map((ev) => (
+              <li key={ev.id} className="pill flex items-center gap-1.5 bg-brand-50 text-brand-800">
+                <span>{ev.label} ×{String(ev.multiplier).replace('.', ',')} — le {ev.day.slice(8, 10)}/{ev.day.slice(5, 7)}</span>
+                <button title="Supprimer cet événement" className="text-stone-400 hover:text-red-600" disabled={evBusy} onClick={() => removeEvent(ev.id)}><Trash2 size={12} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">

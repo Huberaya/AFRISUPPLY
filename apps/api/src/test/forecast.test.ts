@@ -99,3 +99,48 @@ describe('assistant — classification', () => {
     ['Quelles ruptures arrivent ?', 'upcoming_stockouts', undefined],
   ])('%s', (q, intent, entity) => { const c = classifyIntent(q, ents); expect(c.intent).toBe(intent); if (entity) expect(c.entity).toBe(entity); });
 });
+
+// =============================================================
+// Chantier 4 (audit) — prévision complète : événements + saisonnalité
+// Critères de validation : coef ×1,5 → besoin augmenté ; saisonnalité expliquée.
+// =============================================================
+describe('prévision complète (chantier 4) : événements & saisonnalité', () => {
+  const today = new Date('2026-09-14T09:00:00'); // lundi
+  const sales = [
+    { recipeId: 'r1', day: '2026-08-18', portions: 10 }, { recipeId: 'r1', day: '2026-08-25', portions: 10 },
+    { recipeId: 'r1', day: '2026-09-01', portions: 10 }, { recipeId: 'r1', day: '2026-09-08', portions: 10 },
+    { recipeId: 'r2', day: '2026-09-08', portions: 20 },
+  ];
+  const stock = { productId: 'riz', productName: 'Riz', unit: 'kg', quantity: 50, criticalLevel: 5, targetLevel: null, shelfLifeDays: null };
+  const dayOf = (offset: number) => new Date(today.getTime() + offset * 86_400_000).toISOString().slice(0, 10);
+
+  it('coef d\'événement ×1,5 → besoin du jour multiplié et besoin total en hausse (critère de validation)', () => {
+    const evDay = dayOf(3); // → perDay[2]
+    const base = forecastRecipes(sales, ['r1'], { horizonDays: 7, today });
+    const withEv = forecastRecipes(sales, ['r1'], { horizonDays: 7, today, eventMultipliers: { [evDay]: 1.5 } });
+    const baseDay = base.get('r1')!.perDay[2]; const evNeed = withEv.get('r1')!.perDay[2];
+    expect(baseDay).toBeGreaterThan(0);
+    expect(evNeed).toBeCloseTo(baseDay * 1.5, 1);
+    const ing = [{ recipeId: 'r1', productId: 'riz', quantity: 2 }];
+    const pfBase = forecastProducts(base, ing, [stock], { horizonDays: 7, today })[0];
+    const pfEv = forecastProducts(withEv, ing, [stock], { horizonDays: 7, today })[0];
+    expect(pfEv.predictedNeed).toBeGreaterThan(pfBase.predictedNeed);
+    expect(pfEv.perDay[2]).toBeCloseTo(pfBase.perDay[2] * 1.5, 1);
+  });
+
+  it('saisonnalité : mois de pleine saison → besoin ×1,2, dit dans l\'explication', () => {
+    const rf = forecastRecipes(sales, ['r1', 'r2'], { horizonDays: 7, today });
+    const ingSans = [{ recipeId: 'r1', productId: 'riz', quantity: 2 }, { recipeId: 'r2', productId: 'riz', quantity: 1 }];
+    const ingAvec = ingSans.map((i) => ({ ...i, seasonality: [9] as number[] })); // sept. = pleine saison
+    const pfSans = forecastProducts(rf, ingSans, [stock], { horizonDays: 7, today })[0];
+    const pfAvec = forecastProducts(rf, ingAvec, [stock], { horizonDays: 7, today })[0];
+    expect(pfAvec.predictedNeed).toBeCloseTo(pfSans.predictedNeed * 1.2, 1);
+    expect(pfAvec.explanation).toContain('Saisonnalité');
+    // hors saison : strictement inchangé
+    const pfHors = forecastProducts(rf, ingSans.map((i) => ({ ...i, seasonality: [3] as number[] })), [stock], { horizonDays: 7, today })[0];
+    expect(pfHors.predictedNeed).toBe(pfSans.predictedNeed);
+    // products.seasonality stocké en JSON texte est accepté aussi
+    const pfJson = forecastProducts(rf, ingSans.map((i) => ({ ...i, seasonality: '[9]' as string })), [stock], { horizonDays: 7, today })[0];
+    expect(pfJson.predictedNeed).toBe(pfAvec.predictedNeed);
+  });
+});

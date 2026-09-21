@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ClipboardList, Settings2, Trash2, Plus, ClipboardCheck } from 'lucide-react';
+import { Settings2, Trash2, Plus, ClipboardCheck, History } from 'lucide-react';
 import { api, fmtQty, CATEGORY_LABEL } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, StatusPill } from '../components/ui';
@@ -11,6 +11,9 @@ import { ProductPicker } from '../components/ProductPicker';
 
 type Item = { id: string; productId: string; name: string; category: string; unit: string; quantity: number; criticalLevel: number; targetLevel: number | null; avgDailyUse: number; daysLeft: number | null; status: 'ok' | 'bas' | 'critique'; preferredSupplier: string | null; preferredSupplierId?: string | null; lastCountedAt: string | null };
 type Sup = { id: string; name: string };
+// Chantier 3 (audit U2) — journal des mouvements : qui a sorti quoi, et quand.
+type Movement = { id: string; type: 'reception' | 'consommation' | 'ajustement' | 'perte'; quantity: number; unitCostEur: number | null; note: string | null; createdBy: string | null; createdAt: string };
+const MOVEMENT_LABEL: Record<Movement['type'], string> = { reception: 'Réception', consommation: 'Consommation', ajustement: 'Ajustement', perte: 'Perte' };
 
 export default function Stock() {
   const { data, loading, error, reload } = useApi<{ items: Item[] }>('/stock');
@@ -22,6 +25,9 @@ export default function Stock() {
   const [adding, setAdding] = useState(false);
   // Chantier 11 : confirmations et notifications intégrées (déclarées ici, avant tout retour anticipé).
   const confirmer = useConfirm(); const toast = useToast();
+  // Chantier 3 (audit, autre historique) — journal des mouvements : « qui a sorti 10 kg ? ».
+  const [journal, setJournal] = useState<null | { item: Item; movements: Movement[] }>(null);
+  const openJournal = async (i: Item) => { try { const r = await api<{ movements: Movement[] }>(`/stock/${i.id}/movements`); setJournal({ item: i, movements: r.movements }); } catch { setJournal({ item: i, movements: [] }); } };
   const save = async (item: Item) => { await api(`/stock/${item.id}/movements`, { method: 'POST', json: { type: 'ajustement', quantity: Number(val.replace(',', '.')) } }); setEditing(null); await reload(); };
   const openSettings = (i: Item) => { setSettings(i); setCrit(String(i.criticalLevel)); setTarget(i.targetLevel != null ? String(i.targetLevel) : ''); setPref(i.preferredSupplierId ?? ''); };
   const saveSettings = async (e: React.FormEvent) => { e.preventDefault(); if (!settings) return; await api(`/stock/${settings.id}`, { method: 'PUT', json: { criticalLevel: Number(crit.replace(',', '.')), targetLevel: target ? Number(target.replace(',', '.')) : null, preferredSupplierId: pref || null } }); setSettings(null); await reload(); };
@@ -70,7 +76,7 @@ export default function Stock() {
                     <td className="px-4 py-2.5 text-right text-stone-500">{fmtQty(i.criticalLevel, i.unit)}</td>
                     <td className="px-4 py-2.5"><StatusPill status={i.status} /></td>
                     <td className="px-4 py-2.5 text-stone-600">{i.preferredSupplier ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-right whitespace-nowrap">{i.status !== 'ok' && <Link to={`/app/achats/comparer/${i.productId}`} className="text-xs font-semibold text-brand-700 mr-2">Commander →</Link>}<button onClick={() => openSettings(i)} className="p-1 text-stone-400 hover:text-brand-700" aria-label="Réglages"><Settings2 size={14} /></button></td>
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">{i.status !== 'ok' && <Link to={`/app/achats/comparer/${i.productId}`} className="text-xs font-semibold text-brand-700 mr-2">Commander →</Link>}<button onClick={() => void openJournal(i)} className="p-1 text-stone-400 hover:text-brand-700" aria-label="Journal des mouvements" title="Journal des mouvements"><History size={14} /></button><button onClick={() => openSettings(i)} className="p-1 text-stone-400 hover:text-brand-700" aria-label="Réglages"><Settings2 size={14} /></button></td>
                   </tr>
                 ))}
               </tbody>
@@ -92,7 +98,23 @@ export default function Stock() {
           </div>
         </div>
       )}
-      {all.length > 0 && items.length === 0 && <p className="text-stone-500 flex items-center gap-2"><ClipboardList size={16} /> Aucun produit dans ce filtre.</p>}
+      {/* Chantier 3 (audit U2) — les 20 derniers mouvements : « qui a sorti 10 kg ? » */}
+      {journal && <Modal title={`Journal — ${journal.item.name}`} subtitle="20 derniers mouvements : réceptions, consommations, ajustements, pertes." onClose={() => setJournal(null)}>
+        {journal.movements.length === 0 ? <p className="text-sm text-stone-500">Aucun mouvement enregistré pour cet article.</p> : (
+          <ul className="divide-y divide-stone-100 text-sm">
+            {journal.movements.map((m) => (
+              <li key={m.id} className="flex items-center justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <p className="font-medium">{MOVEMENT_LABEL[m.type]} <span className={m.quantity >= 0 ? 'text-emerald-700 font-semibold' : 'text-red-700 font-semibold'}>{m.quantity >= 0 ? '+' : ''}{fmtQty(m.quantity, journal.item.unit)}</span></p>
+                  <p className="text-xs text-stone-500 truncate">{new Date(m.createdAt).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}{m.createdBy ? ` · ${m.createdBy}` : ''}{m.note ? ` · ${m.note}` : ''}</p>
+                </div>
+                {m.unitCostEur !== null && <span className="text-xs text-stone-500 whitespace-nowrap">{m.unitCostEur} €/{journal.item.unit}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="mt-4 flex justify-end"><button className="btn-ghost" onClick={() => setJournal(null)}>Fermer</button></div>
+      </Modal>}
       {settings && <Modal title={settings.name} subtitle="Seuils utilisés par les alertes, la prévision et l’auto-reorder." onClose={() => setSettings(null)}>
         <form onSubmit={saveSettings} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">

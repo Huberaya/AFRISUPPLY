@@ -6,7 +6,7 @@ import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, StatusPill } from '../components/ui';
 import { PriceHistory } from '../components/PriceHistory';
 
-type Offer = { offerId: string; supplierId: string; supplierName: string; packLabel: string; packQty: number; packPrice: number; unitPrice: number; inStock: boolean; leadTimeHours: number; deliveryFee: number; reliabilityPct: number; score: number; strengths: string[]; weaknesses: string[] };
+type Offer = { offerId: string; supplierId: string; supplierName: string; packLabel: string; packQty: number; packPrice: number; unitPrice: number; inStock: boolean; leadTimeHours: number; deliveryFee: number; reliabilityPct: number; score: number; packs: number; goodsEur: number; totalCostEur: number; underMin: boolean; strengths: string[]; weaknesses: string[] };
 type D = { product: { name: string; baseUnit: string }; stock: { quantity: number; daysLeft: number | null; status: 'ok' | 'bas' | 'critique'; targetLevel: number | null } | null; neededQty: number; ranked: Offer[]; recommended?: Offer; headline: string; justification: string[] };
 
 export default function Compare() {
@@ -43,7 +43,7 @@ export default function Compare() {
 
       <div className="card !p-0 overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="px-4 py-2">Fournisseur</th><th className="px-4 py-2">Conditionnement</th><th className="px-4 py-2 text-right">Prix</th><th className="px-4 py-2 text-right">Prix / {unit}</th><th className="px-4 py-2">Livraison</th><th className="px-4 py-2">Stock</th><th className="px-4 py-2 text-right">Fiabilité</th><th className="px-4 py-2 text-right">Score</th><th className="px-4 py-2"></th></tr></thead>
+          <thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="px-4 py-2">Fournisseur</th><th className="px-4 py-2">Conditionnement</th><th className="px-4 py-2 text-right">Prix</th><th className="px-4 py-2 text-right">Prix / {unit}</th><th className="px-4 py-2 text-right">Coût total</th><th className="px-4 py-2">Livraison</th><th className="px-4 py-2">Stock</th><th className="px-4 py-2 text-right">Fiabilité</th><th className="px-4 py-2 text-right">Score</th><th className="px-4 py-2"></th></tr></thead>
           <tbody className="divide-y divide-stone-100">
             {data.ranked.map((o) => (
               <tr key={o.offerId} className={o.offerId === data.recommended?.offerId ? 'bg-brand-50/50' : ''}>
@@ -51,6 +51,12 @@ export default function Compare() {
                 <td className="px-4 py-3 text-stone-600">{o.packLabel}</td>
                 <td className="px-4 py-3 text-right">{fmtEur(o.packPrice)}</td>
                 <td className="px-4 py-3 text-right font-bold">{fmtEur(o.unitPrice)}</td>
+                {/* Chantier 3 (audit B8) : le vrai coût pour la quantité demandée — livraison et minimum inclus. */}
+                <td className="px-4 py-3 text-right">
+                  <p className="font-semibold">{fmtEur(o.totalCostEur)}</p>
+                  <p className="text-[10px] text-stone-500">{o.deliveryFee ? `dont ${fmtEur(o.deliveryFee)} de livraison` : 'livraison offerte'} · {o.packs} × {o.packLabel}</p>
+                  {o.underMin && <p className="text-[10px] text-amber-700">⚠ sous le minimum de commande</p>}
+                </td>
                 <td className="px-4 py-3">{o.leadTimeHours <= 24 ? '24h' : `${Math.round(o.leadTimeHours / 24)} jours`}{o.deliveryFee ? <span className="text-xs text-stone-500"> +{fmtEur(o.deliveryFee, 0)}</span> : ''}</td>
                 <td className="px-4 py-3">{o.inStock ? '🟢' : '🔴'}</td>
                 <td className="px-4 py-3 text-right">{o.reliabilityPct} %</td>
@@ -60,6 +66,7 @@ export default function Compare() {
             ))}
           </tbody>
         </table>
+        {data.ranked.length > 0 && <p className="px-4 pb-3 text-[11px] text-stone-400">Coût total = pour {data.neededQty} {unit} : colis + livraison{data.ranked.some((o) => o.underMin) ? ', minimum de commande inclus s’il n’est pas atteint' : ''}.</p>}
         {data.ranked.length === 0 && <p className="p-6 text-sm text-stone-500">Aucun fournisseur ne propose ce produit. Ajoutez un prix depuis la fiche d’un <Link to="/app/fournisseurs" className="underline">fournisseur</Link>.</p>}
       </div>
       <PriceHistory productId={productId!} unit={unit} />

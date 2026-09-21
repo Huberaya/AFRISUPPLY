@@ -101,10 +101,20 @@ export function alertsFromStock(stocks: StockSnapshot[], today = new Date()): En
       });
       continue;
     }
+    // Chantier 4 (audit) — livraison couvrante : une commande en cours qui arrive AVANT la rupture
+    // prévue couvre le creux → l'alerte de rupture ne doit PAS partir (critère de validation).
+    const covers = s.nextDeliveryInDays !== undefined && s.nextDeliveryInDays !== null
+      && days !== null && s.nextDeliveryInDays <= days;
+    if (covers) continue;
+    // Sinon la livraison reste un contexte utile : tardive (« après la rupture ») ou non datable.
+    const deliveryNote = s.nextDeliveryInDays === undefined || s.nextDeliveryInDays === null ? ''
+      : days !== null && s.nextDeliveryInDays > days
+        ? ` Votre commande arrive dans ${s.nextDeliveryInDays} j, après la rupture prévue.`
+        : ` Une commande arrive dans ${s.nextDeliveryInDays} j.`;
     if (status === 'critique') {
-      const reason = s.quantity <= s.criticalLevel
+      const reason = (s.quantity <= s.criticalLevel
         ? `Stock actuel ${fmtQty(s.quantity, s.unit)}, sous votre seuil critique de ${fmtQty(s.criticalLevel, s.unit)}.`
-        : `Stock actuel ${fmtQty(s.quantity, s.unit)} pour une consommation d'environ ${fmtQty(s.avgDailyUse, s.unit)}/jour : rupture dans ~${days} jour${days && days > 1 ? 's' : ''}.`;
+        : `Stock actuel ${fmtQty(s.quantity, s.unit)} pour une consommation d'environ ${fmtQty(s.avgDailyUse, s.unit)}/jour : rupture dans ~${days} jour${days && days > 1 ? 's' : ''}.`) + deliveryNote;
       out.push({
         dedupeKey: `rupture:${s.productId}:${dayKey}`, kind: 'rupture', severity: 'red',
         title: `🔴 Rupture imminente — ${s.productName}`, message: reason, productId: s.productId,
@@ -114,9 +124,9 @@ export function alertsFromStock(stocks: StockSnapshot[], today = new Date()): En
       out.push({
         dedupeKey: `stock_bas:${s.productId}:${dayKey}`, kind: 'stock_bas', severity: 'orange',
         title: `🟠 Stock bas — ${s.productName}`,
-        message: days !== null
+        message: (days !== null
           ? `Il vous reste environ ${days} jours de ${s.productName.toLowerCase()} (${fmtQty(s.quantity, s.unit)}). Pensez à commander.`
-          : `Stock de ${s.productName.toLowerCase()} à ${fmtQty(s.quantity, s.unit)}, proche du seuil critique.`,
+          : `Stock de ${s.productName.toLowerCase()} à ${fmtQty(s.quantity, s.unit)}, proche du seuil critique.`) + deliveryNote,
         productId: s.productId, actionUrl: `/stock`, payload: { quantity: s.quantity, daysLeft: days },
       });
     }
@@ -191,47 +201,73 @@ export interface OfferForComparison {
   offerId: string; supplierId: string; supplierName: string; packLabel: string; packQty: number; packPrice: number;
   unitPrice: number; inStock: boolean; leadTimeHours: number; deliveryFee: number; minOrder: number; reliabilityPct: number;
 }
+export interface RankedOffer extends OfferForComparison {
+  score: number; priceScore: number; delayScore: number; reliabilityScore: number;
+  /** Chantier 3 (audit B8) : dimensionnement pour la quantité demandée. */
+  packs: number;
+  goodsEur: number;
+  /** Le vrai coût : colis + livraison, minimum de commande facturé s'il n'est pas atteint. */
+  totalCostEur: number;
+  underMin: boolean;
+  strengths: string[]; weaknesses: string[];
+}
 export interface ComparisonResult {
-  ranked: (OfferForComparison & { score: number; priceScore: number; delayScore: number; reliabilityScore: number; strengths: string[]; weaknesses: string[] })[];
-  recommended?: ComparisonResult['ranked'][number];
+  ranked: RankedOffer[];
+  recommended?: RankedOffer;
   headline: string;
   justification: string[];
 }
 
 export function compareOffers(offers: OfferForComparison[], ctx: { daysOfStockLeft: number | null; neededQty: number; unit: string }): ComparisonResult {
   if (!offers.length) return { ranked: [], headline: 'Aucune offre disponible', justification: [] };
-  const minPrice = Math.min(...offers.map((o) => o.unitPrice));
-  const maxPrice = Math.max(...offers.map((o) => o.unitPrice));
+  const need = ctx.neededQty > 0 ? ctx.neededQty : 1;
+  // Chantier 3 (audit B8) : le score se base sur le COÛT TOTAL pour la quantité demandée
+  // (colis × prix + livraison) — pas seulement le prix unitaire. Sous le minimum de commande,
+  // le fournisseur facture le minimum : c'est le coût réel, avec une pénalité explicite.
+  const sized = offers.map((o) => {
+    const deliveryFee = Number(o.deliveryFee) || 0;
+    const minOrder = Number(o.minOrder) || 0;
+    const packs = Math.max(1, Math.ceil(need / (o.packQty || 1)));
+    const goodsEur = Math.round(packs * o.packPrice * 100) / 100;
+    const underMin = minOrder > 0 && goodsEur < minOrder;
+    const totalCostEur = Math.round((Math.max(goodsEur, minOrder) + deliveryFee) * 100) / 100;
+    return { ...o, deliveryFee, minOrder, packs, goodsEur, totalCostEur, underMin };
+  });
+  const minTotal = Math.min(...sized.map((o) => o.totalCostEur));
+  const maxTotal = Math.max(...sized.map((o) => o.totalCostEur));
   const urgencyHours = ctx.daysOfStockLeft !== null ? Math.max(0, ctx.daysOfStockLeft * 24) : Infinity;
 
-  const ranked = offers.map((o) => {
-    const priceScore = maxPrice === minPrice ? 100 : Math.round(100 - ((o.unitPrice - minPrice) / (maxPrice - minPrice)) * 100);
+  const ranked = sized.map((o) => {
+    const priceScore = maxTotal === minTotal ? 100 : Math.round(100 - ((o.totalCostEur - minTotal) / (maxTotal - minTotal)) * 100);
     const tooLate = o.leadTimeHours > urgencyHours;
     const delayScore = tooLate ? 0 : Math.max(0, Math.round(100 - (o.leadTimeHours / 168) * 100));
     const reliabilityScore = Math.round(o.reliabilityPct);
     const stockPenalty = o.inStock ? 1 : 0.2;
-    const score = Math.round((priceScore * 0.5 + delayScore * 0.3 + reliabilityScore * 0.2) * stockPenalty);
+    const minPenalty = o.underMin ? 0.9 : 1; // pénalité sous-minimum (audit B8)
+    const score = Math.round((priceScore * 0.5 + delayScore * 0.3 + reliabilityScore * 0.2) * stockPenalty * minPenalty);
     const strengths: string[] = []; const weaknesses: string[] = [];
-    if (o.unitPrice === minPrice) strengths.push('Prix le plus bas du panel');
+    if (o.totalCostEur === minTotal) strengths.push('Coût total le plus bas du panel');
+    if (!o.deliveryFee) strengths.push('Livraison offerte');
     if (o.leadTimeHours <= 24) strengths.push('Livraison sous 24 h');
     if (o.reliabilityPct >= 90) strengths.push(`Fiabilité ${o.reliabilityPct.toFixed(0)} %`);
     if (!o.inStock) weaknesses.push('Rupture chez le fournisseur');
     if (tooLate) weaknesses.push(`Délai de ${Math.round(o.leadTimeHours / 24)} j incompatible avec votre stock (${ctx.daysOfStockLeft} j restants)`);
-    if (o.unitPrice === maxPrice && maxPrice !== minPrice) weaknesses.push('Prix le plus élevé du panel');
+    if (o.underMin) weaknesses.push(`Sous le minimum de commande (${fmtEur(o.minOrder)}) — à regrouper avec d'autres besoins`);
+    if (o.totalCostEur === maxTotal && maxTotal !== minTotal) weaknesses.push('Coût total le plus élevé du panel');
     if (o.reliabilityPct < 80) weaknesses.push('Fiabilité en dessous de 80 %');
     return { ...o, score, priceScore, delayScore, reliabilityScore, strengths, weaknesses };
   }).sort((a, b) => b.score - a.score);
 
   const best = ranked[0];
-  const cheapest = ranked.find((o) => o.unitPrice === minPrice)!;
+  const cheapest = [...ranked].sort((a, b) => a.totalCostEur - b.totalCostEur)[0];
+  const withFee = (o: RankedOffer) => `${fmtEur(o.totalCostEur)}${o.deliveryFee ? ` dont ${fmtEur(o.deliveryFee)} de livraison` : ''}`;
   const justification: string[] = [];
-  justification.push(`${best.supplierName} obtient le meilleur score global (${best.score}/100) en combinant prix (${fmtEur(best.unitPrice)}/${ctx.unit}), délai (${Math.round(best.leadTimeHours / 24)} j) et fiabilité (${best.reliabilityPct.toFixed(0)} %).`);
+  justification.push(`${best.supplierName} obtient le meilleur score global (${best.score}/100) en combinant coût total pour ${fmtQty(need, ctx.unit)} (${withFee(best)}, soit ${fmtEur(best.unitPrice)}/${ctx.unit}), délai (${Math.round(best.leadTimeHours / 24)} j) et fiabilité (${best.reliabilityPct.toFixed(0)} %).`);
   if (cheapest.offerId !== best.offerId) {
     const why = cheapest.weaknesses[0] ?? 'un score global inférieur';
-    justification.push(`${cheapest.supplierName} est moins cher (${fmtEur(cheapest.unitPrice)}/${ctx.unit}) mais présente ${why.charAt(0).toLowerCase() + why.slice(1)}.`);
+    justification.push(`${cheapest.supplierName} est moins cher au total (${withFee(cheapest)}) mais présente ${why.charAt(0).toLowerCase() + why.slice(1)}.`);
   }
-  const packs = Math.max(1, Math.ceil(ctx.neededQty / best.packQty));
-  justification.push(`Pour couvrir ${fmtQty(ctx.neededQty, ctx.unit)} : ${packs} × ${best.packLabel} = ${fmtEur(packs * best.packPrice + best.deliveryFee)}${best.deliveryFee ? ` (dont ${fmtEur(best.deliveryFee)} de livraison)` : ''}.`);
+  justification.push(`Pour couvrir ${fmtQty(need, ctx.unit)} : ${best.packs} × ${best.packLabel} = ${fmtEur(best.totalCostEur)}${best.deliveryFee ? ` (dont ${fmtEur(best.deliveryFee)} de livraison)` : ''}${best.underMin ? `, minimum de commande ${fmtEur(best.minOrder)} non atteint` : ''}.`);
 
   return { ranked, recommended: best, headline: `Meilleur choix : ${best.supplierName}`, justification };
 }
@@ -239,24 +275,167 @@ export function compareOffers(offers: OfferForComparison[], ctx: { daysOfStockLe
 // -------------------------------------------------------------
 // Recettes : coût matière & marge
 // -------------------------------------------------------------
+export interface CostLine { productId: string; productName: string; quantity: number; unit: string; unitPrice: number; cost: number; priced: boolean }
+
+export interface RecipeCostResult {
+  lines: CostLine[];
+  /** Coût des seuls ingrédients cotés — à afficher « ≥ X € » si status 'incomplet' (jamais « 0,00 € »). */
+  total: number;
+  /** Noms des ingrédients sans prix connu. */
+  unpriced: string[];
+  /** 'incomplet' dès qu'un ingrédient est sans prix : la marge réelle ne peut pas être calculée. */
+  status: 'complet' | 'incomplet';
+  /** Part des ingrédients dont le prix est connu (0..1). */
+  coverage: number;
+  /** Faux si plus de 30 % des ingrédients sont sans prix : le total n'est pas annonçable en chiffre (règle IA, chantier 2). */
+  reliable: boolean;
+}
+
 export function recipeCost(
   ingredients: { productId: string; productName: string; quantity: number; unit: string }[],
   lastUnitPrices: Map<string, number>,
-) {
+): RecipeCostResult {
   const lines = ingredients.map((i) => {
     const unitPrice = lastUnitPrices.get(i.productId) ?? 0;
     return { ...i, unitPrice, cost: Math.round(i.quantity * unitPrice * 1000) / 1000, priced: lastUnitPrices.has(i.productId) };
   });
   const total = Math.round(lines.reduce((a, l) => a + l.cost, 0) * 100) / 100;
-  return { lines, total, unpriced: lines.filter((l) => !l.priced).map((l) => l.productName) };
+  const unpriced = lines.filter((l) => !l.priced).map((l) => l.productName);
+  const coverage = lines.length ? (lines.length - unpriced.length) / lines.length : 1;
+  return {
+    lines, total, unpriced,
+    status: unpriced.length ? 'incomplet' : 'complet',
+    coverage: Math.round(coverage * 100) / 100,
+    reliable: coverage >= 0.7,
+  };
 }
 
-export function marginAnalysis(cost: number, sellingPrice: number | null, targetMarginPct = 70) {
-  if (!sellingPrice) return { grossMargin: null, marginPct: null, suggestedPrice: Math.round((cost / (1 - targetMarginPct / 100)) * 10) / 10 };
+export interface MarginAnalysisResult {
+  grossMargin: number | null;
+  marginPct: number | null;
+  suggestedPrice: number | null;
+  /** 'incomplet' quand le coût de référence est partiel : les champs marge restent null (masqués, jamais faux). */
+  status: 'complet' | 'incomplet';
+}
+
+export function marginAnalysis(cost: number, sellingPrice: number | null, targetMarginPct = 70, costComplete = true): MarginAnalysisResult {
+  // Chantier 2 (audit B3/U4) : un coût partiel donnerait une marge FAUSSE (trop haute) et un
+  // « 0,00 € » présenté comme vrai. Coût incomplet ⇒ marge et prix conseillé masqués.
+  if (!costComplete) return { grossMargin: null, marginPct: null, suggestedPrice: null, status: 'incomplet' };
+  if (!sellingPrice) return { grossMargin: null, marginPct: null, suggestedPrice: Math.round((cost / (1 - targetMarginPct / 100)) * 10) / 10, status: 'complet' };
   const grossMargin = Math.round((sellingPrice - cost) * 100) / 100;
   const marginPct = Math.round((grossMargin / sellingPrice) * 1000) / 10;
   const suggestedPrice = marginPct < targetMarginPct ? Math.round((cost / (1 - targetMarginPct / 100)) * 10) / 10 : null;
-  return { grossMargin, marginPct, suggestedPrice };
+  return { grossMargin, marginPct, suggestedPrice, status: 'complet' };
+}
+
+// -------------------------------------------------------------
+// Chantier 2 (audit) — courbe de marge par plat & indice de prix par catégorie
+// -------------------------------------------------------------
+export interface MarginPoint {
+  month: string;                       // 'YYYY-MM'
+  /** Coût matière / portion pour ce mois (prix de l'historique, reportés en avant) — null si un ingrédient est introuvable. */
+  costPerPortion: number | null;
+  marginPct: number | null;
+  grossMarginPerPortion: number | null;
+  portionsSold: number;
+  revenueEur: number;
+}
+
+export interface DishMarginSeries {
+  recipeId: string; name: string; sellingPriceEur: number | null;
+  /** État du coût AUJOURD'HUI : 'incomplet' si des ingrédients sont encore sans prix (courbe partielle). */
+  status: 'complet' | 'incomplet';
+  points: MarginPoint[];
+  portionsSold: number;
+  revenueEur: number;
+}
+
+/** Prix du produit pour un mois : moyenne du mois si cotée, sinon dernier prix connu avant (report). */
+export function priceAtMonth(priceByMonth: Map<string, number>, month: string): number | null {
+  const direct = priceByMonth.get(month);
+  if (direct !== undefined) return direct;
+  let best: string | null = null;
+  for (const m of priceByMonth.keys()) if (m < month && (best === null || m > best)) best = m;
+  return best === null ? null : priceByMonth.get(best)!;
+}
+
+/**
+ * Série de marge d'un plat sur une fenêtre de mois ('YYYY-MM' croissants).
+ * Un mois sans prix connu pour TOUS les ingrédients reste à null (trou dans la courbe) —
+ * jamais une extrapolation silencieuse.
+ */
+export function marginSeries(input: {
+  recipeId: string; name: string;
+  ingredients: { productId: string; productName: string; quantity: number; unit: string }[];
+  sellingPriceEur: number | null;
+  months: string[];
+  portionsByMonth: Map<string, number>;
+  priceByMonth: Map<string, Map<string, number>>; // productId → 'YYYY-MM' → prix moyen du mois
+  currentUnpriced: string[];
+}): DishMarginSeries {
+  const sell = input.sellingPriceEur;
+  let portionsSold = 0; let revenueEur = 0;
+  const points: MarginPoint[] = input.months.map((month) => {
+    const portions = input.portionsByMonth.get(month) ?? 0;
+    portionsSold += portions;
+    const revenue = sell ? Math.round(sell * portions * 100) / 100 : 0;
+    revenueEur = Math.round((revenueEur + revenue) * 100) / 100;
+    let cost: number | null = 0;
+    for (const ing of input.ingredients) {
+      const p = priceAtMonth(input.priceByMonth.get(ing.productId) ?? new Map(), month);
+      if (p === null) { cost = null; break; }
+      cost += ing.quantity * p;
+    }
+    const costPerPortion = cost === null ? null : Math.round(cost * 100) / 100;
+    const grossMarginPerPortion = costPerPortion !== null && sell ? Math.round((sell - costPerPortion) * 100) / 100 : null;
+    const marginPct = grossMarginPerPortion !== null && sell ? Math.round((grossMarginPerPortion / sell) * 1000) / 10 : null;
+    return { month, costPerPortion, marginPct, grossMarginPerPortion, portionsSold: portions, revenueEur: revenue };
+  });
+  return {
+    recipeId: input.recipeId, name: input.name, sellingPriceEur: sell,
+    status: input.currentUnpriced.length ? 'incomplet' : 'complet',
+    points, portionsSold, revenueEur,
+  };
+}
+
+export interface CategoryPriceIndex {
+  category: string;
+  baseMonth: string | null;
+  points: { month: string; index: number | null }[];
+}
+
+/**
+ * Indice de prix par catégorie (type « indice des prix », base = 100 au premier mois avec données).
+ * Pour chaque produit : prix du mois (report en avant) ; l'indice est la moyenne des produits
+ * ayant un prix à la base ET au mois visé. Aucun produit éligible ⇒ index null (trou honnête).
+ */
+export function priceIndexByCategory(input: {
+  months: string[];
+  products: { productId: string; category: string; priceByMonth: Map<string, number> }[];
+}): CategoryPriceIndex[] {
+  const byCat = new Map<string, { productId: string; priceByMonth: Map<string, number> }[]>();
+  for (const p of input.products) {
+    if (!byCat.has(p.category)) byCat.set(p.category, []);
+    byCat.get(p.category)!.push(p);
+  }
+  const out: CategoryPriceIndex[] = [];
+  for (const [category, prods] of [...byCat.entries()].sort()) {
+    const baseMonth = input.months.find((m) => prods.some((p) => priceAtMonth(p.priceByMonth, m) !== null)) ?? null;
+    const points = input.months.map((month) => {
+      if (!baseMonth) return { month, index: null };
+      const ratios: number[] = [];
+      for (const p of prods) {
+        const base = priceAtMonth(p.priceByMonth, baseMonth);
+        const cur = priceAtMonth(p.priceByMonth, month);
+        if (base !== null && base > 0 && cur !== null) ratios.push(cur / base);
+      }
+      const index = ratios.length ? Math.round((ratios.reduce((a, b) => a + b, 0) / ratios.length) * 1000) / 10 : null;
+      return { month, index };
+    });
+    out.push({ category, baseMonth, points });
+  }
+  return out;
 }
 
 /** Fiabilité fournisseur : 100 − pénalités (retards, écarts). */

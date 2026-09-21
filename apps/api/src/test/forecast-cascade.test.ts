@@ -88,7 +88,9 @@ describe('chantier 9 — cascade de prévision', () => {
 
   it('la saisonnalité d’un produit (JSON) s’applique et se lit dans plusieurs formats', () => {
     expect(parseSeasonality('{"months":[7,8],"coef":1.5}')).toEqual({ months: [7, 8], coef: 1.5 });
-    expect(parseSeasonality('[6,9]')).toEqual({ months: [6, 9], coef: 1.3 });
+    // Coef par défaut = celui de la pleine saison (1,2, chantier 4 de l'autre historique) : modeste et
+    // assumé, plutôt qu'un 1,3 sorti de nulle part. Le coefficient explicite de la fiche produit reste roi.
+    expect(parseSeasonality('[6,9]')).toEqual({ months: [6, 9], coef: 1.2 });
     expect(parseSeasonality('saison des pluies')).toBeNull();   // texte libre : aucune invention
     expect(parseSeasonality(null)).toBeNull();
     const rf = forecastRecipes(full, ['r1'], { horizonDays: 7, today });
@@ -96,7 +98,7 @@ describe('chantier 9 — cascade de prévision', () => {
     const [sans] = forecastProducts(rf, [{ recipeId: 'r1', productId: 'riz', quantity: 0.15 }], [stock()], { horizonDays: 7, today });
     expect(avec.seasonCoef).toBe(1.5);
     expect(avec.predictedNeed).toBeGreaterThan(sans.predictedNeed * 1.4);
-    expect(avec.explanation).toMatch(/saisonnalité 1,5|Coefficient de saisonnalité 1.5/);
+    expect(avec.explanation).toMatch(/Saisonnalité 1.5/);   // phrase unique, lisible telle quelle à l'écran
     expect(sans.seasonCoef).toBe(1);
   });
 
