@@ -147,6 +147,7 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - Chantier 26 — Litiges & avoirs (réclamation → réponse grossiste → escalade → arbitrage) : `docs/CHANTIER_26_LITIGES_AVOIRS.md`
 - Chantier 28 — Tarifs par volume (paliers) & prix négociés par restaurant : `docs/CHANTIER_28_TARIFS_VOLUME_NEGOCIES.md`
 - Chantier 19 — Tournées & créneaux de livraison : jours/zones/heure limite/capacité côté grossiste, choix de la date côté restaurant (`docs/CHANTIER_19_TOURNEES_CRENEAUX.md`)
+- Chantier 24 bis — Récurrentes « me demander avant » : brouillon + validation en 1 clic (`docs/CHANTIER_24_BIS_RECURRENTES_A_VALIDER.md`)
 - Chantier 27 — Avis & fiabilité grossiste : note après livraison, réponse du grossiste, badges (`docs/CHANTIER_27_AVIS_FIABILITE.md`)
 - [x] Admin → Prospection : carnet restaurants / fournisseurs (nom, adresse, téléphone, e-mail, contact, statut, relance, import tableur)
 - [x] Chantier 8 : fiabilité prod (Sentry sans SDK, `/statut`, job_runs, rate-limit, en-têtes, audit, RGPD export/suppression, CGV, migrations au déploiement, 12 tests e2e) — `docs/CHANTIER_8_FIABILITE.md`

@@ -5033,6 +5033,7 @@ __export(marketplace_exports, {
   linkVendor: () => linkVendor,
   marketplaceRoutes: () => marketplaceRoutes,
   nextRunOn: () => nextRunOn,
+  notifyVendorNewOrder: () => notifyVendorNewOrder,
   placeVendorOrder: () => placeVendorOrder,
   restaurantZones: () => restaurantZones,
   runRecurringOrders: () => runRecurringOrders
@@ -5113,9 +5114,20 @@ async function placeVendorOrder(rid, vid, userId, input) {
     deliverySlot = first.slots[0] ?? null;
   }
   const reference = await nextOrderReference();
-  const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: "envoyee", channel: "plateforme", sentAt: /* @__PURE__ */ new Date(), routeId, deliverySlot, expectedAt, totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? "marketplace", notes: input.notes, createdBy: userId }).returning();
+  const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: input.draft ? "preparee" : "envoyee", channel: "plateforme", sentAt: input.draft ? null : /* @__PURE__ */ new Date(), routeId, deliverySlot, expectedAt, totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? "marketplace", notes: input.notes, createdBy: userId }).returning();
   const priv = await db.select().from(supplierOffers).where(eq18(supplierOffers.supplierId, link.supplier.id));
   await db.insert(orderLines).values(linesData.map((l) => ({ ...l, orderId: order.id, offerId: priv.find((p) => p.productId === l.productId && p.packLabel === l.packLabel)?.id ?? null })));
+  if (input.draft) {
+    void logOrderEvent(order.id, "note", `Commande pr\xE9par\xE9e (r\xE9currente \xAB \xE0 valider \xBB) \u2014 en attente de votre validation`, "restaurant", { total });
+    return { ok: true, order, total, vendorName: v.name };
+  }
+  await notifyVendorNewOrder(order, linesData.map((l) => ({ packs: l.packs, packLabel: l.packLabel, lineTotalEur: l.lineTotalEur })), v, rid, total, input.source);
+  return { ok: true, order, total, vendorName: v.name };
+}
+async function notifyVendorNewOrder(order, lines, v, rid, total, source) {
+  const db = await getDb();
+  const reference = order.reference;
+  const linesData = lines;
   const [r] = await db.select({ name: restaurants.name, city: restaurants.city }).from(restaurants).where(eq18(restaurants.id, rid));
   if (v.contactEmail) void sendMail({ to: v.contactEmail, subject: `Nouvelle commande ${reference} \u2014 ${r.name}${r.city ? ` (${r.city})` : ""} \u2014 ${eur7(total)}`, text: `Bonjour,
 
@@ -5125,14 +5137,13 @@ Total : ${eur7(total)}
 
 Confirmez ou refusez en un clic : ${APP_URL2()}/fournisseur/commandes
 `, html: `<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${linesData.map((l) => `<li>${l.packs} \xD7 ${l.packLabel} \u2014 ${eur7(Number(l.lineTotalEur))}</li>`).join("")}</ul><p><b>Total : ${eur7(total)}</b></p><p><a href="${APP_URL2()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: "vendor_order" } });
-  void logOrderEvent(order.id, "sent", `Commande envoy\xE9e \xE0 ${v.name}${input.source === "recurrente" ? " (commande r\xE9currente)" : input.source === "recommande" ? " (recommande)" : ""}`, "restaurant", { total });
+  void logOrderEvent(order.id, "sent", `Commande envoy\xE9e \xE0 ${v.name}${source === "recurrente" ? " (commande r\xE9currente)" : source === "recommande" ? " (recommande)" : ""}`, "restaurant", { total });
   const phone = v.whatsapp || v.contactPhone;
-  if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? "whatsapp" : "sms", kind: "order.new", orderId: order.id, vendorId: vid, restaurantId: rid, body: `AFRISUPPLY \u2014 Nouvelle commande ${reference}
+  if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? "whatsapp" : "sms", kind: "order.new", orderId: order.id, vendorId: v.id, restaurantId: rid, body: `AFRISUPPLY \u2014 Nouvelle commande ${reference}
 ${r.name}${r.city ? ` (${r.city})` : ""} \u2014 ${eur7(total)}
 ${linesData.slice(0, 6).map((l) => `\u2022 ${l.packs} \xD7 ${l.packLabel}`).join("\n")}${linesData.length > 6 ? `
 \u2026 +${linesData.length - 6} lignes` : ""}
 Confirmer / refuser : ${APP_URL2()}/fournisseur/commandes` });
-  return { ok: true, order, total, vendorName: v.name };
 }
 function nextRunOn(weekdays, from = /* @__PURE__ */ new Date()) {
   if (!weekdays.length) return null;
@@ -5150,11 +5161,21 @@ async function runRecurringOrders(now = /* @__PURE__ */ new Date()) {
   const out = [];
   for (const r of due) {
     if (r.lastRunAt && r.lastRunAt.toISOString().slice(0, 10) === today) continue;
-    const res = await placeVendorOrder(r.restaurantId, r.vendorId, r.createdBy, { lines: r.lines, notes: r.notes ?? void 0, source: "recurrente" });
+    const res = await placeVendorOrder(r.restaurantId, r.vendorId, r.createdBy, { lines: r.lines, notes: r.notes ?? void 0, source: "recurrente", draft: r.mode === "confirm" });
     const next = nextRunOn(r.weekdays, now);
     if (res.ok) {
       await db.update(recurringOrders).set({ lastRunAt: now, lastOrderId: res.order.id, nextRunOn: next }).where(eq18(recurringOrders.id, r.id));
       out.push({ id: r.id, name: r.name, ok: true, reference: res.order.reference });
+      if (r.mode === "confirm") {
+        const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq18(users.id, restaurantMembers.userId)).where(and16(eq18(restaurantMembers.restaurantId, r.restaurantId), inArray7(restaurantMembers.role, ["owner", "manager"])));
+        for (const x of rcpts) void sendMail({ to: x.email, subject: `\u2705 \xC0 valider : commande \xAB ${r.name} \xBB (${res.order.reference}) \u2014 ${eur7(res.total)}`, text: `Bonjour,
+
+Votre commande r\xE9currente \xAB ${r.name} \xBB chez ${res.vendorName} est pr\xEAte (${eur7(res.total)}). Elle ne partira qu'apr\xE8s votre validation.
+
+Valider ou modifier : ${APP_URL2()}/app/achats?validate=${res.order.id}
+
+AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre commande r\xE9currente \xAB <b>${r.name}</b> \xBB chez ${res.vendorName} est pr\xEAte (<b>${eur7(res.total)}</b>). Elle ne partira qu'apr\xE8s votre validation.</p><p><a href="${APP_URL2()}/app/achats?validate=${res.order.id}" style="background:#0f766e;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Valider la commande</a></p>` });
+      }
     } else {
       await db.update(recurringOrders).set({ nextRunOn: next }).where(eq18(recurringOrders.id, r.id));
       out.push({ id: r.id, name: r.name, ok: false, error: res.error });
@@ -5250,6 +5271,20 @@ var init_marketplace = __esm({
       const res = await placeVendorOrder(rid, vid, user.id, body3.data);
       if (!res.ok) return c.json({ error: res.error }, res.status);
       return c.json({ order: res.order, message: `Commande ${res.order.reference} envoy\xE9e \xE0 ${res.vendorName} (${eur7(res.total)})${res.order.routeId ? ` \u2014 livraison pr\xE9vue le ${(/* @__PURE__ */ new Date(`${res.order.expectedAt}T12:00:00Z`)).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}${res.order.deliverySlot ? ` (${res.order.deliverySlot})` : ""}` : ""}. Vous serez pr\xE9venu d\xE8s confirmation.` }, 201);
+    });
+    marketplaceRoutes.post("/marketplace/orders/:id/send", async (c) => {
+      const rid = c.get("restaurantId");
+      const db = await getDb();
+      const [o] = await db.select().from(orders).where(and16(eq18(orders.id, c.req.param("id")), eq18(orders.restaurantId, rid)));
+      if (!o?.vendorId) return c.json({ error: "Commande plateforme introuvable" }, 404);
+      if (o.status !== "preparee") return c.json({ error: `Commande d\xE9j\xE0 ${o.status}` }, 409);
+      const [v] = await db.select().from(vendors).where(eq18(vendors.id, o.vendorId));
+      if (!v || v.status !== "actif") return c.json({ error: "Fournisseur inactif" }, 400);
+      const ls = await db.select().from(orderLines).where(eq18(orderLines.orderId, o.id));
+      const [upd] = await db.update(orders).set({ status: "envoyee", sentAt: /* @__PURE__ */ new Date() }).where(and16(eq18(orders.id, o.id), eq18(orders.status, "preparee"))).returning();
+      if (!upd) return c.json({ error: "Commande d\xE9j\xE0 envoy\xE9e" }, 409);
+      await notifyVendorNewOrder(upd, ls.map((l) => ({ packs: n6(l.packs), packLabel: l.packLabel, lineTotalEur: String(l.lineTotalEur) })), v, rid, n6(upd.totalEur), "recurrente");
+      return c.json({ order: upd, message: `Commande ${upd.reference} envoy\xE9e \xE0 ${v.name}.` });
     });
     marketplaceRoutes.get("/marketplace/vendors/:id/slots", async (c) => {
       const rid = c.get("restaurantId");
@@ -6845,7 +6880,7 @@ vendorRoutes2.get("/vendor/orders", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const status = c.req.query("status");
-  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings }).from(orders).innerJoin(restaurants, eq21(restaurants.id, orders.restaurantId)).where(status ? and19(eq21(orders.vendorId, vid), eq21(orders.status, status)) : eq21(orders.vendorId, vid)).orderBy(desc9(orders.createdAt)).limit(100);
+  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings }).from(orders).innerJoin(restaurants, eq21(restaurants.id, orders.restaurantId)).where(and19(eq21(orders.vendorId, vid), sql15`${orders.status} not in ('brouillon','preparee')`, status ? eq21(orders.status, status) : void 0)).orderBy(desc9(orders.createdAt)).limit(100);
   const ids = rows.map((r) => r.order.id);
   const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq21(products.id, orderLines.productId)).where(inArray9(orderLines.orderId, ids)) : [];
   return c.json({ orders: rows.map((r) => ({ ...r.order, proofPhoto: void 0, proofSignature: void 0, restaurantName: r.restaurantName, city: r.city, address: r.address, restaurantPhone: r.settings?.notifyPhone ?? null, whatsappLink: waLink(r.settings?.notifyPhone, `Bonjour ${r.restaurantName}, au sujet de votre commande ${r.order.reference} via AFRISUPPLY : `), lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });

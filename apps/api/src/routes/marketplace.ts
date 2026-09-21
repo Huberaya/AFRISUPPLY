@@ -94,7 +94,7 @@ marketplaceRoutes.post('/marketplace/vendors/:id/link', async (c) => {
 
 /** Commande plateforme : passe par le fournisseur privé lié, statut « envoyee » immédiat, le fournisseur confirme dans son espace. */
 /** Cœur de la commande plateforme (utilisé par le panier, « Recommander » et les commandes récurrentes). */
-export async function placeVendorOrder(rid: string, vid: string, userId: string | null, input: { lines: { vendorOfferId: string; packs: number }[]; notes?: string; source?: string; skipMin?: boolean; override?: boolean; routeId?: string; expectedAt?: string; deliverySlot?: string }): Promise<{ ok: true; order: typeof orders.$inferSelect; total: number; vendorName: string } | { ok: false; error: string; status: number }> {
+export async function placeVendorOrder(rid: string, vid: string, userId: string | null, input: { lines: { vendorOfferId: string; packs: number }[]; notes?: string; source?: string; skipMin?: boolean; override?: boolean; routeId?: string; expectedAt?: string; deliverySlot?: string; draft?: boolean }): Promise<{ ok: true; order: typeof orders.$inferSelect; total: number; vendorName: string } | { ok: false; error: string; status: number }> {
   const db = await getDb();
   const link = await linkVendor(rid, vid); if (!link) return { ok: false, error: 'Fournisseur introuvable', status: 404 };
   const [v] = await db.select().from(vendors).where(eq(vendors.id, vid)); if (v.status !== 'actif') return { ok: false, error: `${v.name} n'est plus actif sur la plateforme`, status: 400 };
@@ -133,15 +133,23 @@ export async function placeVendorOrder(rid: string, vid: string, userId: string 
     expectedAt = first.date; routeId = first.routeId; deliverySlot = first.slots[0] ?? null; // créneau le plus proche par défaut
   }
   const reference = await nextOrderReference();
-  const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: 'envoyee', channel: 'plateforme', sentAt: new Date(), routeId, deliverySlot, expectedAt, totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? 'marketplace', notes: input.notes, createdBy: userId }).returning();
+  const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: input.draft ? 'preparee' : 'envoyee', channel: 'plateforme', sentAt: input.draft ? null : new Date(), routeId, deliverySlot, expectedAt, totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? 'marketplace', notes: input.notes, createdBy: userId }).returning();
   const priv = await db.select().from(supplierOffers).where(eq(supplierOffers.supplierId, link.supplier.id));
   await db.insert(orderLines).values(linesData.map((l) => ({ ...l, orderId: order.id, offerId: priv.find((p) => p.productId === l.productId && p.packLabel === l.packLabel)?.id ?? null })));
+  if (input.draft) { void logOrderEvent(order.id, 'note', `Commande préparée (récurrente « à valider ») — en attente de votre validation`, 'restaurant', { total }); return { ok: true, order, total, vendorName: v.name }; }
+  await notifyVendorNewOrder(order, linesData.map((l) => ({ packs: l.packs, packLabel: l.packLabel, lineTotalEur: l.lineTotalEur })), v, rid, total, input.source);
+  return { ok: true, order, total, vendorName: v.name };
+}
+
+/** Notifie le grossiste (e-mail + WhatsApp/SMS) et journalise l'envoi. Utilisé à la création et à la validation d'un brouillon récurrent. */
+export async function notifyVendorNewOrder(order: typeof orders.$inferSelect, lines: { packs: number; packLabel: string | null; lineTotalEur: string }[], v: typeof vendors.$inferSelect, rid: string, total: number, source?: string) {
+  const db = await getDb(); const reference = order.reference;
+  const linesData = lines;
   const [r] = await db.select({ name: restaurants.name, city: restaurants.city }).from(restaurants).where(eq(restaurants.id, rid));
   if (v.contactEmail) void sendMail({ to: v.contactEmail, subject: `Nouvelle commande ${reference} — ${r.name}${r.city ? ` (${r.city})` : ''} — ${eur(total)}`, text: `Bonjour,\n\n${r.name} vous passe commande via AFRISUPPLY :\n${linesData.map((l) => `• ${l.packs} × ${l.packLabel} — ${eur(Number(l.lineTotalEur))}`).join('\n')}\nTotal : ${eur(total)}\n\nConfirmez ou refusez en un clic : ${APP_URL()}/fournisseur/commandes\n`, html: `<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${linesData.map((l) => `<li>${l.packs} × ${l.packLabel} — ${eur(Number(l.lineTotalEur))}</li>`).join('')}</ul><p><b>Total : ${eur(total)}</b></p><p><a href="${APP_URL()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: 'vendor_order' } });
-  void logOrderEvent(order.id, 'sent', `Commande envoyée à ${v.name}${input.source === 'recurrente' ? ' (commande récurrente)' : input.source === 'recommande' ? ' (recommande)' : ''}`, 'restaurant', { total });
+  void logOrderEvent(order.id, 'sent', `Commande envoyée à ${v.name}${source === 'recurrente' ? ' (commande récurrente)' : source === 'recommande' ? ' (recommande)' : ''}`, 'restaurant', { total });
   const phone = v.whatsapp || v.contactPhone;
-  if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? 'whatsapp' : 'sms', kind: 'order.new', orderId: order.id, vendorId: vid, restaurantId: rid, body: `AFRISUPPLY — Nouvelle commande ${reference}\n${r.name}${r.city ? ` (${r.city})` : ''} — ${eur(total)}\n${linesData.slice(0, 6).map((l) => `• ${l.packs} × ${l.packLabel}`).join('\n')}${linesData.length > 6 ? `\n… +${linesData.length - 6} lignes` : ''}\nConfirmer / refuser : ${APP_URL()}/fournisseur/commandes` });
-  return { ok: true, order, total, vendorName: v.name };
+  if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? 'whatsapp' : 'sms', kind: 'order.new', orderId: order.id, vendorId: v.id, restaurantId: rid, body: `AFRISUPPLY — Nouvelle commande ${reference}\n${r.name}${r.city ? ` (${r.city})` : ''} — ${eur(total)}\n${linesData.slice(0, 6).map((l) => `• ${l.packs} × ${l.packLabel}`).join('\n')}${linesData.length > 6 ? `\n… +${linesData.length - 6} lignes` : ''}\nConfirmer / refuser : ${APP_URL()}/fournisseur/commandes` });
 }
 
 marketplaceRoutes.post('/marketplace/vendors/:id/orders', async (c) => {
@@ -156,6 +164,18 @@ marketplaceRoutes.post('/marketplace/vendors/:id/orders', async (c) => {
   if (!body.success) return c.json({ error: `Données invalides : chaque ligne attend un nombre de colis entre 1 et ${MAX_PACKS_PER_LINE} (panier de ${MAX_ORDER_LINES} lignes maximum).` }, 400);
   const res = await placeVendorOrder(rid, vid, user.id, body.data); if (!res.ok) return c.json({ error: res.error }, res.status as 400);
   return c.json({ order: res.order, message: `Commande ${res.order.reference} envoyée à ${res.vendorName} (${eur(res.total)})${res.order.routeId ? ` — livraison prévue le ${new Date(`${res.order.expectedAt}T12:00:00Z`).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}${res.order.deliverySlot ? ` (${res.order.deliverySlot})` : ''}` : ''}. Vous serez prévenu dès confirmation.` }, 201);
+});
+
+/** Chantier 24 bis : envoyer au grossiste une commande plateforme préparée (récurrente « me demander avant »). */
+marketplaceRoutes.post('/marketplace/orders/:id/send', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid))); if (!o?.vendorId) return c.json({ error: 'Commande plateforme introuvable' }, 404);
+  if (o.status !== 'preparee') return c.json({ error: `Commande déjà ${o.status}` }, 409);
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, o.vendorId)); if (!v || v.status !== 'actif') return c.json({ error: 'Fournisseur inactif' }, 400);
+  const ls = await db.select().from(orderLines).where(eq(orderLines.orderId, o.id));
+  const [upd] = await db.update(orders).set({ status: 'envoyee', sentAt: new Date() }).where(and(eq(orders.id, o.id), eq(orders.status, 'preparee'))).returning(); if (!upd) return c.json({ error: 'Commande déjà envoyée' }, 409);
+  await notifyVendorNewOrder(upd, ls.map((l) => ({ packs: n(l.packs), packLabel: l.packLabel, lineTotalEur: String(l.lineTotalEur) })), v, rid, n(upd.totalEur), 'recurrente');
+  return c.json({ order: upd, message: `Commande ${upd.reference} envoyée à ${v.name}.` });
 });
 
 /** Chantier 19 : prochaines dates/créneaux de livraison de ce grossiste pour mon restaurant. */
@@ -252,9 +272,13 @@ export async function runRecurringOrders(now = new Date()) {
   const out: { id: string; name: string; ok: boolean; reference?: string; error?: string }[] = [];
   for (const r of due) {
     if (r.lastRunAt && r.lastRunAt.toISOString().slice(0, 10) === today) continue;
-    const res = await placeVendorOrder(r.restaurantId, r.vendorId, r.createdBy, { lines: r.lines, notes: r.notes ?? undefined, source: 'recurrente' });
+    const res = await placeVendorOrder(r.restaurantId, r.vendorId, r.createdBy, { lines: r.lines, notes: r.notes ?? undefined, source: 'recurrente', draft: r.mode === 'confirm' });
     const next = nextRunOn(r.weekdays, now);
-    if (res.ok) { await db.update(recurringOrders).set({ lastRunAt: now, lastOrderId: res.order.id, nextRunOn: next }).where(eq(recurringOrders.id, r.id)); out.push({ id: r.id, name: r.name, ok: true, reference: res.order.reference }); }
+    if (res.ok) { await db.update(recurringOrders).set({ lastRunAt: now, lastOrderId: res.order.id, nextRunOn: next }).where(eq(recurringOrders.id, r.id)); out.push({ id: r.id, name: r.name, ok: true, reference: res.order.reference });
+      if (r.mode === 'confirm') { // « me demander avant » : e-mail avec lien de validation en 1 clic
+        const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, r.restaurantId), inArray(restaurantMembers.role, ['owner', 'manager'])));
+        for (const x of rcpts) void sendMail({ to: x.email, subject: `✅ À valider : commande « ${r.name} » (${res.order.reference}) — ${eur(res.total)}`, text: `Bonjour,\n\nVotre commande récurrente « ${r.name} » chez ${res.vendorName} est prête (${eur(res.total)}). Elle ne partira qu'après votre validation.\n\nValider ou modifier : ${APP_URL()}/app/achats?validate=${res.order.id}\n\nAFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre commande récurrente « <b>${r.name}</b> » chez ${res.vendorName} est prête (<b>${eur(res.total)}</b>). Elle ne partira qu'après votre validation.</p><p><a href="${APP_URL()}/app/achats?validate=${res.order.id}" style="background:#0f766e;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Valider la commande</a></p>` });
+      } }
     else { await db.update(recurringOrders).set({ nextRunOn: next }).where(eq(recurringOrders.id, r.id)); out.push({ id: r.id, name: r.name, ok: false, error: res.error });
       const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, r.restaurantId), inArray(restaurantMembers.role, ['owner', 'manager'])));
       for (const x of rcpts) void sendMail({ to: x.email, subject: `⚠️ Commande récurrente « ${r.name} » non envoyée`, text: `La commande récurrente « ${r.name} » n'a pas pu être envoyée aujourd'hui : ${res.error}. Vérifiez-la dans Achats → Récurrentes.`, html: `<p>La commande récurrente « <b>${r.name}</b> » n'a pas pu être envoyée aujourd'hui : ${res.error}.</p><p><a href="${APP_URL()}/app/achats">Vérifier</a></p>`, tags: { type: 'recurring' } }); }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Send, PackageCheck, Copy, MessageCircle, Mail, Pencil, XCircle, AlertTriangle } from 'lucide-react';
 import { api, ApiError, fmtEur, fmtQty, fmtDate, STATUS_LABEL, openPdf } from '../lib/api';
 import { useApi } from '../lib/useApi';
@@ -43,8 +43,10 @@ export default function Orders() {
   const [editing, setEditing] = useState<O | null>(null); const [packs, setPacks] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
   // Chantier 1 (audit) : anti double-clic + affichage des refus serveur (déjà réceptionnée, quantité invraisemblable)
-  const [recvBusy, setRecvBusy] = useState(false);
+  const [recvBusy, setRecvBusy] = useState(false); const [busy, setBusy] = useState(false);
   const [recvErr, setRecvErr] = useState<{ message: string; code?: string } | null>(null);
+  const [sp, setSp] = useSearchParams(); const validateId = sp.get('validate');
+  const sendPlatform = async (o: O) => { setBusy(true); try { const r = await api<{ message: string }>(`/marketplace/orders/${o.id}/send`, { method: 'POST' }); setFlash(r.message); if (validateId) setSp({}); await reload(); } catch (e) { setFlash((e as Error).message); } finally { setBusy(false); } };
   const openSend = async (o: O) => { const msg = await api<Msg>(`/orders/${o.id}/message`); setSending({ o, msg }); setCopied(false); };
   const markSent = async (o: O) => { await api(`/orders/${o.id}`, { method: 'PUT', json: { status: 'envoyee' } }); setSending(null); await reload(); };
   const cancel = async (o: O) => { if (!confirm(`Annuler la commande ${o.reference} ?`)) return; await api(`/orders/${o.id}`, { method: 'PUT', json: { status: 'annulee' } }); await reload(); };
@@ -103,7 +105,10 @@ export default function Orders() {
         </div>}
         {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <Timeline o={o} />}
         <div className="mt-3 flex flex-wrap gap-2">
-          {o.status === 'preparee' && <><button onClick={() => void openSend(o)} className="btn-primary !py-1.5"><Send size={14} /> Envoyer au fournisseur</button><button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button></>}
+          {o.status === 'preparee' && o.vendorId && validateId === o.id && <span className="pill bg-amber-100 text-amber-800">⏳ En attente de votre validation</span>}
+          {o.status === 'preparee' && o.vendorId && <button onClick={() => void sendPlatform(o)} disabled={busy} className="btn-primary !py-1.5"><Send size={14} /> Valider et envoyer à {o.supplierName}</button>}
+          {o.status === 'preparee' && !o.vendorId && <><button onClick={() => void openSend(o)} className="btn-primary !py-1.5"><Send size={14} /> Envoyer au fournisseur</button><button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button></>}
+          {o.status === 'preparee' && o.vendorId && <button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button>}
           {['envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void openSend(o)} className="btn-ghost !py-1.5"><Copy size={14} /> Revoir le message</button>}
           {!['brouillon', 'annulee'].includes(o.status) && <button onClick={() => void openPdf(`/orders/${o.id}/pdf`)} className="btn-ghost !py-1.5">📄 PDF</button>}
           {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <button onClick={() => setReorder(o.id)} className="btn-ghost !py-1.5 text-brand-800">🔁 Recommander</button>}

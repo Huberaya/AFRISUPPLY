@@ -245,3 +245,22 @@ describe('chantier 19 — tournées & créneaux', () => {
     for (const id of created) await call('DELETE', `/api/vendor/routes/${id}`, undefined, V);
   });
 });
+
+describe('chantier 24 bis — récurrente « me demander avant »', () => {
+  it('le job crée un brouillon préparé, le restaurant valide en 1 clic, le grossiste ne voit la commande qu’après', async () => {
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Bidon 5 L', packQty: 5, packPrice: 20 }, V)).json.offer;
+    const exp = new Date(Date.now() + 86_400_000); const wd = exp.getUTCDay();
+    const rec = await call('POST', '/api/recurring', { vendorId: vid, name: 'Huile du mardi', weekdays: [wd], mode: 'confirm', lines: [{ vendorOfferId: off.id, packs: 2 }] }, R); expect(rec.status).toBe(201);
+    const { runRecurringOrders } = await import('../routes/marketplace.js');
+    const run = await runRecurringOrders(exp); const mine = run.results.find((x) => x.name === 'Huile du mardi'); expect(mine?.ok).toBe(true);
+    const after = (await call('GET', '/api/recurring', undefined, R)).json.recurring.find((x: Json) => x.name === 'Huile du mardi');
+    const ord = (await call('GET', '/api/orders', undefined, R)).json.orders.find((o: Json) => o.id === after.lastOrderId); expect(ord.status).toBe('preparee'); expect(ord.sentAt).toBeNull();
+    const before = (await call('GET', '/api/vendor/orders', undefined, V)).json.orders ?? []; expect(before.some((o: Json) => o.id === ord.id)).toBe(false); // le grossiste ne la voit pas encore
+    const snd = await call('POST', `/api/marketplace/orders/${ord.id}/send`, {}, R); expect(snd.status).toBe(200); expect(snd.json.order.status).toBe('envoyee');
+    expect((await call('POST', `/api/marketplace/orders/${ord.id}/send`, {}, R)).status).toBe(409);
+    const vo = (await call('GET', '/api/vendor/orders', undefined, V)).json.orders; expect(vo.some((o: Json) => o.id === ord.id)).toBe(true);
+    await call('DELETE', `/api/recurring/${after.id}`, undefined, R);
+  });
+});

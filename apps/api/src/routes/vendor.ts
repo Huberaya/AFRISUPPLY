@@ -149,7 +149,7 @@ vendorRoutes.get('/vendor/orders', async (c) => {
   const db = await getDb(); const vid = c.get('vendorId'); const status = c.req.query('status');
   const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings })
     .from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId))
-    .where(status ? and(eq(orders.vendorId, vid), eq(orders.status, status as typeof orders.status.enumValues[number])) : eq(orders.vendorId, vid)).orderBy(desc(orders.createdAt)).limit(100);
+    .where(and(eq(orders.vendorId, vid), sql`${orders.status} not in ('brouillon','preparee')`, status ? eq(orders.status, status as typeof orders.status.enumValues[number]) : undefined)).orderBy(desc(orders.createdAt)).limit(100); // brouillons « à valider » invisibles côté grossiste
   const ids = rows.map((r) => r.order.id);
   const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(inArray(orderLines.orderId, ids)) : [];
   return c.json({ orders: rows.map((r) => ({ ...r.order, proofPhoto: undefined, proofSignature: undefined, restaurantName: r.restaurantName, city: r.city, address: r.address, restaurantPhone: r.settings?.notifyPhone ?? null, whatsappLink: waLink(r.settings?.notifyPhone, `Bonjour ${r.restaurantName}, au sujet de votre commande ${r.order.reference} via AFRISUPPLY : `), lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
