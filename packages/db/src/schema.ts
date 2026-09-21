@@ -722,3 +722,19 @@ export const vendorCustomerPrices = pgTable('vendor_customer_prices', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('customer_prices_vendor_idx').on(t.vendorId), index('customer_prices_restaurant_idx').on(t.restaurantId)]);
+
+// ---------- Chantier 27 : avis & fiabilité grossiste ----------
+export const vendorReviews = pgTable('vendor_reviews', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  orderId: uuid('order_id').notNull().references(() => orders.id, { onDelete: 'cascade' }),
+  rating: integer('rating').notNull(),                  // 1–5
+  onTime: boolean('on_time'),
+  conform: boolean('conform'),                          // produits conformes (qualité, DLC)
+  comment: text('comment'),
+  vendorReply: text('vendor_reply'),
+  vendorRepliedAt: timestamp('vendor_replied_at', { withTimezone: true }),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('vendor_reviews_vendor_idx').on(t.vendorId), uniqueIndex('vendor_reviews_order_unique').on(t.orderId)]);

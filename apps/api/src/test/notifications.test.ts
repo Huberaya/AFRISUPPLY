@@ -184,3 +184,28 @@ describe('chantier 28 — paliers de volume & prix négociés', () => {
     expect((await call('DELETE', `/api/vendor/customer-prices/${cp.json.price.id}`, undefined, V)).json.ok).toBe(true);
   });
 });
+
+describe('chantier 27 — avis & fiabilité grossiste', () => {
+  it('avis après livraison uniquement, un par commande, réponse du grossiste, badge public', async () => {
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Carton 10 kg', packQty: 10, packPrice: 25 }, V)).json.offer;
+    const o = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 2 }] }, R); expect(o.status).toBe(201); const oid = o.json.order.id;
+    expect((await call('POST', `/api/orders/${oid}/review`, { rating: 5 }, R)).status).toBe(400); // pas encore livrée
+    expect((await call('POST', `/api/vendor/orders/${oid}/confirm`, {}, V)).status).toBe(200);
+    expect((await call('POST', `/api/vendor/orders/${oid}/fulfillment`, { step: 'en_preparation' }, V)).status).toBe(200);
+    expect((await call('POST', `/api/vendor/orders/${oid}/fulfillment`, { step: 'en_livraison', driverName: 'Moussa' }, V)).status).toBe(200);
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    expect((await call('POST', `/api/vendor/orders/${oid}/fulfillment`, { step: 'livree', receiverName: 'Awa', signature: png }, V)).status).toBe(200);
+    const pend = await call('GET', '/api/reviews/pending', undefined, R); expect(pend.json.pending.some((p: Json) => p.id === oid)).toBe(true);
+    expect((await call('POST', `/api/orders/${oid}/review`, { rating: 7 }, R)).status).toBe(400);
+    const rv = await call('POST', `/api/orders/${oid}/review`, { rating: 4, onTime: true, conform: true, comment: 'Très bien' }, R); expect(rv.status).toBe(201);
+    expect((await call('POST', `/api/orders/${oid}/review`, { rating: 1 }, R)).status).toBe(409); // doublon
+    const mine = await call('GET', '/api/vendor/reviews', undefined, V); expect(mine.json.reviews.length).toBeGreaterThanOrEqual(1); expect(mine.json.reliability.rating).toBeGreaterThan(0);
+    const rid = mine.json.reviews.find((x: Json) => x.orderId === oid).id;
+    expect((await call('POST', `/api/vendor/reviews/${rid}/reply`, { reply: 'Merci !' }, V)).json.review.vendorReply).toBe('Merci !');
+    const pub = await call('GET', `/api/public/vendors/${vid}/reviews`); expect(pub.status).toBe(200); expect(pub.json.reviews[0].vendorReply).toBe('Merci !'); expect(pub.json.reviews[0].restaurantId).toBeUndefined(); expect(pub.json.reliability.reviews).toBeGreaterThanOrEqual(1);
+    const mk = await call('GET', '/api/marketplace/vendors', undefined, R); expect(mk.json.vendors.every((x: Json) => x.reliability?.badge)).toBe(true); // annuaire enrichi
+    const fiche = await call('GET', `/api/marketplace/vendors/${vid}`, undefined, R); expect(fiche.json.reliability.onTimePct).toBe(100); expect(fiche.json.reliability.rating).toBe(4);
+  });
+});

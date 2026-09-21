@@ -13,6 +13,7 @@ import { logOrderEvent } from '../lib/order-events.js';
 import { assertPlausibleQuantity } from './restaurant.js';
 import { APP_URL } from '../jobs/daily.js';
 import { loadPricing, priceFor } from '../lib/pricing.js';
+import { reliabilityFor, emptyReliability } from '../lib/reliability.js';
 
 export const marketplaceRoutes = new Hono<Env>();
 
@@ -45,9 +46,10 @@ marketplaceRoutes.get('/marketplace/vendors', async (c) => {
   const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq(inventoryItems.restaurantId, rid))).map((x) => x.productId));
   const linked = new Map((await db.select({ vendorId: suppliers.vendorId, supplierId: suppliers.id }).from(suppliers).where(and(eq(suppliers.restaurantId, rid), sql`${suppliers.vendorId} is not null`))).map((x) => [x.vendorId!, x.supplierId]));
   const offers = await db.select({ vendorId: vendorOffers.vendorId, productId: vendorOffers.productId }).from(vendorOffers).where(eq(vendorOffers.inStock, true));
+  const rel = await reliabilityFor(all.map((v) => v.id));
   const out = all.filter((v) => servesZone(v, zones)).map((v) => {
     const vo = offers.filter((o) => o.vendorId === v.id); const covered = new Set(vo.filter((o) => mine.has(o.productId)).map((o) => o.productId)).size;
-    return { ...v, offerCount: vo.length, coversMyProducts: covered, myProductCount: mine.size, linkedSupplierId: linked.get(v.id) ?? null };
+    return { ...v, offerCount: vo.length, coversMyProducts: covered, myProductCount: mine.size, linkedSupplierId: linked.get(v.id) ?? null, reliability: rel.get(v.id) ?? emptyReliability };
   }).sort((a, b) => b.coversMyProducts - a.coversMyProducts);
   return c.json({ vendors: out, zones: [...zones] });
 });
@@ -64,7 +66,7 @@ marketplaceRoutes.get('/marketplace/vendors/:id', async (c) => {
   const pricing = await loadPricing(rows.map((r) => r.offer), rid);
   const offers = rows.map(({ offer, product }) => { const pi = priceFor(offer, 1, pricing); const unit = pi.packPriceEur / n(offer.packQty); const best = myBest.get(product.id); return { ...offer, listPriceEur: pi.listPriceEur, packPriceEur: pi.packPriceEur.toFixed(2), negotiated: pi.negotiated, priceSource: pi.source, tiers: pi.tiers, productName: product.name, category: product.category, unit: product.baseUnit, unitPrice: Math.round(unit * 10000) / 10000, myBestUnitPrice: best ?? null, savingPct: best ? Math.round(((best - unit) / best) * 1000) / 10 : null, tracked: mine.has(product.id) }; });
   const gbs = await db.select().from(groupBuys).where(and(eq(groupBuys.vendorId, vid), eq(groupBuys.status, 'ouvert'), gte(groupBuys.closesAt, new Date())));
-  return c.json({ vendor: v, offers, linkedSupplierId: link?.id ?? null, groupBuys: gbs });
+  return c.json({ vendor: v, reliability: (await reliabilityFor([vid])).get(vid) ?? emptyReliability, offers, linkedSupplierId: link?.id ?? null, groupBuys: gbs });
 });
 
 /** Lier un fournisseur plateforme à mon restaurant : crée/rafraîchit le fournisseur privé + copie du catalogue (offres + historique). */

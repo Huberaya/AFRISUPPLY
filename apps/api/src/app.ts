@@ -11,6 +11,7 @@ import { storefrontRoutes } from './routes/storefront.js';
 import { referenceAdminRoutes, referenceRequestRoutes } from './routes/reference-admin.js';
 import { adminDashboardRoutes } from './routes/admin-dashboard.js';
 import { claimRoutes, vendorClaimRoutes, adminClaimRoutes } from './routes/claims.js';
+import { publicReviewRoutes, reviewRoutes, vendorReviewRoutes } from './routes/reviews.js';
 import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
 import { accountRoutes } from './routes/account.js';
@@ -46,6 +47,7 @@ app.route('/api', statusRoutes);
 app.route('/api', jobsRoutes); // cron (secret propre)
 app.route('/api', publicRoutes);
 app.route('/api', storefrontRoutes); // vitrine publique (chantier 13)
+app.route('/api', publicReviewRoutes); // avis publics (vitrine)
 app.route('/api', prospectPublicRoutes); // lecture d'une invitation fournisseur (chantier 14)
 app.route('/api', billingPublicRoutes);
 app.route('/api', pilotPublicRoutes); // webhook Stripe (signature, pas de JWT) // public en premier : les routeurs suivants imposent l'auth via use('*')
@@ -55,6 +57,7 @@ app.route('/api', referenceAdminRoutes);
 app.route('/api', adminDashboardRoutes);
 app.route('/api', adminClaimRoutes);
 app.route('/api', vendorClaimRoutes);
+app.route('/api', vendorReviewRoutes);
 app.route('/api', vendorRoutes); // espace fournisseur : comptes sans restaurant → avant les routeurs qui imposent requireRestaurant
 app.route('/api', vendorAdminRoutes);
 app.route('/api', billingAdminRoutes);
@@ -65,6 +68,7 @@ app.route('/api', catalogRoutes);
 app.route('/api', intelligenceRoutes);
 app.route('/api', manageRoutes);
 app.route('/api', claimRoutes);
+app.route('/api', reviewRoutes);
 app.route('/api', settingsRoutes);
 app.route('/api', accountRoutes);
 app.route('/api', memberRoutes); // chantier 2 : membres & rôles

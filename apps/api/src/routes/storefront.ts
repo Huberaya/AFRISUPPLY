@@ -1,6 +1,7 @@
 // Chantier 13 — Vitrine publique (parcours « Amazon » inspiré d'ethimarket) : catalogue, fiche produit, grossistes.
 // Aucune authentification : tout le monde voit produits et prix ; il faut un compte restaurant pour commander.
 import { Hono } from 'hono';
+import { reliabilityFor, emptyReliability } from '../lib/reliability.js';
 import { z } from 'zod';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { getDb, leads, products, vendors, vendorOffers } from '@afrisupply/db';
@@ -44,8 +45,8 @@ storefrontRoutes.get('/public/vendors', async (c) => {
   const db = await getDb();
   const vs = await db.select().from(vendors).where(eq(vendors.status, 'actif'));
   const counts = await db.select({ vendorId: vendorOffers.vendorId, offers: sql<number>`count(*)` }).from(vendorOffers).where(eq(vendorOffers.inStock, true)).groupBy(vendorOffers.vendorId);
-  const cm = new Map(counts.map((x) => [x.vendorId, n(x.offers)]));
-  return c.json({ vendors: vs.map((v) => ({ id: v.id, name: v.name, slug: v.slug, description: v.description, city: v.city, deliveryZones: v.deliveryZones, categories: v.categories, leadTimeHours: v.leadTimeHours, minOrderEur: n(v.minOrderEur), deliveryFeeEur: n(v.deliveryFeeEur), offerCount: cm.get(v.id) ?? 0 })) });
+  const cm = new Map(counts.map((x) => [x.vendorId, n(x.offers)])); const rel = await reliabilityFor(vs.map((v) => v.id));
+  return c.json({ vendors: vs.map((v) => ({ reliability: rel.get(v.id) ?? emptyReliability, id: v.id, name: v.name, slug: v.slug, description: v.description, city: v.city, deliveryZones: v.deliveryZones, categories: v.categories, leadTimeHours: v.leadTimeHours, minOrderEur: n(v.minOrderEur), deliveryFeeEur: n(v.deliveryFeeEur), offerCount: cm.get(v.id) ?? 0 })) });
 });
 
 /** « Prévenez-moi » sur un produit sans offre : enregistré comme lead (source vitrine) pour orienter le démarchage des grossistes. */

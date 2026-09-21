@@ -4,8 +4,9 @@ import { Store, Link2, ShoppingCart, Users, Check, ArrowLeft } from 'lucide-reac
 import { api, CATEGORY_LABEL } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
+import { ReliabilityBadge, type Reliability } from '../components/Reliability';
 
-type Vendor = { id: string; name: string; description: string | null; city: string | null; deliveryZones: string[]; categories: string[]; leadTimeHours: number; minOrderEur: string; deliveryFeeEur: string; offerCount: number; coversMyProducts: number; myProductCount: number; linkedSupplierId: string | null };
+type Vendor = { reliability?: Reliability; id: string; name: string; description: string | null; city: string | null; deliveryZones: string[]; categories: string[]; leadTimeHours: number; minOrderEur: string; deliveryFeeEur: string; offerCount: number; coversMyProducts: number; myProductCount: number; linkedSupplierId: string | null };
 type Tier = { minPacks: number; packPriceEur: number };
 type Quote = { lines: { vendorOfferId: string; packPriceEur: number; listPriceEur: number; source: string; lineTotalEur: number; savedEur: number; nextTier: { minPacks: number; packPriceEur: number; missingPacks: number; extraSavingEur: number } | null }[]; total: number; saved: number };
 type Offer = { id: string; productName: string; category: string; unit: string; packLabel: string; packQty: string; packPriceEur: string; listPriceEur?: number; negotiated?: boolean; tiers?: Tier[]; unitPrice: number; myBestUnitPrice: number | null; savingPct: number | null; tracked: boolean; inStock: boolean };
@@ -30,6 +31,7 @@ function Directory({ open }: { open: (id: string) => void }) {
           {data.vendors.map((v) => (
             <button key={v.id} onClick={() => open(v.id)} className="card text-left transition hover:shadow-md">
               <div className="flex items-start justify-between gap-3"><div><p className="text-lg font-bold">{v.name}</p><p className="text-sm text-stone-500">{v.city ?? 'En ligne'} · livraison {v.leadTimeHours} h · min {eur(v.minOrderEur)}{Number(v.deliveryFeeEur) > 0 ? ` · port ${eur(v.deliveryFeeEur)}` : ' · port offert'}</p></div>{v.linkedSupplierId && <span className="pill bg-emerald-50 text-emerald-800"><Check size={12} /> Lié</span>}</div>
+              {v.reliability && <div className="mt-2"><ReliabilityBadge r={v.reliability} /></div>}
               {v.description && <p className="mt-2 text-sm text-stone-600 line-clamp-2">{v.description}</p>}
               <div className="mt-3 flex flex-wrap gap-1.5">{v.categories.map((c) => <span key={c} className="pill bg-stone-100 text-stone-700">{CATEGORY_LABEL[c] ?? c}</span>)}</div>
               <p className="mt-3 text-sm"><b>{v.offerCount}</b> produits · couvre <b>{v.coversMyProducts}/{v.myProductCount}</b> de vos produits suivis</p>
@@ -60,7 +62,7 @@ function GroupBuys({ list, reload }: { list: GB[]; reload: () => void }) {
 }
 
 function VendorDetail({ id, back }: { id: string; back: () => void }) {
-  const { data, loading, error, reload } = useApi<{ vendor: Vendor; offers: Offer[]; linkedSupplierId: string | null }>(`/marketplace/vendors/${id}`);
+  const { data, loading, error, reload } = useApi<{ vendor: Vendor; reliability?: Reliability; offers: Offer[]; linkedSupplierId: string | null }>(`/marketplace/vendors/${id}`);
   const [cart, setCart] = useState<Record<string, number>>({}); const [msg, setMsg] = useState<string | null>(null); const [busy, setBusy] = useState(false); const [onlyMine, setOnlyMine] = useState(true); const [quote, setQuote] = useState<Quote | null>(null);
   useEffect(() => { setCart({}); setQuote(null); }, [id]);
   useEffect(() => { const lines = Object.entries(cart).filter(([, p]) => p > 0).map(([vendorOfferId, packs]) => ({ vendorOfferId, packs })); if (!lines.length) { setQuote(null); return; } const t = setTimeout(() => api<Quote>(`/marketplace/vendors/${id}/quote`, { method: 'POST', json: { lines } }).then(setQuote).catch(() => setQuote(null)), 250); return () => clearTimeout(t); }, [cart, id]);
@@ -72,7 +74,7 @@ function VendorDetail({ id, back }: { id: string; back: () => void }) {
   return (
     <div className="animate-fade-up space-y-4 pb-28">
       <button className="btn-ghost" onClick={back}><ArrowLeft size={16} /> Marketplace</button>
-      <PageTitle title={v.name} subtitle={<>{v.city ?? 'En ligne'} · livraison sous {v.leadTimeHours} h · minimum {eur(v.minOrderEur)}{v.description ? <><br />{v.description}</> : null}</>} action={data.linkedSupplierId ? <span className="pill bg-emerald-50 text-emerald-800"><Check size={12} /> Dans vos fournisseurs</span> : <button className="btn-ghost" disabled={busy} onClick={() => void link()}><Link2 size={16} /> Ajouter à mes fournisseurs</button>} />
+      <PageTitle title={v.name} subtitle={<>{v.city ?? 'En ligne'} · livraison sous {v.leadTimeHours} h · minimum {eur(v.minOrderEur)}{v.description ? <><br />{v.description}</> : null}{data.reliability && <><br /><ReliabilityBadge r={data.reliability} detailed /></>}</>} action={data.linkedSupplierId ? <span className="pill bg-emerald-50 text-emerald-800"><Check size={12} /> Dans vos fournisseurs</span> : <button className="btn-ghost" disabled={busy} onClick={() => void link()}><Link2 size={16} /> Ajouter à mes fournisseurs</button>} />
       {msg && <p className="rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-900">{msg}</p>}
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={onlyMine} onChange={(e) => setOnlyMine(e.target.checked)} /> Seulement mes produits suivis ({data.offers.filter((o) => o.tracked).length}/{data.offers.length})</label>
       <div className="card overflow-x-auto p-0">

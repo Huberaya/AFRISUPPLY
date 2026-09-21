@@ -146,6 +146,7 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - Chantier 24 — Recommander en 1 clic + commandes récurrentes hebdomadaires : `docs/CHANTIER_24_RECOMMANDER_RECURRENT.md`
 - Chantier 26 — Litiges & avoirs (réclamation → réponse grossiste → escalade → arbitrage) : `docs/CHANTIER_26_LITIGES_AVOIRS.md`
 - Chantier 28 — Tarifs par volume (paliers) & prix négociés par restaurant : `docs/CHANTIER_28_TARIFS_VOLUME_NEGOCIES.md`
+- Chantier 27 — Avis & fiabilité grossiste : note après livraison, réponse du grossiste, badges (`docs/CHANTIER_27_AVIS_FIABILITE.md`)
 - [x] Admin → Prospection : carnet restaurants / fournisseurs (nom, adresse, téléphone, e-mail, contact, statut, relance, import tableur)
 - [x] Chantier 8 : fiabilité prod (Sentry sans SDK, `/statut`, job_runs, rate-limit, en-têtes, audit, RGPD export/suppression, CGV, migrations au déploiement, 12 tests e2e) — `docs/CHANTIER_8_FIABILITE.md`
 - [x] Chantier 4 bis : e-mail quotidien « Votre matin AFRISUPPLY » + job cron (alertes → auto-reorder → mail) — `docs/CHANTIER_4BIS_NOTIFICATIONS.md`

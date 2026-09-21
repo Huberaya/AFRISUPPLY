@@ -4,11 +4,12 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Search, ArrowRight, Store, ShieldCheck, Truck, Scale } from 'lucide-react';
 import { useApi } from '../../lib/useApi';
 import { CATEGORY_LABEL } from '../../lib/api';
+import { ReliabilityBadge, type Reliability } from '../../components/Reliability';
 import ProductCard, { type CatalogItem } from './ProductCard';
 import { CAT_EMOJI } from '../../lib/cart';
 
 type Catalog = { items: CatalogItem[]; total: number; categories: Record<string, number>; withPrice: number };
-type Vendor = { id: string; name: string; city: string | null; categories: string[]; offerCount: number; leadTimeHours: number; minOrderEur: number };
+type Vendor = { reliability?: Reliability; id: string; name: string; city: string | null; categories: string[]; offerCount: number; leadTimeHours: number; minOrderEur: number };
 const POPULAR = ['Riz brisé', 'Huile de palme', 'Attiéké', 'Banane plantain', 'Poisson fumé', 'Gombo', 'Manioc', 'Piment'];
 
 export default function StoreHome() {
@@ -52,7 +53,7 @@ export default function StoreHome() {
 
       <section className="mx-auto max-w-6xl px-4 py-12 lg:px-8">
         <div className="flex items-end justify-between"><h2 className="text-2xl font-extrabold">Grossistes partenaires</h2><Link to="/fournisseur" className="text-sm font-semibold text-brand-700">Vous êtes grossiste ? Vendez ici →</Link></div>
-        {vend.data && vend.data.vendors.length > 0 ? <div className="mt-4 grid gap-4 md:grid-cols-3">{vend.data.vendors.slice(0, 6).map((v) => <div key={v.id} className="card"><p className="text-lg font-bold">{v.name}</p><p className="text-sm text-stone-500">{v.city ?? 'En ligne'} · livraison {v.leadTimeHours} h · min {v.minOrderEur} €</p><p className="mt-2 text-sm"><b>{v.offerCount}</b> produits</p><div className="mt-2 flex flex-wrap gap-1">{v.categories.map((c) => <span key={c} className="pill bg-stone-100 text-stone-700">{CATEGORY_LABEL[c] ?? c}</span>)}</div></div>)}</div>
+        {vend.data && vend.data.vendors.length > 0 ? <div className="mt-4 grid gap-4 md:grid-cols-3">{vend.data.vendors.slice(0, 6).map((v) => <div key={v.id} className="card"><p className="text-lg font-bold">{v.name}</p><p className="text-sm text-stone-500">{v.city ?? 'En ligne'} · livraison {v.leadTimeHours} h · min {v.minOrderEur} €</p><p className="mt-2 text-sm"><b>{v.offerCount}</b> produits</p>{v.reliability && <div className="mt-2"><ReliabilityBadge r={v.reliability} /></div>}<div className="mt-2 flex flex-wrap gap-1">{v.categories.map((c) => <span key={c} className="pill bg-stone-100 text-stone-700">{CATEGORY_LABEL[c] ?? c}</span>)}</div></div>)}</div>
           : <div className="card mt-4 border-dashed text-center text-stone-600">Les premiers grossistes arrivent. Vous êtes grossiste en produits africains ? <Link to="/fournisseur" className="font-semibold text-brand-700">Mettez votre catalogue en ligne en 10 minutes</Link> — import Excel, photo ou texte.</div>}
       </section>
 
