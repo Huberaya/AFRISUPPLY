@@ -134,6 +134,13 @@
       "when": 1789988524369,
       "tag": "0018_verification_email",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789989633954,
+      "tag": "0019_canaux_notifications",
+      "breakpoints": true
     }
   ]
 }

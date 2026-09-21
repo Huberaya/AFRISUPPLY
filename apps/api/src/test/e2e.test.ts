@@ -103,7 +103,10 @@ describe('5. Exploitation : cron, statut, RGPD, sécurité', () => {
     expect((await call('GET', '/api/jobs/daily')).status).toBe(401);
     const run = await call('GET', '/api/jobs/daily', undefined, { authorization: 'Bearer cron-test' }); expect(run.status).toBe(200); expect(run.json.count).toBeGreaterThanOrEqual(2);
     const st = await call('GET', '/api/status'); expect(st.status).toBe(200); expect(st.json.checks.database.ok).toBe(true); expect(st.json.checks.dailyJob.state).toBe('ok');
-    const jobs = await call('GET', '/api/status/jobs', undefined, { authorization: 'Bearer cron-test' }); expect(jobs.json.runs.length).toBe(1); expect(jobs.json.runs[0].status).toBe('ok');
+    // Chantier 6 : le job quotidien trace aussi les rappels qu'il déclenche (supervision par job).
+    const jobs = await call('GET', '/api/status/jobs', undefined, { authorization: 'Bearer cron-test' });
+    expect(jobs.json.runs.some((r: any) => r.job === 'daily' && r.status === 'ok')).toBe(true);
+    expect(st.json.checks.jobs?.reminders?.state).toBeTruthy();
   });
   it('en-têtes de sécurité présents, 404 JSON (une fois authentifié)', async () => {
     const h = await call('GET', '/api/health'); expect(h.headers.get('x-content-type-options')).toBe('nosniff'); expect(h.headers.get('x-frame-options')).toBe('DENY');

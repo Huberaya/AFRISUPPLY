@@ -8,8 +8,9 @@ import {
 } from '@afrisupply/db';
 import { nextOrderReference } from '../lib/reference.js';
 import { logOrderEvent } from '../lib/order-events.js';
+import { notifyCriticalAlerts } from '../lib/notify.js';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
-import { checkReceive, checkSend } from '../lib/orders.js';
+import { checkReceive, checkSend, isUniqueViolation } from '../lib/orders.js';
 import {
   computeDailyUse, stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, alertsFromOpportunities,
   compareOffers, recipeCost, marginAnalysis, supplierReliability, type StockSnapshot, type PricePoint,
@@ -41,13 +42,6 @@ class ReceptionAlreadyDone extends Error {
 }
 
 /** Vrai si l'erreur vient de l'index unique `deliveries_order_unique` (deux réceptions simultanées). */
-function isUniqueViolation(e: unknown, constraint: string): boolean {
-  if (!e || typeof e !== 'object') return false;
-  const err = e as { code?: string; constraint?: string; message?: string; cause?: { code?: string; constraint?: string; message?: string } };
-  const probe = [err, err.cause].filter(Boolean) as { code?: string; constraint?: string; message?: string }[];
-  return probe.some((p) => p.code === '23505' && `${p.constraint ?? ''}${p.message ?? ''}`.includes(constraint));
-}
-
 /** « 50 kg », « 12,5 L » — pour des messages d'erreur lisibles. */
 const fmtQty = (v: number, unit: string) => `${Number(v.toFixed(3)).toLocaleString('fr-FR')} ${unit}`;
 /** Chantier 3 (audit) : montants en euros à la française, pour les messages destinés au restaurateur. */
@@ -580,6 +574,9 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
   const allReceived = discrepancies.every((d) => d.received >= d.ordered);
   void logOrderEvent(order.id, 'received', allReceived ? 'Réception confirmée par le restaurant' : 'Réception avec écarts signalés', 'restaurant',
     body.data.override ? { override: true } : undefined);
+  // Chantier 6 (audit) : un écart ou une surfacturation ne doit pas attendre le mail du matin.
+  // L'appel est protégé : un incident d'e-mail ne peut pas faire échouer une réception déjà enregistrée.
+  try { await notifyCriticalAlerts(rid); } catch (e) { console.warn('[notify] réception', (e as Error).message); }
   const surchargeEur = Math.round(priceVariance.reduce((a, v) => a + v.deltaEur, 0) * 100) / 100;
   const invoicedTotal = priceVariance.length || invoicedByLine.size
     ? Math.round(lines.reduce((a, l) => {
@@ -633,8 +630,11 @@ restaurantRoutes.get('/recipes', async (c) => {
 restaurantRoutes.post('/alerts/refresh', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
   const { computed, inserted } = await refreshAlerts(rid);
+  // Chantier 6 : une rupture détectée à l'instant part par e-mail tout de suite (et une seule fois).
+  let immediate: Awaited<ReturnType<typeof notifyCriticalAlerts>> | null = null;
+  if (inserted > 0) { try { immediate = await notifyCriticalAlerts(rid); } catch (e) { console.warn('[notify] alertes', (e as Error).message); } }
   const all = await db.select().from(alerts).where(and(eq(alerts.restaurantId, rid), eq(alerts.isRead, false))).orderBy(desc(alerts.createdAt));
-  return c.json({ computed, inserted, alerts: all });
+  return c.json({ computed, inserted, alerts: all, immediate: immediate ? { alerts: immediate.alerts, sent: immediate.sent, status: immediate.status } : null });
 });
 
 restaurantRoutes.get('/alerts', async (c) => {

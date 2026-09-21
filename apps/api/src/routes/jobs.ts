@@ -6,9 +6,11 @@ import { getDb, restaurants } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { runDailyForAll, runDailyForRestaurant, buildDigestForRestaurant } from '../jobs/daily.js';
 import { buildDigest } from '../lib/digest.js';
-import { mailerConfig } from '../lib/mailer.js';
 import { remindPendingVendorOrders } from '../jobs/reminders.js';
-import { normalizePhone, sendMessage, smsConfig } from '../lib/sms.js';
+import { normalizePhone, sendMessage, smsConfig, smsStats } from '../lib/sms.js';
+import { mailerConfig, sendMail, mailStats } from '../lib/mailer.js';
+import { notifyAllRestaurants } from '../lib/notify.js';
+import { recordJobRun } from '../lib/job-runs.js';
 
 export const jobsRoutes = new Hono<Env>();
 
@@ -29,9 +31,21 @@ const runReminders = async (c: Context<Env>) => {
   const secret = process.env.CRON_SECRET; const auth = c.req.header('authorization');
   const given = c.req.header('x-cron-secret') ?? (auth?.startsWith('Bearer ') ? auth.slice(7) : undefined) ?? c.req.query('secret');
   if (!secret || given !== secret) return c.json({ error: 'Secret cron invalide' }, 401);
-  return c.json(await remindPendingVendorOrders());
+  // Chantier 6 : la même passe horaire relance les grossistes ET envoie les alertes urgentes en attente.
+  const reminders = await remindPendingVendorOrders();
+  const notifications = await notifyAllRestaurants();
+  return c.json({ ...reminders, notifications });
+};
+
+/** Alertes urgentes seules (rupture, écart de livraison, surfacturation) — cron dédié possible. */
+const runNotify = async (c: Context<Env>) => {
+  const secret = process.env.CRON_SECRET; const auth = c.req.header('authorization');
+  const given = c.req.header('x-cron-secret') ?? (auth?.startsWith('Bearer ') ? auth.slice(7) : undefined) ?? c.req.query('secret');
+  if (!secret || given !== secret) return c.json({ error: 'Secret cron invalide' }, 401);
+  return c.json(await notifyAllRestaurants());
 };
 jobsRoutes.get('/jobs/reminders', runReminders); jobsRoutes.post('/jobs/reminders', runReminders);
+jobsRoutes.get('/jobs/notify', runNotify); jobsRoutes.post('/jobs/notify', runNotify);
 jobsRoutes.get('/jobs/daily', runDaily);
 
 // --- réglages & prévisualisation, côté restaurant connecté (monté séparément, après les routeurs protégés)
@@ -42,18 +56,27 @@ settingsRoutes.use('*', requireAuth, requireRestaurant);
 settingsRoutes.on(['PUT'], '/settings', requireMinRole('manager'));
 settingsRoutes.on(['POST'], '/digest/send-test', requireMinRole('manager'));
 settingsRoutes.on(['POST'], '/settings/test-sms', requireMinRole('manager'));
+settingsRoutes.on(['POST'], '/settings/test-email', requireMinRole('manager'));
 
 settingsRoutes.get('/settings', async (c) => {
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.get('restaurantId')));
   const s = r.settings ?? {};
-  return c.json({ restaurant: { id: r.id, name: r.name, city: r.city, coversPerDay: r.coversPerDay, plan: r.plan, trialEndsAt: r.trialEndsAt }, settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, notifyPhone: s.notifyPhone ?? '', digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [] }, mail: { transport: mailerConfig().transport, from: mailerConfig().from }, sms: { configured: smsConfig().enabled, whatsapp: smsConfig().whatsapp } });
+  const mc = mailerConfig();
+  return c.json({
+    restaurant: { id: r.id, name: r.name, city: r.city, coversPerDay: r.coversPerDay, plan: r.plan, trialEndsAt: r.trialEndsAt },
+    settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, immediateAlertEmails: s.immediateAlertEmails ?? true, notifyPhone: s.notifyPhone ?? '', digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [] },
+    // Chantier 6 : on annonce ce qui est réellement possible, pas ce qu'on aimerait faire.
+    mail: { transport: mc.transport, from: mc.from, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', stats: mailStats() },
+    sms: { configured: smsConfig().enabled, whatsapp: smsConfig().whatsapp, delivered: smsConfig().enabled, stats: smsStats() },
+    cron: { secretConfigured: !!process.env.CRON_SECRET, jobs: ['/api/jobs/daily', '/api/jobs/reminders', '/api/jobs/notify'] },
+  });
 });
 
 settingsRoutes.put('/settings', async (c) => {
   const body = z.object({
     name: z.string().min(2).optional(), city: z.string().nullable().optional(), coversPerDay: z.number().int().positive().nullable().optional(),
     priceIncreaseAlertPct: z.number().min(1).max(50).optional(), forecastHorizonDays: z.number().int().min(3).max(14).optional(),
-    autoReorderEnabled: z.boolean().optional(), dailyDigestEnabled: z.boolean().optional(), digestRecipients: z.array(z.string().email()).max(10).optional(), closedWeekdays: z.array(z.number().int().min(0).max(6)).optional(), notifyPhone: z.string().max(30).optional(),
+    autoReorderEnabled: z.boolean().optional(), dailyDigestEnabled: z.boolean().optional(), immediateAlertEmails: z.boolean().optional(), digestRecipients: z.array(z.string().email()).max(10).optional(), closedWeekdays: z.array(z.number().int().min(0).max(6)).optional(), notifyPhone: z.string().max(30).optional(),
   }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
   const db = await getDb(); const rid = c.get('restaurantId');
@@ -85,5 +108,49 @@ settingsRoutes.post('/settings/test-sms', async (c) => {
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.get('restaurantId')));
   const to = r.settings?.notifyPhone; if (!to) return c.json({ error: 'Renseignez d’abord un numéro' }, 400);
   const res = await sendMessage({ to, kind: 'test', restaurantId: r.id, body: `AFRISUPPLY — test : vous recevrez ici le suivi de vos commandes (${r.name}).` });
-  return c.json({ ...res, configured: smsConfig().enabled });
+  const configured = smsConfig().enabled;
+  // Chantier 6 : message honnête. Un numéro enregistré sans Twilio n'est pas un envoi réussi.
+  return c.json({
+    ...res, configured, to,
+    message: res.delivered
+      ? `Message de test envoyé par ${res.channel} au ${to}.`
+      : configured
+        ? `Échec de l'envoi : ${res.error ?? 'erreur inconnue du fournisseur'}.`
+        : "Canal WhatsApp/SMS non en service sur cette installation : le message n'a PAS été envoyé. Votre numéro est bien enregistré ; les envois démarreront dès l'activation du canal.",
+    code: res.delivered ? undefined : configured ? 'sms_failed' : 'channel_not_configured',
+  });
+});
+
+/**
+ * Chantier 6 : test de bout en bout « est-ce que je reçois vraiment un e-mail ? ».
+ * On envoie un vrai message à l'adresse demandée (ou au demandeur) et on répond sans arrondir :
+ * `delivered` distingue « réellement remis » de « simulé / impossible ».
+ */
+settingsRoutes.post('/settings/test-email', async (c) => {
+  const startedAt = new Date();
+  const body = z.object({ to: z.string().email().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: 'Adresse e-mail invalide' }, 400);
+  const user = c.get('user'); const rid = c.get('restaurantId');
+  const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, rid));
+  const to = body.data.to ?? user.email;
+  const mc = mailerConfig();
+  const sentAt = new Date().toLocaleString('fr-FR', { timeZone: 'Europe/Paris' });
+  const text = `Bonjour ${user.fullName}, extrait de votre test de notification AFRISUPPLY.\n\nSi vous recevez ce message, les alertes de rupture, les écarts de livraison et le mail du matin arriveront bien dans cette boîte : ${to}.\n\nRestaurant : ${r.name}\nDate du test : ${sentAt}\nType d'envoi : ${mc.transport}\n\nL'équipe AFRISUPPLY`;
+  const html = `<p>Bonjour ${user.fullName},</p><p>Vous avez demandé un <b>test des notifications</b> depuis AFRISUPPLY.</p><p style="padding:10px;background:#f5f5f4;border-radius:8px">Si ce message s'affiche, les alertes de rupture, les écarts de livraison et le mail du matin arriveront bien à <b>${to}</b>.</p><p style="color:#78716c">Restaurant : ${r.name}<br>Date du test : ${sentAt}<br>Type d'envoi : ${mc.transport}</p><p>L'équipe AFRISUPPLY</p>`;
+  const res = await sendMail({ to, subject: '✅ Test des notifications AFRISUPPLY', text, html, tags: { type: 'mail_test', restaurant: rid } });
+  const delivered = res.ok && res.delivered;
+  await recordJobRun({
+    job: 'mail-test', startedAt, status: delivered ? 'ok' : 'error',
+    summary: { restaurantId: rid, to, transport: res.transport, delivered, requestedBy: user.email },
+    error: res.ok ? null : res.error,
+  });
+  return c.json({
+    ok: delivered, delivered, transport: res.transport, to, configured: mc.transport !== 'log',
+    message: delivered
+      ? (res.transport === 'file'
+        ? `E-mail écrit (mode développement : relisez-le dans le dossier .outbox, aucun prestataire n'est configuré).`
+        : `E-mail envoyé à ${to}. Vérifiez votre boîte (et les indésirables) : s'il arrive, vos alertes arriveront aussi.`)
+      : `E-mail NON envoyé : ${res.ok ? 'aucun service d’envoi réel n’est configuré sur ce serveur.' : res.error}`,
+    code: delivered ? undefined : 'mail_not_configured',
+  }, delivered ? 200 : 424);
 });

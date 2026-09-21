@@ -7,7 +7,13 @@ import { PageTitle, Loader, ErrorBox, Stat } from '../components/ui';
 import { useAuth } from '../lib/auth';
 import { Field } from '../components/Modal';
 
-type S = { restaurant: { name: string; city: string | null; coversPerDay: number | null; plan: string; trialEndsAt: string | null }; settings: { priceIncreaseAlertPct: number; forecastHorizonDays: number; autoReorderEnabled: boolean; dailyDigestEnabled: boolean; digestRecipients: string[]; closedWeekdays: number[]; notifyPhone: string }; mail: { transport: 'resend' | 'file'; from: string }; sms?: { configured: boolean; whatsapp: boolean } };
+type S = {
+  restaurant: { name: string; city: string | null; coversPerDay: number | null; plan: string; trialEndsAt: string | null };
+  settings: { priceIncreaseAlertPct: number; forecastHorizonDays: number; autoReorderEnabled: boolean; dailyDigestEnabled: boolean; immediateAlertEmails: boolean; digestRecipients: string[]; closedWeekdays: number[]; notifyPhone: string };
+  mail: { transport: 'resend' | 'file' | 'log'; from: string; configured: boolean; delivered: boolean };
+  sms?: { configured: boolean; whatsapp: boolean; delivered: boolean };
+};
+type MailTest = { ok: boolean; delivered: boolean; transport: string; to: string; message: string; code?: string };
 const DAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
 export default function Settings() {
@@ -16,7 +22,8 @@ export default function Settings() {
   const [mailMsg, setMailMsg] = useState<string | null>(null); const [mailDevLink, setMailDevLink] = useState<string | null>(null);
   const [f, setF] = useState<S['settings'] & { name: string; city: string; coversPerDay: string; recipientsText: string } | null>(null);
   const [msg, setMsg] = useState<string | null>(null); const [busy, setBusy] = useState(false);
-  const [del, setDel] = useState(false); const [delPw, setDelPw] = useState(''); const [delConfirm, setDelConfirm] = useState('');
+  const [mailTest, setMailTest] = useState<MailTest | null>(null); const [testing, setTesting] = useState(false);
+  const [smsMsg, setSmsMsg] = useState<string | null>(null); const [del, setDel] = useState(false); const [delPw, setDelPw] = useState(''); const [delConfirm, setDelConfirm] = useState('');
   const [preview, setPreview] = useState<{ subject: string; text: string; html: string } | null>(null);
   useEffect(() => { if (data) setF({ ...data.settings, name: data.restaurant.name, city: data.restaurant.city ?? '', coversPerDay: data.restaurant.coversPerDay ? String(data.restaurant.coversPerDay) : '', recipientsText: data.settings.digestRecipients.join(', ') }); }, [data]);
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data || !f) return null;
@@ -24,7 +31,7 @@ export default function Settings() {
     setBusy(true); setMsg(null);
     try {
       const recipients = f.recipientsText.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
-      await api('/settings', { method: 'PUT', json: { name: f.name, city: f.city || null, coversPerDay: f.coversPerDay ? Number(f.coversPerDay) : null, priceIncreaseAlertPct: f.priceIncreaseAlertPct, forecastHorizonDays: f.forecastHorizonDays, autoReorderEnabled: f.autoReorderEnabled, dailyDigestEnabled: f.dailyDigestEnabled, digestRecipients: recipients, closedWeekdays: f.closedWeekdays, notifyPhone: f.notifyPhone ?? '' } });
+      await api('/settings', { method: 'PUT', json: { name: f.name, city: f.city || null, coversPerDay: f.coversPerDay ? Number(f.coversPerDay) : null, priceIncreaseAlertPct: f.priceIncreaseAlertPct, forecastHorizonDays: f.forecastHorizonDays, autoReorderEnabled: f.autoReorderEnabled, dailyDigestEnabled: f.dailyDigestEnabled, immediateAlertEmails: f.immediateAlertEmails, digestRecipients: recipients, closedWeekdays: f.closedWeekdays, notifyPhone: f.notifyPhone ?? '' } });
       setMsg('Réglages enregistrés.'); await reload();
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
   };
@@ -37,12 +44,20 @@ export default function Settings() {
     setBusy(true); try { await api('/account', { method: 'DELETE', json: { password: delPw, confirm: delConfirm } }); localStorage.removeItem('afs_token'); location.href = '/?compte=supprime'; } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
   };
   const showPreview = async () => { setPreview(await api<{ subject: string; text: string; html: string }>('/digest/preview')); };
+  // Chantier 6 : test de bout en bout « est-ce que je reçois vraiment un e-mail ? » — la réponse ne maquille rien.
+  const testEmail = async () => {
+    setTesting(true); setMailTest(null);
+    try { setMailTest(await api<MailTest>('/settings/test-email', { method: 'POST', json: {} })); }
+    catch (e) { setMailTest({ ok: false, delivered: false, transport: '', to: user?.email ?? '', message: (e as Error).message }); }
+    finally { setTesting(false); }
+  };
   return (
     <div className="animate-fade-up max-w-3xl space-y-6">
       <PageTitle title="⚙️ Paramètres" subtitle="Restaurant, seuils d’alerte, auto-reorder et e-mail du matin."
         action={<Link to="/app/equipe" className="btn-ghost">👥 Équipe & sécurité</Link>} />
       {msg && <p className="rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-900">{msg}</p>}
-      <div className="grid grid-cols-3 gap-3"><Stat label="Formule" value={<Link to="/app/abonnement" className="underline capitalize">{data.restaurant.plan === 'trial' ? 'Essai' : data.restaurant.plan}</Link>} /><Stat label="Essai jusqu’au" value={data.restaurant.trialEndsAt ? new Date(data.restaurant.trialEndsAt).toLocaleDateString('fr-FR') : '—'} /><Stat label="Envoi e-mail" value={data.mail.transport === 'resend' ? 'Actif' : 'Dév.'} hint={data.mail.from} /></div>
+      <div className="grid grid-cols-3 gap-3"><Stat label="Formule" value={<Link to="/app/abonnement" className="underline capitalize">{data.restaurant.plan === 'trial' ? 'Essai' : data.restaurant.plan}</Link>} /><Stat label="Essai jusqu’au" value={data.restaurant.trialEndsAt ? new Date(data.restaurant.trialEndsAt).toLocaleDateString('fr-FR') : '—'} />{/* Chantier 6 : l'état affiché est l'état réel du canal, pas une intention. */}
+        <Stat label="Envoi e-mail" value={data.mail.delivered ? (data.mail.transport === 'resend' ? 'Actif' : 'Mode dev') : 'Non configuré'} hint={data.mail.delivered ? data.mail.from : "Les e-mails ne partent pas encore — testez ci-dessous"} /></div>
       <section className="card space-y-3">
         <h2 className="font-bold">Restaurant</h2>
         <div className="grid gap-3 sm:grid-cols-3">
@@ -64,7 +79,19 @@ export default function Settings() {
         <h2 className="font-bold flex items-center gap-2"><Mail size={18} /> « Votre matin AFRISUPPLY »</h2>
         <p className="text-sm text-stone-600">Chaque matin vers 6 h 30 : ce qu’il faut commander, le panier prêt, les hausses de prix, les écarts à réclamer, les livraisons attendues.</p>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.dailyDigestEnabled} onChange={(e) => setF({ ...f, dailyDigestEnabled: e.target.checked })} /> Recevoir l’e-mail quotidien</label>
-        <Field label="📱 WhatsApp / SMS de suivi de commande" hint={data?.sms?.configured ? 'Vous recevrez confirmation, refus et départ de livraison de vos commandes marketplace.' : 'Enregistré ; les envois seront activés dès la mise en service du canal WhatsApp/SMS.'}><div className="flex gap-2"><input className="input" value={f.notifyPhone ?? ''} onChange={(e) => setF({ ...f, notifyPhone: e.target.value })} placeholder="06 12 34 56 78" /><button type="button" className="btn-ghost whitespace-nowrap" disabled={!f.notifyPhone} onClick={async () => { try { await api('/settings', { method: 'PUT', json: { notifyPhone: f.notifyPhone } }); const r = await api<{ ok: boolean; channel: string; error?: string; configured: boolean }>('/settings/test-sms', { method: 'POST', json: {} }); setMsg(r.configured ? (r.ok ? `Message test envoyé par ${r.channel}` : `Échec : ${r.error}`) : 'Numéro enregistré (canal WhatsApp/SMS pas encore en service : le test est journalisé).'); } catch (e) { setMsg((e as Error).message); } }}>Tester</button></div></Field>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.immediateAlertEmails} onChange={(e) => setF({ ...f, immediateAlertEmails: e.target.checked })} /> Me prévenir <b>tout de suite</b> par e-mail en cas de rupture, d’écart de livraison ou de facture plus élevée que la commande (sans attendre le lendemain matin)</label>
+        <div className="rounded-xl border border-stone-200 bg-stone-50 p-3 space-y-2">
+          <p className="text-sm font-semibold">Recevoir un e-mail, ici et maintenant</p>
+          {/* Chantier 6 : un test honnête — l'état annoncé est celui de l'envoi réel, pas celui de l'intention. */}
+          <p className="text-xs text-stone-600">{data.mail.configured
+            ? `Envoi actif (${data.mail.transport}) depuis ${data.mail.from}.`
+            : `Aucun service d'envoi réel n'est configuré sur ce serveur : les e-mails ne partent PAS encore. Vérifiez ci-dessous, puis demandez l'activation à l'équipe AFRISUPPLY.`}</p>
+          <button className="btn-ghost" disabled={testing} onClick={() => void testEmail()}>{testing ? 'Envoi en cours…' : '📨 M’envoyer un e-mail de test'}</button>
+          {mailTest && <p className={mailTest.delivered ? 'text-sm text-emerald-800' : 'text-sm text-amber-900'}>{mailTest.message}{mailTest.delivered && mailTest.transport === 'resend' ? ' (pensez aux indésirables)' : ''}</p>}
+        </div>
+        <Field label="📱 WhatsApp / SMS de suivi de commande" hint={data?.sms?.configured ? 'Vous recevrez confirmation, refus et départ de livraison de vos commandes marketplace.' : 'Votre numéro est enregistré ; les envois démarrent dès que le canal WhatsApp/SMS est activé sur l’installation.'}><div className="flex gap-2"><input className="input" value={f.notifyPhone ?? ''} onChange={(e) => setF({ ...f, notifyPhone: e.target.value })} placeholder="06 12 34 56 78" /><button type="button" className="btn-ghost whitespace-nowrap" disabled={!f.notifyPhone} onClick={async () => { setSmsMsg(null); try { await api('/settings', { method: 'PUT', json: { notifyPhone: f.notifyPhone } }); const r = await api<{ ok: boolean; channel: string; delivered: boolean; error?: string; configured: boolean; message: string }>('/settings/test-sms', { method: 'POST', json: {} }); setSmsMsg(r.message); } catch (e) { setSmsMsg((e as Error).message); } }}>Tester</button></div>
+          {smsMsg && <p className={/n.a PAS|Échec|pas été envoyé/i.test(smsMsg) ? 'mt-1 text-xs text-amber-900' : 'mt-1 text-xs text-emerald-800'}>{smsMsg}</p>}
+        </Field>
         <Field label="Destinataires" hint="Vide = propriétaires et managers du restaurant. Séparez par des virgules."><input className="input" value={f.recipientsText} onChange={(e) => setF({ ...f, recipientsText: e.target.value })} placeholder="awa@chezawa.fr, chef@chezawa.fr" /></Field>
         <div className="flex flex-wrap gap-2"><button className="btn-ghost" onClick={() => void showPreview()}><Eye size={16} /> Aperçu</button><button className="btn-ghost" disabled={busy} onClick={() => void sendTest()}><Send size={16} /> M’envoyer le mail maintenant</button></div>
         {preview && <div className="rounded-xl border border-stone-200 overflow-hidden"><p className="bg-stone-50 px-3 py-2 text-sm font-semibold">{preview.subject}</p><iframe title="Aperçu du mail" srcDoc={preview.html} sandbox="" className="h-[520px] w-full bg-white" /></div>}

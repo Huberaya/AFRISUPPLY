@@ -2,13 +2,15 @@
 // Intelligence : prévision, panier intelligent, auto-reorder, assistant, ventes
 // =============================================================
 import { Hono } from 'hono';
+import { captureException } from '../lib/ops.js';
 import { z } from 'zod';
 import { and, eq, desc, gte, sql, inArray } from 'drizzle-orm';
 import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, orders, orderLines, deliveries,
   recipes, recipeIngredients, sales, forecasts, reorderRules, alerts, restaurants,
 } from '@afrisupply/db';
-import { nextOrderReference } from '../lib/reference.js';
+
+import { nextOrderReference, insertWithFreshReference } from '../lib/reference.js';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { forecastRecipes, forecastProducts, buildSmartCart, type CartOffer } from '../lib/forecast.js';
 import { compareOffers, recipeCost, marginAnalysis, supplierReliability, daysOfStock, stockStatus } from '../lib/engines.js';
@@ -276,13 +278,20 @@ export async function runAutoReorder(rid: string, userId: string | null = null) 
     const f = ctx.productForecasts.find((x) => x.productId === s.productId);
     const cmp = compareOffers(cands, { daysOfStockLeft: f?.daysOfStockLeft ?? null, neededQty: n(rule.reorderQty), unit: s.unit });
     const best = cmp.recommended!; const packs = Math.max(1, Math.ceil(n(rule.reorderQty) / best.packQty));
-    const reference = await nextOrderReference();
     const total = packs * best.packPrice;
     const sup = await db.select().from(suppliers).where(eq(suppliers.id, best.supplierId)).then((r) => r[0]);
-    const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: best.supplierId, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + best.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: best.deliveryFee.toFixed(2), source: 'auto_reorder', createdBy: userId, notes: cmp.justification.join(' ') }).returning();
+    // Chantier 6 (audit) : une règle qui échoue ne doit pas interrompre les autres ni faire échouer le job.
+    let order: typeof orders.$inferSelect;
+    try {
+      order = await insertWithFreshReference((reference) => db.insert(orders).values({ restaurantId: rid, supplierId: best.supplierId, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + best.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: best.deliveryFee.toFixed(2), source: 'auto_reorder', createdBy: userId, notes: cmp.justification.join(' ') }).returning().then((r) => r[0]));
+    } catch (e) {
+      skipped.push(`${s.productName} : la commande n’a pas pu être préparée (${(e as Error).message.split('\n')[0].slice(0, 120)})`);
+      void captureException(e as Error, { route: 'auto_reorder', restaurantId: rid, extra: { productId: s.productId } });
+      continue;
+    }
     await db.insert(orderLines).values({ orderId: order.id, productId: s.productId, offerId: best.offerId, packLabel: best.packLabel, packs, quantity: (packs * best.packQty).toFixed(3), unitPriceEur: best.unitPrice.toFixed(4), lineTotalEur: total.toFixed(2) });
     await db.insert(alerts).values({ restaurantId: rid, dedupeKey: `auto_reorder:${order.id}`, kind: 'stock_bas', severity: 'blue', title: `🤖 Auto-Reorder — ${s.productName}`, message: `Stock à ${qty(s.quantity, s.unit)} (seuil ${qty(n(rule.threshold), s.unit)}). Commande de ${qty(packs * best.packQty, s.unit)} préparée chez ${best.supplierName} pour ${eur(total)}. ${cmp.justification[1] ?? ''}`.trim(), productId: s.productId, supplierId: best.supplierId, actionUrl: '/app/achats' }).onConflictDoNothing();
-    prepared.push({ productName: s.productName, supplierName: best.supplierName, packs, packLabel: best.packLabel, total, reference });
+    prepared.push({ productName: s.productName, supplierName: best.supplierName, packs, packLabel: best.packLabel, total, reference: order.reference });
   }
   return { prepared, skipped };
 }

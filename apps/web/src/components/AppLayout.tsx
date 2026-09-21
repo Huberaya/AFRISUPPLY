@@ -48,8 +48,16 @@ export default function AppLayout() {
   const visibleNav = NAV.filter((item) => ROLE_RANK[myRole] >= ROLE_RANK[(item as { minRole?: string }).minRole ?? 'staff']);
   const [open, setOpen] = useState(false);
   const nav = useNavigate();
-  const { data: alerts } = useApi<{ alerts: { isRead: boolean }[] }>('/alerts');
+  const { data: alerts, reload: reloadAlerts } = useApi<{ alerts: { isRead: boolean }[] }>('/alerts');
   const unread = alerts?.alerts.filter((a) => !a.isRead).length ?? 0;
+  // Chantier 6 : la cloche se met à jour toute seule — une rupture détectée pendant la journée
+  // doit se voir sans recharger la page (et sans attendre le mail du matin).
+  useEffect(() => {
+    const t = window.setInterval(() => { void reloadAlerts(); }, 60_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') void reloadAlerts(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { window.clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
+  }, [reloadAlerts]);
 
   const Sidebar = (
     <aside className="flex h-full w-64 flex-col bg-stone-900 text-stone-200">

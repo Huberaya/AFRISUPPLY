@@ -136,3 +136,11 @@ export function checkLineEdit(o: OrderState): Refusal | null {
   }
   return null;
 }
+
+/** Violation d'unicité PostgreSQL (code 23505) portant sur la contrainte nommée. */
+export function isUniqueViolation(e: unknown, constraint: string): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const err = e as { code?: string; constraint?: string; message?: string; cause?: { code?: string; constraint?: string; message?: string } };
+  const probe = [err, err.cause].filter(Boolean) as { code?: string; constraint?: string; message?: string }[];
+  return probe.some((p) => p.code === '23505' && `${p.constraint ?? ''}${p.message ?? ''}`.includes(constraint));
+}

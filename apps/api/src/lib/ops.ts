@@ -74,5 +74,26 @@ export async function audit(action: string, opts: { actorEmail?: string | null; 
   try { const db = await getDb(); await db.insert(auditLog).values({ action, actorEmail: opts.actorEmail ?? null, target: opts.target, meta: opts.meta }); } catch (e) { console.error('[audit]', e); }
 }
 
+// ---------- Alerte admin ----------
+// Chantier 6 (audit) : une promesse de notification non tenue (canal annoncé mais indisponible,
+// job qui échoue) ne doit pas se contenter d'un console.log dans un log serverless que personne ne lit.
+// Elle laisse une trace en base (audit_log), part chez Sentry si configuré, et est limitée dans le temps
+// pour qu'un incident prolongé ne noie pas l'exploitant sous les alertes.
+const adminAlerts = new Map<string, number>();
+
+export async function alertAdmin(opts: { key: string; message: string; detail?: Record<string, unknown>; throttleMs?: number }) {
+  const throttle = opts.throttleMs ?? 3_600_000;
+  const now = Date.now();
+  if (now - (adminAlerts.get(opts.key) ?? 0) < throttle) return false;
+  adminAlerts.set(opts.key, now);
+  console.error(`[alerte-admin] ${opts.message}`, opts.detail ?? {});
+  try { await audit(`ops.${opts.key}`, { target: opts.key, meta: { message: opts.message, ...(opts.detail ?? {}) } }); } catch { /* déjà protégé par audit() */ }
+  await captureException(new Error(opts.message), { route: `ops/${opts.key}`, extra: opts.detail });
+  return true;
+}
+
+/** Réinitialise l'anti-spam d'alertes (tests). */
+export const _resetAdminAlerts = () => adminAlerts.clear();
+
 // ---------- Version / build ----------
 export const buildInfo = () => ({ version: process.env.npm_package_version ?? '0.1.0', commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local', env: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? 'development', region: process.env.VERCEL_REGION ?? 'local' });

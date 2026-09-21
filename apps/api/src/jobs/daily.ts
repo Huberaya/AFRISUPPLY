@@ -14,11 +14,13 @@ import { invoiceCommissions } from '../routes/billing.js';
 import { buildWeeklyPilotReport } from '../routes/pilots.js';
 import { remindPendingVendorOrders } from './reminders.js';
 import { runRecurringOrders } from '../routes/marketplace.js';
+import { recipientsFor as recipientsFrom } from '../lib/recipients.js';
+import { notifyCriticalAlerts, pendingImmediateAlerts, markAlertsNotified } from '../lib/notify.js';
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 
-export interface DailyResult { restaurantId: string; name: string; alerts: number; autoReorder: number; digest: 'sent' | 'skipped_disabled' | 'skipped_closed' | 'skipped_no_recipient' | 'error'; recipients: string[]; transport?: string; error?: string }
+export interface DailyResult { restaurantId: string; name: string; alerts: number; autoReorder: number; digest: 'sent' | 'skipped_disabled' | 'skipped_closed' | 'skipped_no_recipient' | 'error'; recipients: string[]; transport?: string; error?: string; immediate?: { alerts: number; sent: boolean; status: string }; missingSales?: { created: boolean; gapDays: number | null }; autoReorderError?: string; autoReorderSkipped?: string[] }
 
 /** Construit le contenu du digest d'un restaurant (sans l'envoyer). */
 export async function buildDigestForRestaurant(rid: string, opts: { autoReorderPrepared?: DigestInput['autoReorder']; now?: Date } = {}) {
@@ -65,11 +67,50 @@ export async function buildDigestForRestaurant(rid: string, opts: { autoReorderP
   return { input, ctx };
 }
 
-async function recipientsFor(rid: string, settingsRecipients?: string[]) {
-  if (settingsRecipients?.length) return settingsRecipients.map((e) => ({ email: e, firstName: 'chef' }));
+// Chantier 6 : les destinataires sont définis une seule fois (lib/recipients.ts), partagés
+// par le mail du matin et par les alertes immédiates.
+const recipientsFor = (rid: string, settingsRecipients?: string[]) => recipientsFrom(rid, settingsRecipients);
+
+/** Nombre de jours tolérés sans saisie de ventes avant relance (chantier 6, défaut 3). */
+export const SALES_GAP_DAYS = () => Math.max(1, Number(process.env.SALES_GAP_DAYS ?? 3));
+
+/** Clé de semaine ISO (AAAA-Sxx) : une relance « ventes non saisies » au maximum par semaine. */
+export function weekKey(d: Date) {
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);
+  const y = t.getUTCFullYear();
+  const w = Math.ceil(((t.getTime() - Date.UTC(y, 0, 1)) / 86_400_000 + 1) / 7);
+  return `${y}-S${String(w).padStart(2, '0')}`;
+}
+
+/**
+ * Chantier 6 — relance si les ventes ne sont pas saisies depuis SALES_GAP_DAYS jours.
+ * La relance devient une alerte (visible dans la cloche), envoyée par e-mail par lib/notify.ts.
+ */
+export async function checkMissingSales(rid: string, now = new Date()): Promise<{ created: boolean; gapDays: number | null }> {
   const db = await getDb();
-  const rows = await db.select({ email: users.email, fullName: users.fullName, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(eq(restaurantMembers.restaurantId, rid));
-  return rows.filter((r) => r.role !== 'staff').map((r) => ({ email: r.email, firstName: r.fullName.split(' ')[0] || 'chef' }));
+  const [last] = await db.select({ day: sales.day }).from(sales).where(eq(sales.restaurantId, rid)).orderBy(desc(sales.day)).limit(1);
+  const gapDays = last?.day ? Math.floor((now.getTime() - new Date(`${last.day}T00:00:00Z`).getTime()) / 86_400_000) : null;
+  if (last && gapDays !== null && gapDays < SALES_GAP_DAYS()) return { created: false, gapDays };
+  const key = `ventes_non_saisies:${weekKey(now)}`;
+  const res = await db.insert(alerts).values({
+    restaurantId: rid, dedupeKey: key, kind: 'saisie', severity: 'orange',
+    title: last ? `📝 Ventes non saisies depuis ${gapDays} jours` : '📝 Aucune vente saisie pour l’instant',
+    message: last
+      ? `Sans vos ventes, la prévision se dégrade : elle se base alors sur vos couverts et vos seuils. 30 secondes suffisent pour la remettre à jour.`
+      : `Enregistrez vos ventes du jour (portions vendues) : la prévision, le panier intelligent et les alertes de rupture s’appuient dessus.`,
+    actionUrl: '/app/ventes', payload: { gapDays, lastDay: last?.day ?? null, reminder: 'sales' },
+  }).onConflictDoNothing().returning({ id: alerts.id });
+  return { created: res.length > 0, gapDays };
+}
+
+/** Le mail du matin ne part pas : on envoie tout de suite les alertes urgentes en attente (pas de silence). */
+async function notifyInsteadOfDigest(base: DailyResult, rid: string, opts: { dryRun?: boolean; now?: Date }): Promise<DailyResult> {
+  if (opts.dryRun) return base;
+  try {
+    const res = await notifyCriticalAlerts(rid, { now: opts.now });
+    return { ...base, immediate: { alerts: res.alerts, sent: res.sent, status: res.status } };
+  } catch (e) { return { ...base, error: (e as Error).message }; }
 }
 
 /** Exécute le job pour un restaurant. `dryRun` = calculer sans envoyer ni créer de commandes ; `force` = ignorer désactivation / jour fermé. */
@@ -79,16 +120,28 @@ export async function runDailyForRestaurant(rid: string, opts: { dryRun?: boolea
   const base: DailyResult = { restaurantId: rid, name: r.name, alerts: 0, autoReorder: 0, digest: 'skipped_disabled', recipients: [] };
   try {
     const { inserted } = await refreshAlerts(rid); base.alerts = inserted;
+    // Chantier 6 : relance si les ventes ne sont pas saisies depuis 3 jours (une alerte par semaine civile).
+    if (!opts.dryRun) { const miss = await checkMissingSales(rid, now); base.missingSales = miss; }
     let prepared: DigestInput['autoReorder'] = [];
     if ((r.settings?.autoReorderEnabled ?? true) && !opts.dryRun) {
-      const res = await runAutoReorder(rid, null);
-      prepared = res.prepared.map((p) => ({ productName: p.productName, supplierName: p.supplierName, total: p.total, reference: p.reference })); base.autoReorder = prepared.length;
+      // Chantier 6 (audit) : l'auto-reorder est une aide, pas une condition. S'il échoue, le mail du matin
+      // part quand même (c'est lui qui prévient de la rupture) — l'incident est tracé et remonté.
+      try {
+        const res = await runAutoReorder(rid, null);
+        prepared = res.prepared.map((p) => ({ productName: p.productName, supplierName: p.supplierName, total: p.total, reference: p.reference })); base.autoReorder = prepared.length;
+        base.autoReorderSkipped = res.skipped.slice(0, 5);
+      } catch (e) {
+        base.autoReorderError = (e as Error).message.split('\n')[0].slice(0, 200);
+        await captureException(e as Error, { route: '/api/jobs/daily#auto-reorder', restaurantId: rid });
+      }
     }
-    if (!opts.force && r.settings?.dailyDigestEnabled === false) return base;
-    if (!opts.force && r.settings?.closedWeekdays?.includes(now.getDay())) return { ...base, digest: 'skipped_closed' };
+    if (!opts.force && r.settings?.dailyDigestEnabled === false) return await notifyInsteadOfDigest(base, rid, opts);
+    if (!opts.force && r.settings?.closedWeekdays?.includes(now.getDay())) return await notifyInsteadOfDigest({ ...base, digest: 'skipped_closed' }, rid, opts);
     const recipients = await recipientsFor(rid, r.settings?.digestRecipients);
-    if (!recipients.length) return { ...base, digest: 'skipped_no_recipient' };
+    if (!recipients.length) return await notifyInsteadOfDigest({ ...base, digest: 'skipped_no_recipient' }, rid, opts);
     const { input } = await buildDigestForRestaurant(rid, { autoReorderPrepared: prepared, now });
+    // Chantier 6 : les alertes urgentes en attente seront couvertes par le mail du matin — on évite le doublon.
+    const pending = opts.dryRun ? [] : await pendingImmediateAlerts(rid);
     let preview: ReturnType<typeof buildDigest> | undefined; let transport = '';
     for (const rcpt of recipients) {
       const digest = buildDigest({ ...input, firstName: rcpt.firstName }); preview ??= digest;
@@ -96,6 +149,7 @@ export async function runDailyForRestaurant(rid: string, opts: { dryRun?: boolea
       const res = await sendMail({ to: rcpt.email, subject: digest.subject, text: digest.text, html: digest.html, tags: { type: 'daily_digest', restaurant: rid } });
       transport = res.transport; if (!res.ok) throw new Error(res.error);
     }
+    if (pending.length) await markAlertsNotified(pending.map((a) => a.id), now);
     return { ...base, digest: 'sent', recipients: recipients.map((x) => x.email), transport: opts.dryRun ? 'dry-run' : transport, preview };
   } catch (e) { return { ...base, digest: 'error', error: (e as Error).message }; }
 }

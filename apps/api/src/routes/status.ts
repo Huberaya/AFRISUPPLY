@@ -1,30 +1,46 @@
-// Statut public de la plateforme : base joignable, dernier job du matin, version. Sans données métier.
+// Statut public de la plateforme : base joignable, derniers jobs, état réel des canaux de notification, version. Sans données métier.
 import { Hono } from 'hono';
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 import { getDb, jobRuns } from '@afrisupply/db';
 import { buildInfo, sentryEnabled } from '../lib/ops.js';
-import { mailerConfig } from '../lib/mailer.js';
+import { mailerConfig, mailStats } from '../lib/mailer.js';
+import { smsConfig, smsStats } from '../lib/sms.js';
 
 export const statusRoutes = new Hono();
 
+/** Fraîcheur attendue de chaque job (heures) : au-delà, la supervision le signale comme en retard. */
+const JOB_MAX_HOURS: Record<string, number> = { daily: 30, reminders: 3, 'alerts-notify': 3 };
+
+type JobInfo = { state: 'ok' | 'never' | 'degraded' | 'stale'; lastRun: null | { status: string; finishedAt: Date; durationMs: number; hoursAgo: number; summary: unknown; error: string | null } };
+
 statusRoutes.get('/status', async (c) => {
-  const t0 = Date.now(); let dbOk = false; let dbMs = 0; let lastJob: { status: string; finishedAt: Date; durationMs: number; sent?: unknown; count?: unknown } | null = null;
+  const t0 = Date.now(); let dbOk = false; let dbMs = 0;
+  const jobs: Record<string, JobInfo> = {};
   try {
     const db = await getDb(); await db.execute(sql`select 1`); dbMs = Date.now() - t0; dbOk = true;
-    const [j] = await db.select().from(jobRuns).where(eq(jobRuns.job, 'daily')).orderBy(desc(jobRuns.startedAt)).limit(1);
-    if (j) lastJob = { status: j.status, finishedAt: j.finishedAt, durationMs: j.durationMs, sent: j.summary?.sent, count: j.summary?.count };
+    // Chantier 6 : on supervise chaque job (plus seulement « daily ») — un cron qui ne tourne plus est une panne silencieuse.
+    const runs = await db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(200);
+    for (const job of Object.keys(JOB_MAX_HOURS)) {
+      const last = runs.find((r) => r.job === job) ?? null;
+      const hoursAgo = last ? (Date.now() - new Date(last.finishedAt).getTime()) / 3_600_000 : null;
+      const state: JobInfo['state'] = !last ? 'never' : last.status !== 'ok' ? 'degraded' : hoursAgo! > JOB_MAX_HOURS[job] ? 'stale' : 'ok';
+      jobs[job] = { state, lastRun: last ? { status: last.status, finishedAt: last.finishedAt, durationMs: last.durationMs, hoursAgo: Math.round(hoursAgo! * 10) / 10, summary: last.summary ?? null, error: last.error ?? null } : null };
+    }
   } catch { dbOk = false; }
-  const hoursSinceJob = lastJob ? (Date.now() - new Date(lastJob.finishedAt).getTime()) / 3_600_000 : null;
-  const jobState = !lastJob ? 'never' : lastJob.status !== 'ok' ? 'degraded' : hoursSinceJob! > 30 ? 'stale' : 'ok';
-  const ok = dbOk && jobState !== 'degraded';
+  const mc = mailerConfig(); const sc = smsConfig();
+  const degraded = Object.values(jobs).some((j) => j.state === 'degraded');
+  const ok = dbOk && !degraded;
   return c.json({
     ok, ...buildInfo(), checkedAt: new Date().toISOString(),
     checks: {
       database: { ok: dbOk, latencyMs: dbMs },
-      dailyJob: { state: jobState, lastRun: lastJob ? { ...lastJob, hoursAgo: Math.round(hoursSinceJob! * 10) / 10 } : null },
-      mail: { transport: mailerConfig().transport, configured: mailerConfig().transport === 'resend' },
+      jobs,
+      // Compatibilité : l'ancien champ dailyJob reste exposé (supervision externe existante).
+      dailyJob: jobs.daily ?? { state: 'never', lastRun: null },
+      mail: { transport: mc.transport, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', from: mc.from, stats: mailStats() },
+      sms: { configured: sc.enabled, whatsapp: sc.whatsapp, delivered: sc.enabled, stats: smsStats() },
       errorTracking: { configured: sentryEnabled() },
-      cron: { configured: !!process.env.CRON_SECRET },
+      cron: { configured: !!process.env.CRON_SECRET, jobs: ['/api/jobs/daily', '/api/jobs/reminders'] },
     },
   }, ok ? 200 : 503);
 });

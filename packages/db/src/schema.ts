@@ -26,7 +26,7 @@ export const orderStatus = pgEnum('order_status', [
   'brouillon', 'preparee', 'envoyee', 'confirmee', 'livree_partiel', 'livree', 'annulee',
 ]);
 export const orderChannel = pgEnum('order_channel', ['email', 'whatsapp', 'telephone', 'plateforme']);
-export const alertKind = pgEnum('alert_kind', ['rupture', 'stock_bas', 'hausse_prix', 'opportunite', 'fournisseur', 'ecart_livraison']);
+export const alertKind = pgEnum('alert_kind', ['rupture', 'stock_bas', 'hausse_prix', 'opportunite', 'fournisseur', 'ecart_livraison', 'saisie']);
 export const alertSeverity = pgEnum('alert_severity', ['red', 'orange', 'green', 'blue']);
 export const plan = pgEnum('plan', ['trial', 'starter', 'pro', 'business']);
 
@@ -109,6 +109,7 @@ export type RestaurantSettings = {
   forecastHorizonDays?: number;     // défaut 7
   autoReorderEnabled?: boolean;     // le job quotidien exécute les règles (défaut true)
   dailyDigestEnabled?: boolean;     // e-mail « Votre matin AFRISUPPLY » (défaut true)
+  immediateAlertEmails?: boolean;   // chantier 6 : e-mail immédiat sur rupture / écart de livraison / surfacturation (défaut true)
   digestRecipients?: string[];      // e-mails ; défaut : membres owner/manager
   closedWeekdays?: number[];        // 0=dimanche… pas de mail ces jours-là
   notifyPhone?: string;             // chantier 18 : WhatsApp/SMS du restaurant pour le suivi de commande
@@ -346,6 +347,8 @@ export const alerts = pgTable('alerts', {
   actionUrl: text('action_url'),
   payload: jsonb('payload').$type<Record<string, unknown>>(),
   isRead: boolean('is_read').default(false).notNull(),
+  // Chantier 6 (audit) : date d'envoi de l'e-mail d'alerte immédiat. NULL = pas encore notifié par e-mail.
+  notifiedAt: timestamp('notified_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [uniqueIndex('alerts_dedupe').on(t.restaurantId, t.dedupeKey)]);
 
