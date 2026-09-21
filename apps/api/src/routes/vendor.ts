@@ -171,12 +171,44 @@ vendorRoutes.post('/vendor/orders/:id/confirm', async (c) => {
   const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid))); if (!o) return c.json({ error: 'Commande introuvable' }, 404);
   if (o.status !== 'envoyee') return c.json({ error: `Commande déjà ${o.status}` }, 400);
   const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
-  const [upd] = await db.update(orders).set({ status: 'confirmee', expectedAt: body.data.expectedAt ?? o.expectedAt, vendorDecisionAt: new Date(), vendorNote: body.data.note }).where(eq(orders.id, o.id)).returning();
+  const [upd] = await db.update(orders).set({ status: 'confirmee', expectedAt: body.data.expectedAt ?? o.expectedAt, vendorDecisionAt: new Date(), vendorNote: body.data.note, proposal: null }).where(eq(orders.id, o.id)).returning();
   const amount = n(o.totalEur) * n(v.commissionPct) / 100;
   await db.insert(commissions).values({ vendorId: vid, orderId: o.id, orderTotalEur: o.totalEur, pct: v.commissionPct, amountEur: amount.toFixed(2), period: new Date().toISOString().slice(0, 7) }).onConflictDoNothing();
   void logOrderEvent(o.id, 'confirmed', `Confirmée par ${v.name}${upd.expectedAt ? ` — livraison prévue le ${upd.expectedAt}` : ''}`, 'vendor');
   void notifyRestaurant(o.id, `✅ ${v.name} a confirmé votre commande ${o.reference}`, `${v.name} a confirmé la commande ${o.reference} (${eur(n(o.totalEur))}).\nLivraison prévue le ${upd.expectedAt ?? 'à confirmer'}.${body.data.note ? `\nMessage du fournisseur : ${body.data.note}` : ''}`);
   return c.json({ order: upd, commission: Math.round(amount * 100) / 100 });
+});
+
+/** Chantier 21 : proposition de modification (ruptures partielles / substitutions). La commande reste 'envoyee' jusqu'à la réponse du restaurant. */
+vendorRoutes.post('/vendor/orders/:id/propose', async (c) => {
+  const body = z.object({ note: z.string().max(300).optional(), expectedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    lines: z.array(z.object({ lineId: z.string().uuid(), newPacks: z.number().int().nonnegative(), replacementOfferId: z.string().uuid().nullable().optional(), replacementPacks: z.number().int().positive().optional() })).min(1) }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid))); if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  if (o.status !== 'envoyee') return c.json({ error: `Commande déjà ${o.status}` }, 400);
+  const lines = await db.select({ l: orderLines, productName: products.name }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(eq(orderLines.orderId, o.id));
+  const offerIds = body.data.lines.map((x) => x.replacementOfferId).filter((x): x is string => !!x);
+  const offers = offerIds.length ? await db.select({ o: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq(products.id, vendorOffers.productId)).where(and(eq(vendorOffers.vendorId, vid), inArray(vendorOffers.id, offerIds))) : [];
+  const out: NonNullable<typeof o.proposal>['lines'] = [];
+  for (const l of lines) {
+    const ch = body.data.lines.find((x) => x.lineId === l.l.id); const packs = n(l.l.packs); const unitPack = n(l.l.lineTotalEur) / Math.max(1, packs);
+    if (!ch) { out.push({ lineId: l.l.id, productName: l.productName, packLabel: l.l.packLabel, packs, newPacks: packs, lineTotalEur: n(l.l.lineTotalEur), newLineTotalEur: n(l.l.lineTotalEur), replacement: null }); continue; }
+    if (ch.newPacks > packs) return c.json({ error: `Quantité proposée supérieure à la commande pour ${l.productName}` }, 400);
+    let replacement: NonNullable<typeof o.proposal>['lines'][number]['replacement'] = null;
+    if (ch.replacementOfferId) { const r = offers.find((x) => x.o.id === ch.replacementOfferId); if (!r) return c.json({ error: 'Offre de remplacement introuvable dans votre catalogue' }, 400); const rp = ch.replacementPacks ?? packs - ch.newPacks; replacement = { vendorOfferId: r.o.id, productId: r.o.productId, productName: r.productName, packLabel: r.o.packLabel, packQty: n(r.o.packQty), packPriceEur: n(r.o.packPriceEur), packs: rp, lineTotalEur: Math.round(rp * n(r.o.packPriceEur) * 100) / 100 }; }
+    out.push({ lineId: l.l.id, productName: l.productName, packLabel: l.l.packLabel, packs, newPacks: ch.newPacks, lineTotalEur: n(l.l.lineTotalEur), newLineTotalEur: Math.round(ch.newPacks * unitPack * 100) / 100, replacement });
+  }
+  const changed = out.filter((x) => x.newPacks !== x.packs || x.replacement); if (!changed.length) return c.json({ error: 'Aucune modification : confirmez simplement la commande' }, 400);
+  const newTotalEur = Math.round(out.reduce((a, x) => a + x.newLineTotalEur + (x.replacement?.lineTotalEur ?? 0), 0) * 100) / 100;
+  if (newTotalEur <= 0) return c.json({ error: 'Tout est en rupture : utilisez « Refuser »' }, 400);
+  const proposal = { note: body.data.note, expectedAt: body.data.expectedAt, lines: out, newTotalEur };
+  const [upd] = await db.update(orders).set({ proposal, proposalAt: new Date() }).where(eq(orders.id, o.id)).returning();
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, vid));
+  const summary = changed.map((x) => x.replacement ? `${x.productName} : ${x.newPacks}/${x.packs} + ${x.replacement.packs} × ${x.replacement.productName} (${x.replacement.packLabel ?? ''})` : `${x.productName} : ${x.newPacks}/${x.packs}${x.newPacks === 0 ? ' (rupture)' : ''}`).join(' ; ');
+  void logOrderEvent(o.id, 'note', `${v.name} propose une modification — ${summary}`, 'vendor', { newTotalEur });
+  void notifyRestaurant(o.id, `✏️ ${v.name} propose une modification de la commande ${o.reference}`, `${v.name} ne peut pas livrer la commande ${o.reference} telle quelle.\nProposition : ${summary}.\nNouveau total : ${eur(newTotalEur)} (au lieu de ${eur(n(o.totalEur))}).${body.data.note ? `\nMessage : ${body.data.note}` : ''}\n\nAcceptez ou refusez en un clic dans Achats.`);
+  return c.json({ order: { ...upd, proofPhoto: undefined, proofSignature: undefined }, proposal });
 });
 
 vendorRoutes.post('/vendor/orders/:id/refuse', async (c) => {

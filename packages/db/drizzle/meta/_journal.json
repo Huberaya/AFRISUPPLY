@@ -78,6 +78,13 @@
       "when": 1789929885979,
       "tag": "0010_fulfillment",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789969701714,
+      "tag": "0011_proposal",
+      "breakpoints": true
     }
   ]
 }

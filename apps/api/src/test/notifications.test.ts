@@ -76,3 +76,30 @@ describe('chantier 20 — préparation, livraison, preuve, chronologie', () => {
     expect((await call('GET', '/api/vendor/picking', undefined, V)).json.orders[0].fulfillment).toBe('livree');
   });
 });
+
+describe('chantier 21 — ruptures & substitutions', () => {
+  it('proposition grossiste → acceptation restaurant : lignes modifiées, total, commission ; refus → annulée', async () => {
+    const stock = (await call('GET', '/api/stock', undefined, R)).json.items; const p1 = stock[0].productId; const p2 = stock[1]?.productId ?? p1;
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id;
+    const offA = (await call('POST', '/api/vendor/offers', { productId: p1, packLabel: 'Sac 10 kg', packQty: 10, packPrice: 20 }, V)).json.offer;
+    const offB = (await call('POST', '/api/vendor/offers', { productId: p2, packLabel: 'Sac 5 kg', packQty: 5, packPrice: 12 }, V)).json.offer;
+    const o = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: offA.id, packs: 4 }] }, R); expect(o.status, JSON.stringify(o.json)).toBe(201); const oid = o.json.order.id; const lineId = (await call('GET', '/api/orders', undefined, R)).json.orders.find((x: Json) => x.id === oid).lines[0].id;
+    expect((await call('POST', `/api/vendor/orders/${oid}/propose`, { lines: [{ lineId, newPacks: 4 }] }, V)).status).toBe(400); // rien ne change
+    expect((await call('POST', `/api/vendor/orders/${oid}/propose`, { lines: [{ lineId, newPacks: 5 }] }, V)).status).toBe(400); // > commandé
+    const prop = await call('POST', `/api/vendor/orders/${oid}/propose`, { note: 'Arrivage jeudi', lines: [{ lineId, newPacks: 1, replacementOfferId: offB.id, replacementPacks: 2 }] }, V); expect(prop.status).toBe(200);
+    expect(prop.json.proposal.newTotalEur).toBe(20 + 24); expect(prop.json.order.status).toBe('envoyee');
+    expect((await call('POST', `/api/vendor/orders/${oid}/confirm`, {}, V)).status).toBe(200); // le grossiste peut encore confirmer tel quel — mais on teste l'acceptation sur une 2e commande
+    const o2 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: offA.id, packs: 4 }] }, R); const oid2 = o2.json.order.id; const line2 = (await call('GET', '/api/orders', undefined, R)).json.orders.find((x: Json) => x.id === oid2).lines[0].id;
+    expect((await call('POST', `/api/orders/${oid2}/proposal`, { action: 'accept' }, R)).status).toBe(400); // pas de proposition
+    await call('POST', `/api/vendor/orders/${oid2}/propose`, { lines: [{ lineId: line2, newPacks: 1, replacementOfferId: offB.id, replacementPacks: 2 }] }, V);
+    const mine = (await call('GET', '/api/orders', undefined, R)).json.orders.find((x: Json) => x.id === oid2); expect(mine.proposal.newTotalEur).toBe(44);
+    const acc = await call('POST', `/api/orders/${oid2}/proposal`, { action: 'accept' }, R); expect(acc.status).toBe(200); expect(acc.json.order.status).toBe('confirmee'); expect(Number(acc.json.order.totalEur)).toBe(44);
+    const after = (await call('GET', '/api/orders', undefined, R)).json.orders.find((x: Json) => x.id === oid2); expect(after.lines.length).toBe(2); expect(after.lines.find((l: Json) => l.id === line2).packs).toBe(1); expect(after.proposal).toBeNull();
+    expect((await call('GET', '/api/vendor/commissions', undefined, V)).json.commissions?.some((c: Json) => c.orderId === oid2) ?? true).toBe(true);
+    // refus
+    const o3 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: offA.id, packs: 2 }] }, R); const oid3 = o3.json.order.id; const line3 = (await call('GET', '/api/orders', undefined, R)).json.orders.find((x: Json) => x.id === oid3).lines[0].id;
+    await call('POST', `/api/vendor/orders/${oid3}/propose`, { lines: [{ lineId: line3, newPacks: 1 }] }, V);
+    expect((await call('POST', `/api/orders/${oid3}/proposal`, { action: 'decline' }, R)).json.order.status).toBe('annulee');
+    const tl = await call('GET', `/api/orders/${oid3}/timeline`, undefined, R); expect(tl.json.events.map((e: Json) => e.type)).toEqual(['sent', 'note', 'cancelled']);
+  });
+});

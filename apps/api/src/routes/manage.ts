@@ -5,8 +5,9 @@ import { z } from 'zod';
 import { and, eq, desc, gte, inArray, sql } from 'drizzle-orm';
 import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements,
-  orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, alerts, restaurants,
+  orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, alerts, restaurants, vendors, commissions,
 } from '@afrisupply/db';
+import { sendMail } from '../lib/mailer.js';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
 import { buildOrderMessage } from '../lib/messages.js';
 import { buildOrderDoc } from './vendor.js';
@@ -294,4 +295,32 @@ manageRoutes.get('/orders/:id/timeline', async (c) => {
   const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, deliverySlot: orders.deliverySlot, driverName: orders.driverName, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt, shippedAt: orders.shippedAt, preparedAt: orders.preparedAt, expectedAt: orders.expectedAt, status: orders.status }).from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid)));
   if (!o) return c.json({ error: 'Commande introuvable' }, 404);
   return c.json({ order: o, events: await orderTimeline(o.id) });
+});
+
+/** Chantier 21 : réponse du restaurant à une proposition de modification (accept → lignes modifiées + commande confirmée ; decline → annulée). */
+manageRoutes.post('/orders/:id/proposal', async (c) => {
+  const body = z.object({ action: z.enum(['accept', 'decline']) }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb(); const rid = c.get('restaurantId'); const user = c.get('user');
+  const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid))); if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  if (!o.proposal || o.status !== 'envoyee') return c.json({ error: 'Aucune proposition en attente' }, 400);
+  const [v] = o.vendorId ? await db.select().from(vendors).where(eq(vendors.id, o.vendorId)) : [];
+  if (body.data.action === 'decline') {
+    const [upd] = await db.update(orders).set({ status: 'annulee', vendorDecisionAt: new Date(), vendorNote: 'Proposition de modification refusée par le restaurant', proposal: null }).where(eq(orders.id, o.id)).returning();
+    void logOrderEvent(o.id, 'cancelled', 'Proposition refusée par le restaurant — commande annulée', 'restaurant');
+    if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `❌ ${o.reference} : proposition refusée, commande annulée`, text: `Le restaurant a refusé votre proposition de modification pour la commande ${o.reference}. La commande est annulée.`, html: `<p>Le restaurant a refusé votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annulée.</p>`, tags: { type: 'order_proposal' } });
+    return c.json({ order: upd });
+  }
+  const p = o.proposal;
+  for (const l of p.lines) {
+    if (l.newPacks !== l.packs) {
+      if (l.newPacks === 0) await db.delete(orderLines).where(eq(orderLines.id, l.lineId));
+      else { const [cur] = await db.select().from(orderLines).where(eq(orderLines.id, l.lineId)); if (cur) await db.update(orderLines).set({ packs: l.newPacks, quantity: (Number(cur.quantity) / Number(cur.packs) * l.newPacks).toFixed(3), lineTotalEur: l.newLineTotalEur.toFixed(2) }).where(eq(orderLines.id, l.lineId)); }
+    }
+    if (l.replacement) { const r = l.replacement; await db.insert(orderLines).values({ orderId: o.id, productId: r.productId, packLabel: r.packLabel, packs: r.packs, quantity: (r.packs * r.packQty).toFixed(3), unitPriceEur: (r.packPriceEur / Math.max(0.001, r.packQty)).toFixed(4), lineTotalEur: r.lineTotalEur.toFixed(2) }); }
+  }
+  const [upd] = await db.update(orders).set({ status: 'confirmee', totalEur: p.newTotalEur.toFixed(2), expectedAt: p.expectedAt ?? o.expectedAt, vendorDecisionAt: new Date(), vendorNote: p.note ?? 'Modification acceptée par le restaurant', proposal: null }).where(eq(orders.id, o.id)).returning();
+  if (v) { const amount = p.newTotalEur * Number(v.commissionPct) / 100; await db.insert(commissions).values({ vendorId: v.id, orderId: o.id, orderTotalEur: p.newTotalEur.toFixed(2), pct: v.commissionPct, amountEur: amount.toFixed(2), period: new Date().toISOString().slice(0, 7) }).onConflictDoNothing(); }
+  void logOrderEvent(o.id, 'confirmed', `Modification acceptée par le restaurant — commande confirmée (${p.newTotalEur.toFixed(2).replace('.', ',')} €)`, 'restaurant', { by: user.email });
+  if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `✅ ${o.reference} : modification acceptée — à préparer`, text: `Le restaurant a accepté votre proposition pour la commande ${o.reference}. Nouveau total ${p.newTotalEur.toFixed(2)} €. La commande est confirmée : préparez-la depuis votre espace.`, html: `<p>Le restaurant a accepté votre proposition pour la commande <b>${o.reference}</b>. Nouveau total <b>${p.newTotalEur.toFixed(2)} €</b>. La commande est confirmée.</p>`, tags: { type: 'order_proposal' } });
+  return c.json({ order: { ...upd, proofPhoto: undefined, proofSignature: undefined } });
 });

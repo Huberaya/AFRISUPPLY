@@ -9,6 +9,7 @@ import { CatalogImport, QuickPrice } from './CatalogImport';
 import { InviteLanding } from './InviteLanding';
 import { Analytics } from './Analytics';
 import { Fulfillment } from './Fulfillment';
+import { Propose } from './Propose';
 
 type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; cgvUpToDate?: boolean; cgvVersion?: string | null; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
 type Tab = 'dashboard' | 'offers' | 'orders' | 'fulfillment' | 'groupbuys' | 'commissions' | 'analytics';
@@ -118,11 +119,12 @@ function Offers() {
   );
 }
 
-type VOrder = { id: string; reference: string; status: string; totalEur: string; expectedAt: string | null; createdAt: string; restaurantName: string; city: string | null; address: string | null; restaurantPhone?: string | null; whatsappLink?: string | null; fulfillment?: string | null; notes: string | null; vendorNote: string | null; lines: { id: string; productName: string; packLabel: string | null; packs: number; quantity: string; unit: string; lineTotalEur: string }[] };
+type VOrder = { id: string; reference: string; status: string; totalEur: string; expectedAt: string | null; createdAt: string; restaurantName: string; city: string | null; address: string | null; restaurantPhone?: string | null; whatsappLink?: string | null; fulfillment?: string | null; proposal?: { newTotalEur: number; note?: string } | null; notes: string | null; vendorNote: string | null; lines: { id: string; productName: string; packLabel: string | null; packs: number; quantity: string; unit: string; lineTotalEur: string }[] };
 function Orders() {
   const [orders, setOrders] = useState<VOrder[]>([]); const [filter, setFilter] = useState<'envoyee' | 'confirmee' | ''>('envoyee'); const [reason, setReason] = useState<Record<string, string>>({}); const [date, setDate] = useState<Record<string, string>>({});
   const load = () => api<{ orders: VOrder[] }>(`/vendor/orders${filter ? `?status=${filter}` : ''}`).then((r) => setOrders(r.orders));
   useEffect(() => { void load(); }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [proposing, setProposing] = useState<string | null>(null);
   const act = async (id: string, a: 'confirm' | 'refuse') => { await api(`/vendor/orders/${id}/${a}`, { method: 'POST', json: a === 'confirm' ? { expectedAt: date[id] || undefined } : a === 'refuse' ? { reason: reason[id] || 'Indisponible' } : {} }); void load(); };
   return (
     <div className="space-y-3">
@@ -133,6 +135,9 @@ function Orders() {
           <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-bold">{o.restaurantName} <span className="ml-2 text-xs font-normal text-stone-500">{o.city}{o.address ? ` · ${o.address}` : ''}</span>{o.whatsappLink && <a href={o.whatsappLink} target="_blank" rel="noreferrer" className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100" title={o.restaurantPhone ?? ''}>💬 WhatsApp</a>}</p><p className="text-xs text-stone-500">{o.reference} · {new Date(o.createdAt).toLocaleString('fr-FR')} · {STATUS[o.status] ?? o.status}</p></div><p className="text-xl font-extrabold">{eur(o.totalEur)}</p></div>
           <ul className="text-sm">{o.lines.map((l) => <li key={l.id} className="flex justify-between border-t border-stone-100 py-1"><span>{l.packs} × {l.packLabel ?? l.productName} <span className="text-stone-400">({Number(l.quantity)} {l.unit})</span></span><span>{eur(l.lineTotalEur)}</span></li>)}</ul>
           {o.notes && <p className="rounded-lg bg-stone-50 p-2 text-sm">💬 {o.notes}</p>}{o.vendorNote && <p className="text-xs text-stone-500">Votre note : {o.vendorNote}</p>}
+          {o.status === 'envoyee' && o.proposal && <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-900">✏️ Proposition envoyée (nouveau total {Number(o.proposal.newTotalEur).toFixed(2).replace('.', ',')} €) — en attente de la réponse du restaurant.</p>}
+          {o.status === 'envoyee' && proposing === o.id && <Propose orderId={o.id} lines={o.lines} onDone={() => { setProposing(null); void load(); }} onCancel={() => setProposing(null)} />}
+          {o.status === 'envoyee' && proposing !== o.id && !o.proposal && <button className="btn-ghost text-amber-800" onClick={() => setProposing(o.id)}>✏️ Rupture partielle / substitution</button>}
           {o.status === 'envoyee' && <div className="flex flex-wrap items-end gap-2"><Field label="Livraison le"><input type="date" className="input" value={date[o.id] ?? o.expectedAt ?? ''} onChange={(e) => setDate({ ...date, [o.id]: e.target.value })} /></Field><button className="btn-primary !py-3" onClick={() => void act(o.id, 'confirm')}><Check size={18} /> Confirmer</button><div className="flex items-end gap-1"><input className="input" placeholder="Motif de refus" value={reason[o.id] ?? ''} onChange={(e) => setReason({ ...reason, [o.id]: e.target.value })} /><button className="btn-ghost !text-red-700" onClick={() => void act(o.id, 'refuse')}><X size={16} /> Refuser</button></div></div>}
           <div className="flex flex-wrap gap-2">{o.status === 'confirmee' && <span className="pill bg-stone-100 text-stone-700">{({ en_preparation: '🧺 En préparation', en_livraison: '🚚 En livraison', livree: '📦 Livrée' } as Record<string, string>)[o.fulfillment ?? ''] ?? '⏳ À préparer'} → onglet Préparation & livraison</span>}
           {o.status !== 'annulee' && <><button className="btn-ghost" onClick={() => void openPdf(`/vendor/orders/${o.id}/pdf`)}><FileText size={16} /> Bon de commande PDF</button><button className="btn-ghost" onClick={() => void openPdf(`/vendor/orders/${o.id}/pdf?type=livraison`)}><FileText size={16} /> Bon de livraison PDF</button></>}</div>

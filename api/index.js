@@ -295,6 +295,9 @@ var init_schema = __esm({
       proofSignature: text("proof_signature"),
       // data URL png
       proofNote: text("proof_note"),
+      // chantier 21 : proposition de modification du grossiste (ruptures / substitutions) en attente du restaurant
+      proposal: jsonb("proposal").$type(),
+      proposalAt: timestamp("proposal_at", { withTimezone: true }),
       createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
     }, (t) => [index("orders_restaurant_idx").on(t.restaurantId, t.createdAt), uniqueIndex("orders_ref").on(t.reference)]);
     orderLines = pgTable("order_lines", {
@@ -4944,6 +4947,7 @@ init_intelligence();
 
 // apps/api/src/routes/manage.ts
 init_src();
+init_mailer();
 init_auth();
 import { Hono as Hono11 } from "hono";
 import { z as z11 } from "zod";
@@ -5719,7 +5723,7 @@ vendorRoutes.post("/vendor/orders/:id/confirm", async (c) => {
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   if (o.status !== "envoyee") return c.json({ error: `Commande d\xE9j\xE0 ${o.status}` }, 400);
   const [v] = await db.select().from(vendors).where(eq16(vendors.id, vid));
-  const [upd] = await db.update(orders).set({ status: "confirmee", expectedAt: body3.data.expectedAt ?? o.expectedAt, vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: body3.data.note }).where(eq16(orders.id, o.id)).returning();
+  const [upd] = await db.update(orders).set({ status: "confirmee", expectedAt: body3.data.expectedAt ?? o.expectedAt, vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: body3.data.note, proposal: null }).where(eq16(orders.id, o.id)).returning();
   const amount = n7(o.totalEur) * n7(v.commissionPct) / 100;
   await db.insert(commissions).values({ vendorId: vid, orderId: o.id, orderTotalEur: o.totalEur, pct: v.commissionPct, amountEur: amount.toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
   void logOrderEvent(o.id, "confirmed", `Confirm\xE9e par ${v.name}${upd.expectedAt ? ` \u2014 livraison pr\xE9vue le ${upd.expectedAt}` : ""}`, "vendor");
@@ -5727,6 +5731,57 @@ vendorRoutes.post("/vendor/orders/:id/confirm", async (c) => {
 Livraison pr\xE9vue le ${upd.expectedAt ?? "\xE0 confirmer"}.${body3.data.note ? `
 Message du fournisseur : ${body3.data.note}` : ""}`);
   return c.json({ order: upd, commission: Math.round(amount * 100) / 100 });
+});
+vendorRoutes.post("/vendor/orders/:id/propose", async (c) => {
+  const body3 = z10.object({
+    note: z10.string().max(300).optional(),
+    expectedAt: z10.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    lines: z10.array(z10.object({ lineId: z10.string().uuid(), newPacks: z10.number().int().nonnegative(), replacementOfferId: z10.string().uuid().nullable().optional(), replacementPacks: z10.number().int().positive().optional() })).min(1)
+  }).safeParse(await c.req.json());
+  if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
+  const db = await getDb();
+  const vid = c.get("vendorId");
+  const [o] = await db.select().from(orders).where(and13(eq16(orders.id, c.req.param("id")), eq16(orders.vendorId, vid)));
+  if (!o) return c.json({ error: "Commande introuvable" }, 404);
+  if (o.status !== "envoyee") return c.json({ error: `Commande d\xE9j\xE0 ${o.status}` }, 400);
+  const lines = await db.select({ l: orderLines, productName: products.name }).from(orderLines).innerJoin(products, eq16(products.id, orderLines.productId)).where(eq16(orderLines.orderId, o.id));
+  const offerIds = body3.data.lines.map((x) => x.replacementOfferId).filter((x) => !!x);
+  const offers = offerIds.length ? await db.select({ o: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq16(products.id, vendorOffers.productId)).where(and13(eq16(vendorOffers.vendorId, vid), inArray6(vendorOffers.id, offerIds))) : [];
+  const out = [];
+  for (const l of lines) {
+    const ch = body3.data.lines.find((x) => x.lineId === l.l.id);
+    const packs = n7(l.l.packs);
+    const unitPack = n7(l.l.lineTotalEur) / Math.max(1, packs);
+    if (!ch) {
+      out.push({ lineId: l.l.id, productName: l.productName, packLabel: l.l.packLabel, packs, newPacks: packs, lineTotalEur: n7(l.l.lineTotalEur), newLineTotalEur: n7(l.l.lineTotalEur), replacement: null });
+      continue;
+    }
+    if (ch.newPacks > packs) return c.json({ error: `Quantit\xE9 propos\xE9e sup\xE9rieure \xE0 la commande pour ${l.productName}` }, 400);
+    let replacement = null;
+    if (ch.replacementOfferId) {
+      const r = offers.find((x) => x.o.id === ch.replacementOfferId);
+      if (!r) return c.json({ error: "Offre de remplacement introuvable dans votre catalogue" }, 400);
+      const rp = ch.replacementPacks ?? packs - ch.newPacks;
+      replacement = { vendorOfferId: r.o.id, productId: r.o.productId, productName: r.productName, packLabel: r.o.packLabel, packQty: n7(r.o.packQty), packPriceEur: n7(r.o.packPriceEur), packs: rp, lineTotalEur: Math.round(rp * n7(r.o.packPriceEur) * 100) / 100 };
+    }
+    out.push({ lineId: l.l.id, productName: l.productName, packLabel: l.l.packLabel, packs, newPacks: ch.newPacks, lineTotalEur: n7(l.l.lineTotalEur), newLineTotalEur: Math.round(ch.newPacks * unitPack * 100) / 100, replacement });
+  }
+  const changed = out.filter((x) => x.newPacks !== x.packs || x.replacement);
+  if (!changed.length) return c.json({ error: "Aucune modification : confirmez simplement la commande" }, 400);
+  const newTotalEur = Math.round(out.reduce((a, x) => a + x.newLineTotalEur + (x.replacement?.lineTotalEur ?? 0), 0) * 100) / 100;
+  if (newTotalEur <= 0) return c.json({ error: "Tout est en rupture : utilisez \xAB Refuser \xBB" }, 400);
+  const proposal = { note: body3.data.note, expectedAt: body3.data.expectedAt, lines: out, newTotalEur };
+  const [upd] = await db.update(orders).set({ proposal, proposalAt: /* @__PURE__ */ new Date() }).where(eq16(orders.id, o.id)).returning();
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq16(vendors.id, vid));
+  const summary = changed.map((x) => x.replacement ? `${x.productName} : ${x.newPacks}/${x.packs} + ${x.replacement.packs} \xD7 ${x.replacement.productName} (${x.replacement.packLabel ?? ""})` : `${x.productName} : ${x.newPacks}/${x.packs}${x.newPacks === 0 ? " (rupture)" : ""}`).join(" ; ");
+  void logOrderEvent(o.id, "note", `${v.name} propose une modification \u2014 ${summary}`, "vendor", { newTotalEur });
+  void notifyRestaurant(o.id, `\u270F\uFE0F ${v.name} propose une modification de la commande ${o.reference}`, `${v.name} ne peut pas livrer la commande ${o.reference} telle quelle.
+Proposition : ${summary}.
+Nouveau total : ${eur8(newTotalEur)} (au lieu de ${eur8(n7(o.totalEur))}).${body3.data.note ? `
+Message : ${body3.data.note}` : ""}
+
+Acceptez ou refusez en un clic dans Achats.`);
+  return c.json({ order: { ...upd, proofPhoto: void 0, proofSignature: void 0 }, proposal });
 });
 vendorRoutes.post("/vendor/orders/:id/refuse", async (c) => {
   const body3 = z10.object({ reason: z10.string().min(2).max(300) }).safeParse(await c.req.json());
@@ -6367,6 +6422,45 @@ manageRoutes.get("/orders/:id/timeline", async (c) => {
   const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, deliverySlot: orders.deliverySlot, driverName: orders.driverName, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt, shippedAt: orders.shippedAt, preparedAt: orders.preparedAt, expectedAt: orders.expectedAt, status: orders.status }).from(orders).where(and14(eq17(orders.id, c.req.param("id")), eq17(orders.restaurantId, rid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   return c.json({ order: o, events: await orderTimeline(o.id) });
+});
+manageRoutes.post("/orders/:id/proposal", async (c) => {
+  const body3 = z11.object({ action: z11.enum(["accept", "decline"]) }).safeParse(await c.req.json());
+  if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
+  const db = await getDb();
+  const rid = c.get("restaurantId");
+  const user = c.get("user");
+  const [o] = await db.select().from(orders).where(and14(eq17(orders.id, c.req.param("id")), eq17(orders.restaurantId, rid)));
+  if (!o) return c.json({ error: "Commande introuvable" }, 404);
+  if (!o.proposal || o.status !== "envoyee") return c.json({ error: "Aucune proposition en attente" }, 400);
+  const [v] = o.vendorId ? await db.select().from(vendors).where(eq17(vendors.id, o.vendorId)) : [];
+  if (body3.data.action === "decline") {
+    const [upd2] = await db.update(orders).set({ status: "annulee", vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: "Proposition de modification refus\xE9e par le restaurant", proposal: null }).where(eq17(orders.id, o.id)).returning();
+    void logOrderEvent(o.id, "cancelled", "Proposition refus\xE9e par le restaurant \u2014 commande annul\xE9e", "restaurant");
+    if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `\u274C ${o.reference} : proposition refus\xE9e, commande annul\xE9e`, text: `Le restaurant a refus\xE9 votre proposition de modification pour la commande ${o.reference}. La commande est annul\xE9e.`, html: `<p>Le restaurant a refus\xE9 votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annul\xE9e.</p>`, tags: { type: "order_proposal" } });
+    return c.json({ order: upd2 });
+  }
+  const p = o.proposal;
+  for (const l of p.lines) {
+    if (l.newPacks !== l.packs) {
+      if (l.newPacks === 0) await db.delete(orderLines).where(eq17(orderLines.id, l.lineId));
+      else {
+        const [cur] = await db.select().from(orderLines).where(eq17(orderLines.id, l.lineId));
+        if (cur) await db.update(orderLines).set({ packs: l.newPacks, quantity: (Number(cur.quantity) / Number(cur.packs) * l.newPacks).toFixed(3), lineTotalEur: l.newLineTotalEur.toFixed(2) }).where(eq17(orderLines.id, l.lineId));
+      }
+    }
+    if (l.replacement) {
+      const r = l.replacement;
+      await db.insert(orderLines).values({ orderId: o.id, productId: r.productId, packLabel: r.packLabel, packs: r.packs, quantity: (r.packs * r.packQty).toFixed(3), unitPriceEur: (r.packPriceEur / Math.max(1e-3, r.packQty)).toFixed(4), lineTotalEur: r.lineTotalEur.toFixed(2) });
+    }
+  }
+  const [upd] = await db.update(orders).set({ status: "confirmee", totalEur: p.newTotalEur.toFixed(2), expectedAt: p.expectedAt ?? o.expectedAt, vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: p.note ?? "Modification accept\xE9e par le restaurant", proposal: null }).where(eq17(orders.id, o.id)).returning();
+  if (v) {
+    const amount = p.newTotalEur * Number(v.commissionPct) / 100;
+    await db.insert(commissions).values({ vendorId: v.id, orderId: o.id, orderTotalEur: p.newTotalEur.toFixed(2), pct: v.commissionPct, amountEur: amount.toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
+  }
+  void logOrderEvent(o.id, "confirmed", `Modification accept\xE9e par le restaurant \u2014 commande confirm\xE9e (${p.newTotalEur.toFixed(2).replace(".", ",")} \u20AC)`, "restaurant", { by: user.email });
+  if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `\u2705 ${o.reference} : modification accept\xE9e \u2014 \xE0 pr\xE9parer`, text: `Le restaurant a accept\xE9 votre proposition pour la commande ${o.reference}. Nouveau total ${p.newTotalEur.toFixed(2)} \u20AC. La commande est confirm\xE9e : pr\xE9parez-la depuis votre espace.`, html: `<p>Le restaurant a accept\xE9 votre proposition pour la commande <b>${o.reference}</b>. Nouveau total <b>${p.newTotalEur.toFixed(2)} \u20AC</b>. La commande est confirm\xE9e.</p>`, tags: { type: "order_proposal" } });
+  return c.json({ order: { ...upd, proofPhoto: void 0, proofSignature: void 0 } });
 });
 
 // apps/api/src/app.ts

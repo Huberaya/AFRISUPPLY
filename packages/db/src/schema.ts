@@ -65,6 +65,12 @@ export const restaurants = pgTable('restaurants', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export type OrderProposal = {
+  note?: string; expectedAt?: string;
+  lines: { lineId: string; productName: string; packLabel: string | null; packs: number; newPacks: number; lineTotalEur: number; newLineTotalEur: number;
+    replacement?: { vendorOfferId: string; productId: string; productName: string; packLabel: string | null; packQty: number; packPriceEur: number; packs: number; lineTotalEur: number } | null }[];
+  newTotalEur: number;
+};
 export type RestaurantSettings = {
   currency?: 'EUR';
   priceIncreaseAlertPct?: number;   // défaut 8 %
@@ -213,6 +219,9 @@ export const orders = pgTable('orders', {
   proofPhoto: text('proof_photo'),                      // data URL jpeg compressée (≤ 400 Ko)
   proofSignature: text('proof_signature'),              // data URL png
   proofNote: text('proof_note'),
+  // chantier 21 : proposition de modification du grossiste (ruptures / substitutions) en attente du restaurant
+  proposal: jsonb('proposal').$type<OrderProposal>(),
+  proposalAt: timestamp('proposal_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('orders_restaurant_idx').on(t.restaurantId, t.createdAt), uniqueIndex('orders_ref').on(t.reference)]);
 

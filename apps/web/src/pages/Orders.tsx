@@ -6,8 +6,9 @@ import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
 import { Modal } from '../components/Modal';
 
-type Line = { id: string; productName: string; packLabel: string | null; packs: number; quantity: string; unitPriceEur: string; lineTotalEur: string; receivedQty: string | null };
-type O = { id: string; reference: string; supplierName: string; status: string; channel: string; expectedAt: string | null; totalEur: string; source: string; createdAt: string; lines: Line[]; vendorId?: string | null; fulfillment?: string | null; deliverySlot?: string | null; hasProof?: boolean };
+type Line = { id: string; productId?: string; productName: string; packLabel: string | null; packs: number; quantity: string; unitPriceEur: string; lineTotalEur: string; receivedQty: string | null };
+type O = { id: string; reference: string; supplierName: string; status: string; channel: string; expectedAt: string | null; totalEur: string; source: string; createdAt: string; lines: Line[]; vendorId?: string | null; fulfillment?: string | null; deliverySlot?: string | null; hasProof?: boolean; proposal?: Proposal | null };
+type Proposal = { note?: string; expectedAt?: string; newTotalEur: number; lines: { lineId: string; productName: string; packLabel: string | null; packs: number; newPacks: number; lineTotalEur: number; newLineTotalEur: number; replacement?: { productName: string; packLabel: string | null; packs: number; lineTotalEur: number } | null }[] };
 type TL = { order: { fulfillment: string | null; deliverySlot: string | null; driverName: string | null; proofPhoto: string | null; proofSignature: string | null; proofReceiverName: string | null; proofNote: string | null; vendorDeliveredAt: string | null }; events: { id: string; at: string; type: string; label: string; actor: string | null }[] };
 const STEPS = [['sent', 'Envoyée'], ['confirmed', 'Confirmée'], ['preparing', 'En préparation'], ['shipped', 'En livraison'], ['delivered', 'Livrée'], ['received', 'Réceptionnée']] as const;
 function Timeline({ o }: { o: O }) {
@@ -58,6 +59,12 @@ export default function Orders() {
       </summary>
       <div className="border-t border-stone-100 px-5 py-4">
         <table className="w-full text-sm"><tbody className="divide-y divide-stone-100">{o.lines.map((l) => <tr key={l.id}><td className="py-1.5">{l.productName}</td><td className="py-1.5 text-stone-500">{l.packs} × {l.packLabel}</td><td className="py-1.5 text-right">{fmtQty(l.quantity)}{l.receivedQty !== null && Number(l.receivedQty) !== Number(l.quantity) && <span className="ml-1 text-xs text-red-600">(reçu {fmtQty(l.receivedQty)})</span>}</td><td className="py-1.5 text-right font-semibold">{fmtEur(l.lineTotalEur)}</td></tr>)}</tbody></table>
+        {o.proposal && o.status === 'envoyee' && <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
+          <p className="font-bold text-amber-900">✏️ {o.supplierName} propose une modification</p>{o.proposal.note && <p className="mt-1 italic text-amber-900">« {o.proposal.note} »</p>}
+          <ul className="mt-2 space-y-1">{o.proposal.lines.filter((l) => l.newPacks !== l.packs || l.replacement).map((l) => <li key={l.lineId}>• <b>{l.productName}</b> : {l.newPacks === 0 ? <span className="text-red-700">rupture (0/{l.packs})</span> : <>{l.newPacks}/{l.packs} colis</>}{l.replacement && <> → remplacé par <b>{l.replacement.packs} × {l.replacement.productName}</b> {l.replacement.packLabel} ({fmtEur(l.replacement.lineTotalEur)})</>}</li>)}</ul>
+          <p className="mt-2">Nouveau total : <b>{fmtEur(o.proposal.newTotalEur)}</b> <span className="text-stone-500 line-through">{fmtEur(o.totalEur)}</span>{o.proposal.expectedAt && <> · livraison le {o.proposal.expectedAt}</>}</p>
+          <div className="mt-2 flex gap-2"><button className="btn-primary !py-1.5" onClick={async () => { await api(`/orders/${o.id}/proposal`, { method: 'POST', json: { action: 'accept' } }); await reload(); }}>✅ Accepter</button><button className="btn-ghost !py-1.5 text-red-700" onClick={async () => { if (confirm('Refuser la proposition annule la commande. Continuer ?')) { await api(`/orders/${o.id}/proposal`, { method: 'POST', json: { action: 'decline' } }); await reload(); } }}>Refuser (annuler la commande)</button><Link to={`/app/achats/comparer/${o.lines[0]?.productId ?? ''}`} className="btn-ghost !py-1.5">Comparer ailleurs</Link></div>
+        </div>}
         {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <Timeline o={o} />}
         <div className="mt-3 flex flex-wrap gap-2">
           {o.status === 'preparee' && <><button onClick={() => void openSend(o)} className="btn-primary !py-1.5"><Send size={14} /> Envoyer au fournisseur</button><button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button></>}
