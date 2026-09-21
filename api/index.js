@@ -851,7 +851,7 @@ async function measuredMonthlyUse(restaurantId, productId) {
   const db = await getDb();
   const [item] = await db.select({ id: inventoryItems.id }).from(inventoryItems).where(and(eq(inventoryItems.restaurantId, restaurantId), eq(inventoryItems.productId, productId)));
   if (!item) return 0;
-  const day = (n15) => new Date(Date.now() - n15 * 864e5).toISOString();
+  const day = (n16) => new Date(Date.now() - n16 * 864e5).toISOString();
   const [agg] = await db.select({
     use28: sql2`coalesce(sum(abs(${stockMovements.quantity})) filter (where ${stockMovements.type} in ('consommation','perte') and ${stockMovements.createdAt} >= ${day(28)}), 0)`,
     use90: sql2`coalesce(sum(abs(${stockMovements.quantity})) filter (where ${stockMovements.type} in ('consommation','perte') and ${stockMovements.createdAt} >= ${day(90)}), 0)`
@@ -1613,7 +1613,7 @@ var init_seed = __esm({
     init_client();
     init_schema();
     init_products();
-    daysAgo = (n15) => new Date(Date.now() - n15 * 864e5);
+    daysAgo = (n16) => new Date(Date.now() - n16 * 864e5);
     isoDay = (d) => d.toISOString().slice(0, 10);
     num = (v, dec = 3) => v.toFixed(dec);
     if (process.argv[1] && process.argv[1].endsWith("seed.ts")) {
@@ -2314,9 +2314,9 @@ import { eq as eq4, and as and3 } from "drizzle-orm";
 function tokenTtlSeconds(ttl = TOKEN_TTL) {
   const m = /^(\d+)\s*([smhd])?$/.exec(ttl.trim());
   if (!m) return 7 * 86400;
-  const n15 = Number(m[1]);
+  const n16 = Number(m[1]);
   const unit2 = m[2] ?? "s";
-  return n15 * ({ s: 1, m: 60, h: 3600, d: 86400 }[unit2] ?? 1);
+  return n16 * ({ s: 1, m: 60, h: 3600, d: 86400 }[unit2] ?? 1);
 }
 async function hashPassword(pw) {
   return bcrypt2.hash(pw, 10);
@@ -3639,16 +3639,16 @@ function buildSmartCart(needs, offers) {
   const unavailable = [];
   const choices = [];
   let baseline = 0;
-  for (const n15 of needs) {
-    if (n15.neededQty <= 0) continue;
-    const cands = offers.filter((o) => o.productId === n15.productId && o.inStock);
+  for (const n16 of needs) {
+    if (n16.neededQty <= 0) continue;
+    const cands = offers.filter((o) => o.productId === n16.productId && o.inStock);
     if (!cands.length) {
-      unavailable.push({ productId: n15.productId, productName: n15.productName, unit: n15.unit, neededQty: n15.neededQty });
+      unavailable.push({ productId: n16.productId, productName: n16.productName, unit: n16.unit, neededQty: n16.neededQty });
       continue;
     }
-    const urgencyH = n15.daysOfStockLeft !== null ? Math.max(24, n15.daysOfStockLeft * 24) : Infinity;
+    const urgencyH = n16.daysOfStockLeft !== null ? Math.max(24, n16.daysOfStockLeft * 24) : Infinity;
     const score = (o) => {
-      const packs2 = Math.max(1, Math.ceil(n15.neededQty / o.packQty));
+      const packs2 = Math.max(1, Math.ceil(n16.neededQty / o.packQty));
       const cost = packs2 * o.packPrice;
       const latePenalty = o.leadTimeHours > urgencyH ? 1e6 : 0;
       const reliabilityPenalty = (100 - o.reliabilityPct) / 100 * cost * 0.15;
@@ -3656,13 +3656,13 @@ function buildSmartCart(needs, offers) {
     };
     const ranked = [...cands].sort((a, b) => score(a) - score(b));
     const best = ranked[0];
-    const packs = Math.max(1, Math.ceil(n15.neededQty / best.packQty));
-    const usual = n15.preferredSupplierId ? cands.find((o) => o.supplierId === n15.preferredSupplierId) : void 0;
-    const usualCost = usual ? Math.max(1, Math.ceil(n15.neededQty / usual.packQty)) * usual.packPrice : packs * best.packPrice;
+    const packs = Math.max(1, Math.ceil(n16.neededQty / best.packQty));
+    const usual = n16.preferredSupplierId ? cands.find((o) => o.supplierId === n16.preferredSupplierId) : void 0;
+    const usualCost = usual ? Math.max(1, Math.ceil(n16.neededQty / usual.packQty)) * usual.packPrice : packs * best.packPrice;
     baseline += usualCost;
     const lineTotal = packs * best.packPrice;
-    const reason = best.leadTimeHours > 48 && urgencyH !== Infinity ? `D\xE9lai ${Math.round(best.leadTimeHours / 24)} j accept\xE9 (stock ${n15.daysOfStockLeft} j)` : usual && usual.offerId !== best.offerId ? `${best.supplierName} moins cher que ${usual.supplierName} (${(usualCost - lineTotal).toFixed(2)} \u20AC \xE9conomis\xE9s)` : best.unitPrice === Math.min(...cands.map((c) => c.unitPrice)) ? "Meilleur prix disponible" : "Meilleur compromis prix / d\xE9lai / fiabilit\xE9";
-    choices.push({ line: { productId: n15.productId, productName: n15.productName, unit: n15.unit, neededQty: n15.neededQty, offer: best, packs, quantity: packs * best.packQty, lineTotal, alternativeSaving: Math.max(0, usualCost - lineTotal), reason }, alternatives: ranked.slice(1) });
+    const reason = best.leadTimeHours > 48 && urgencyH !== Infinity ? `D\xE9lai ${Math.round(best.leadTimeHours / 24)} j accept\xE9 (stock ${n16.daysOfStockLeft} j)` : usual && usual.offerId !== best.offerId ? `${best.supplierName} moins cher que ${usual.supplierName} (${(usualCost - lineTotal).toFixed(2)} \u20AC \xE9conomis\xE9s)` : best.unitPrice === Math.min(...cands.map((c) => c.unitPrice)) ? "Meilleur prix disponible" : "Meilleur compromis prix / d\xE9lai / fiabilit\xE9";
+    choices.push({ line: { productId: n16.productId, productName: n16.productName, unit: n16.unit, neededQty: n16.neededQty, offer: best, packs, quantity: packs * best.packQty, lineTotal, alternativeSaving: Math.max(0, usualCost - lineTotal), reason }, alternatives: ranked.slice(1) });
   }
   const group = () => {
     const m = /* @__PURE__ */ new Map();
@@ -3728,9 +3728,9 @@ function classifyIntent(question, knownEntities) {
   let entity;
   let bestLen = 0;
   for (const { e } of all) {
-    const ne2 = norm(e);
-    const first = ne2.split(/[\s(]/)[0];
-    const score = ne2.length > 3 && q2.includes(ne2) ? 1e3 + ne2.length : first.length >= 4 && q2.includes(first) ? first.length : 0;
+    const ne3 = norm(e);
+    const first = ne3.split(/[\s(]/)[0];
+    const score = ne3.length > 3 && q2.includes(ne3) ? 1e3 + ne3.length : first.length >= 4 && q2.includes(first) ? first.length : 0;
     if (score > bestLen) {
       entity = e;
       bestLen = score;
@@ -4176,13 +4176,13 @@ var init_sms = __esm({
 });
 
 // apps/api/src/jobs/reminders.ts
-import { and as and9, eq as eq11, isNull as isNull5, lt } from "drizzle-orm";
+import { and as and10, eq as eq12, isNull as isNull5, lt } from "drizzle-orm";
 async function remindPendingVendorOrders(opts = {}) {
   const hours = opts.hours ?? Number(process.env.REMINDER_HOURS ?? 4);
   const now = opts.now ?? /* @__PURE__ */ new Date();
   const db = await getDb();
   const limit = new Date(now.getTime() - hours * 36e5);
-  const rows = await db.select({ o: orders, v: vendors, r: restaurants }).from(orders).innerJoin(vendors, eq11(vendors.id, orders.vendorId)).innerJoin(restaurants, eq11(restaurants.id, orders.restaurantId)).where(and9(eq11(orders.status, "envoyee"), isNull5(orders.vendorRemindedAt), lt(orders.sentAt, limit)));
+  const rows = await db.select({ o: orders, v: vendors, r: restaurants }).from(orders).innerJoin(vendors, eq12(vendors.id, orders.vendorId)).innerJoin(restaurants, eq12(restaurants.id, orders.restaurantId)).where(and10(eq12(orders.status, "envoyee"), isNull5(orders.vendorRemindedAt), lt(orders.sentAt, limit)));
   const out = [];
   for (const { o, v, r } of rows) {
     const text2 = `AFRISUPPLY \u2014 Rappel : la commande ${o.reference} de ${r.name} (${eur4(Number(o.totalEur))}) attend votre r\xE9ponse depuis ${Math.round((now.getTime() - (o.sentAt ?? o.createdAt).getTime()) / 36e5)} h.
@@ -4200,7 +4200,7 @@ Confirmer / refuser : ${APP_URL()}/fournisseur/commandes`;
       ok = ok || m.ok;
       channel = channel === "none" ? "email" : `${channel}+email`;
     }
-    await db.update(orders).set({ vendorRemindedAt: now }).where(eq11(orders.id, o.id));
+    await db.update(orders).set({ vendorRemindedAt: now }).where(eq12(orders.id, o.id));
     out.push({ reference: o.reference, vendor: v.name, channel, ok });
   }
   return { ranAt: now.toISOString(), hours, reminded: out.length, details: out };
@@ -4326,9 +4326,9 @@ var init_digest = __esm({
 });
 
 // apps/api/src/routes/public.ts
-import { Hono as Hono5 } from "hono";
+import { Hono as Hono6 } from "hono";
 import { z as z5 } from "zod";
-import { and as and10, desc as desc3, eq as eq12, ilike, isNull as isNull6, sql as sql7 } from "drizzle-orm";
+import { and as and11, desc as desc3, eq as eq13, ilike, isNull as isNull6, sql as sql8 } from "drizzle-orm";
 function rateLimited(ip) {
   const now = Date.now();
   const arr = (hits.get(ip) ?? []).filter((t) => now - t < 36e5);
@@ -4342,7 +4342,7 @@ var init_public = __esm({
     "use strict";
     init_src();
     init_auth();
-    publicRoutes = new Hono5();
+    publicRoutes = new Hono6();
     PLANS = [
       {
         id: "starter",
@@ -4403,7 +4403,7 @@ var init_public = __esm({
       if (!admins.includes(c.get("user").email.toLowerCase())) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
       const db = await getDb();
       const rows = await db.select().from(leads).orderBy(desc3(leads.createdAt)).limit(500);
-      const [{ total }] = await db.select({ total: sql7`count(*)` }).from(leads);
+      const [{ total }] = await db.select({ total: sql8`count(*)` }).from(leads);
       return c.json({ leads: rows, total: Number(total) });
     });
     publicRoutes.put("/admin/leads/:id", requireAuth, async (c) => {
@@ -4412,7 +4412,7 @@ var init_public = __esm({
       const body3 = z5.object({ status: z5.enum(["nouveau", "contacte", "demo", "pilote", "client", "perdu"]).optional(), notes: z5.string().nullable().optional() }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
       const db = await getDb();
-      const [row] = await db.update(leads).set(body3.data).where(eq12(leads.id, c.req.param("id") ?? "")).returning();
+      const [row] = await db.update(leads).set(body3.data).where(eq13(leads.id, c.req.param("id") ?? "")).returning();
       if (!row) return c.json({ error: "Lead introuvable" }, 404);
       return c.json(row);
     });
@@ -4420,23 +4420,23 @@ var init_public = __esm({
       const q2 = (c.req.query("q") ?? "").trim();
       if (q2.length < 2) return c.json({ products: [] });
       const db = await getDb();
-      const rows = await db.select({ id: products.id, name: products.name, category: products.category, baseUnit: products.baseUnit }).from(products).where(and10(isNull6(products.restaurantId), ilike(products.name, `%${q2}%`))).orderBy(products.name).limit(20);
+      const rows = await db.select({ id: products.id, name: products.name, category: products.category, baseUnit: products.baseUnit }).from(products).where(and11(isNull6(products.restaurantId), ilike(products.name, `%${q2}%`))).orderBy(products.name).limit(20);
       return c.json({ products: rows });
     });
   }
 });
 
 // apps/api/src/routes/billing.ts
-import { Hono as Hono6 } from "hono";
+import { Hono as Hono7 } from "hono";
 import { z as z6 } from "zod";
-import { and as and11, eq as eq13, sql as sql8, desc as desc4 } from "drizzle-orm";
+import { and as and12, eq as eq14, sql as sql9, desc as desc4 } from "drizzle-orm";
 async function invoiceCommissions(period, opts = {}) {
   const db = await getDb();
-  const rows = await db.select({ vendorId: commissions.vendorId, orders: sql8`count(*)`, base: sql8`sum(${commissions.orderTotalEur})`, amount: sql8`sum(${commissions.amountEur})` }).from(commissions).where(and11(eq13(commissions.period, period), eq13(commissions.invoiced, false))).groupBy(commissions.vendorId);
+  const rows = await db.select({ vendorId: commissions.vendorId, orders: sql9`count(*)`, base: sql9`sum(${commissions.orderTotalEur})`, amount: sql9`sum(${commissions.amountEur})` }).from(commissions).where(and12(eq14(commissions.period, period), eq14(commissions.invoiced, false))).groupBy(commissions.vendorId);
   const out = [];
   for (const r of rows) {
     const amount = Number(r.amount);
-    const [v] = await db.select().from(vendors).where(eq13(vendors.id, r.vendorId));
+    const [v] = await db.select().from(vendors).where(eq14(vendors.id, r.vendorId));
     if (!v || amount < 1) {
       out.push({ vendorId: r.vendorId, vendorName: v?.name ?? "?", orders: Number(r.orders), base: Number(r.base), amount, via: "skip" });
       continue;
@@ -4445,7 +4445,7 @@ async function invoiceCommissions(period, opts = {}) {
       out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via: v.stripeCustomerId && stripeConfigured() ? "stripe" : "mail" });
       continue;
     }
-    const [existing] = await db.select().from(commissionInvoices).where(and11(eq13(commissionInvoices.vendorId, v.id), eq13(commissionInvoices.period, period)));
+    const [existing] = await db.select().from(commissionInvoices).where(and12(eq14(commissionInvoices.vendorId, v.id), eq14(commissionInvoices.period, period)));
     if (existing) continue;
     let stripeInvoiceId;
     let via = "mail";
@@ -4462,7 +4462,7 @@ async function invoiceCommissions(period, opts = {}) {
       }
     }
     if (via === "mail") {
-      const [m] = await db.select({ email: users.email }).from(vendorMembers).innerJoin(users, eq13(users.id, vendorMembers.userId)).where(eq13(vendorMembers.vendorId, v.id)).limit(1);
+      const [m] = await db.select({ email: users.email }).from(vendorMembers).innerJoin(users, eq14(users.id, vendorMembers.userId)).where(eq14(vendorMembers.vendorId, v.id)).limit(1);
       const to = v.contactEmail ?? m?.email;
       if (to) await sendMail({ to, subject: `AFRISUPPLY \u2014 relev\xE9 de commission ${period} : ${eur6(amount)}`, text: `Bonjour,
 
@@ -4476,7 +4476,7 @@ Merci de votre confiance,
 L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Relev\xE9 de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirm\xE9e(s), base ${eur6(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur6(amount)}</b></li></ul><p>R\xE8glement sous 15 jours par virement \u2014 ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur.</p><p>L'\xE9quipe AFRISUPPLY</p>`, tags: { type: "commission" } });
     }
     await db.insert(commissionInvoices).values({ vendorId: v.id, period, orders: Number(r.orders), baseEur: Number(r.base).toFixed(2), amountEur: amount.toFixed(2), stripeInvoiceId, status: via === "stripe" ? "emise" : "envoyee_par_mail" });
-    await db.update(commissions).set({ invoiced: true }).where(and11(eq13(commissions.vendorId, v.id), eq13(commissions.period, period)));
+    await db.update(commissions).set({ invoiced: true }).where(and12(eq14(commissions.vendorId, v.id), eq14(commissions.period, period)));
     out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via, stripeInvoiceId });
   }
   return { period, invoices: out, dryRun: !!opts.dryRun };
@@ -4493,13 +4493,13 @@ var init_billing2 = __esm({
     init_ops();
     isAdmin = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
     eur6 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
-    billingPublicRoutes = new Hono6();
+    billingPublicRoutes = new Hono7();
     billingPublicRoutes.post("/billing/webhook", async (c) => {
       const raw = await c.req.text();
       if (!verifyStripeSignature(raw, c.req.header("stripe-signature"))) return c.json({ error: "Signature invalide" }, 400);
       const evt = JSON.parse(raw);
       const db = await getDb();
-      const [seen] = await db.select({ id: billingEvents.id }).from(billingEvents).where(eq13(billingEvents.id, evt.id));
+      const [seen] = await db.select({ id: billingEvents.id }).from(billingEvents).where(eq14(billingEvents.id, evt.id));
       if (seen) return c.json({ received: true, duplicate: true });
       let rid;
       try {
@@ -4510,13 +4510,13 @@ var init_billing2 = __esm({
         } else if (evt.type.startsWith("customer.subscription.")) {
           rid = (await applySubscription(o)).rid;
         } else if (evt.type === "invoice.payment_failed" && typeof o.customer === "string") {
-          await db.update(restaurants).set({ subscriptionStatus: "past_due" }).where(eq13(restaurants.stripeCustomerId, o.customer));
+          await db.update(restaurants).set({ subscriptionStatus: "past_due" }).where(eq14(restaurants.stripeCustomerId, o.customer));
         } else if (evt.type === "invoice.paid" && typeof o.customer === "string" && o.subscription) {
-          await db.update(restaurants).set({ subscriptionStatus: "active" }).where(eq13(restaurants.stripeCustomerId, o.customer));
-          const [ci] = await db.select().from(commissionInvoices).where(eq13(commissionInvoices.stripeInvoiceId, String(o.id)));
-          if (ci) await db.update(commissionInvoices).set({ status: "payee" }).where(eq13(commissionInvoices.id, ci.id));
+          await db.update(restaurants).set({ subscriptionStatus: "active" }).where(eq14(restaurants.stripeCustomerId, o.customer));
+          const [ci] = await db.select().from(commissionInvoices).where(eq14(commissionInvoices.stripeInvoiceId, String(o.id)));
+          if (ci) await db.update(commissionInvoices).set({ status: "payee" }).where(eq14(commissionInvoices.id, ci.id));
         } else if (evt.type === "invoice.paid" && typeof o.id === "string") {
-          await db.update(commissionInvoices).set({ status: "payee" }).where(eq13(commissionInvoices.stripeInvoiceId, o.id));
+          await db.update(commissionInvoices).set({ status: "payee" }).where(eq14(commissionInvoices.stripeInvoiceId, o.id));
         }
         await db.insert(billingEvents).values({ id: evt.id, type: evt.type, restaurantId: rid ?? null, payload: { object: o.id } });
         return c.json({ received: true });
@@ -4525,14 +4525,14 @@ var init_billing2 = __esm({
         return c.json({ error: "Traitement \xE9chou\xE9" }, 500);
       }
     });
-    billingRoutes = new Hono6();
+    billingRoutes = new Hono7();
     billingRoutes.on(["POST"], "/billing/checkout", requireMinRole("owner"));
     billingRoutes.on(["POST"], "/billing/portal", requireMinRole("owner"));
     billingRoutes.on(["POST"], "/billing/sync", requireMinRole("owner"));
     billingRoutes.use("*", requireAuth, requireRestaurant);
     billingRoutes.get("/billing", async (c) => {
       const db = await getDb();
-      const [r] = await db.select().from(restaurants).where(eq13(restaurants.id, c.get("restaurantId")));
+      const [r] = await db.select().from(restaurants).where(eq14(restaurants.id, c.get("restaurantId")));
       const s = accessState(r);
       return c.json({
         plan: r.plan,
@@ -4570,7 +4570,7 @@ var init_billing2 = __esm({
     billingRoutes.post("/billing/sync", async (c) => {
       const { sessionId } = z6.object({ sessionId: z6.string().optional() }).parse(await c.req.json().catch(() => ({})));
       const db = await getDb();
-      const [r] = await db.select().from(restaurants).where(eq13(restaurants.id, c.get("restaurantId")));
+      const [r] = await db.select().from(restaurants).where(eq14(restaurants.id, c.get("restaurantId")));
       if (!stripeConfigured()) return c.json({ synced: false });
       let subId = r.stripeSubscriptionId;
       if (sessionId) {
@@ -4581,7 +4581,7 @@ var init_billing2 = __esm({
       const res = await applySubscription(await stripe("GET", `/subscriptions/${subId}`));
       return c.json({ synced: true, ...res });
     });
-    billingAdminRoutes = new Hono6();
+    billingAdminRoutes = new Hono7();
     billingAdminRoutes.use("/admin/billing/*", requireAuth);
     billingAdminRoutes.use("/admin/billing", requireAuth);
     billingAdminRoutes.get("/admin/billing", async (c) => {
@@ -4597,7 +4597,7 @@ var init_billing2 = __esm({
       if (!isAdmin(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
       const b = z6.object({ founder: z6.boolean().optional(), extendTrialDays: z6.number().int().min(1).max(180).optional(), plan: z6.enum(["trial", "starter", "pro", "business"]).optional(), subscriptionStatus: z6.enum(["trialing", "active", "past_due", "canceled", "expired"]).optional() }).parse(await c.req.json());
       const db = await getDb();
-      const [r] = await db.select().from(restaurants).where(eq13(restaurants.id, c.req.param("id")));
+      const [r] = await db.select().from(restaurants).where(eq14(restaurants.id, c.req.param("id")));
       if (!r) return c.json({ error: "Restaurant introuvable" }, 404);
       const patch = {};
       if (b.founder !== void 0) patch.founder = b.founder;
@@ -4608,7 +4608,7 @@ var init_billing2 = __esm({
         patch.trialEndsAt = new Date(base.getTime() + b.extendTrialDays * 864e5);
         if (r.subscriptionStatus === "expired") patch.subscriptionStatus = "trialing";
       }
-      const [upd] = await db.update(restaurants).set(patch).where(eq13(restaurants.id, r.id)).returning();
+      const [upd] = await db.update(restaurants).set(patch).where(eq14(restaurants.id, r.id)).returning();
       await audit("billing.admin.update", { actorEmail: c.get("user").email, target: r.id, meta: b });
       return c.json({ restaurant: upd });
     });
@@ -4625,9 +4625,9 @@ var init_billing2 = __esm({
 });
 
 // apps/api/src/routes/pilots.ts
-import { Hono as Hono7 } from "hono";
+import { Hono as Hono8 } from "hono";
 import { z as z7 } from "zod";
-import { and as and12, desc as desc5, eq as eq14, gte as gte3, sql as sql9 } from "drizzle-orm";
+import { and as and13, desc as desc5, eq as eq15, gte as gte4, sql as sql10 } from "drizzle-orm";
 function makeInviteCode() {
   const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let s = "";
@@ -4636,17 +4636,17 @@ function makeInviteCode() {
 }
 async function activityCounts(rid) {
   const db = await getDb();
-  const one = async (q2) => n4((await q2)[0]?.c);
+  const one = async (q2) => n5((await q2)[0]?.c);
   const [recipesC, invC, supC, offC, salesC, ordersC, delivC, movC, alertsUnread] = await Promise.all([
-    one(db.select({ c: sql9`count(*)` }).from(recipes).where(eq14(recipes.restaurantId, rid))),
-    one(db.select({ c: sql9`count(*)` }).from(inventoryItems).where(and12(eq14(inventoryItems.restaurantId, rid), sql9`${inventoryItems.quantity} > 0`))),
-    one(db.select({ c: sql9`count(*)` }).from(suppliers).where(eq14(suppliers.restaurantId, rid))),
-    one(db.select({ c: sql9`count(*)` }).from(supplierOffers).innerJoin(suppliers, eq14(suppliers.id, supplierOffers.supplierId)).where(eq14(suppliers.restaurantId, rid))),
-    one(db.select({ c: sql9`count(*)` }).from(sales).where(eq14(sales.restaurantId, rid))),
-    one(db.select({ c: sql9`count(*)` }).from(orders).where(and12(eq14(orders.restaurantId, rid), sql9`${orders.status} <> 'brouillon'`))),
-    one(db.select({ c: sql9`count(*)` }).from(deliveries).where(eq14(deliveries.restaurantId, rid))),
-    one(db.select({ c: sql9`count(*)` }).from(stockMovements).where(eq14(stockMovements.restaurantId, rid))),
-    one(db.select({ c: sql9`count(*)` }).from(alerts).where(and12(eq14(alerts.restaurantId, rid), eq14(alerts.isRead, false))))
+    one(db.select({ c: sql10`count(*)` }).from(recipes).where(eq15(recipes.restaurantId, rid))),
+    one(db.select({ c: sql10`count(*)` }).from(inventoryItems).where(and13(eq15(inventoryItems.restaurantId, rid), sql10`${inventoryItems.quantity} > 0`))),
+    one(db.select({ c: sql10`count(*)` }).from(suppliers).where(eq15(suppliers.restaurantId, rid))),
+    one(db.select({ c: sql10`count(*)` }).from(supplierOffers).innerJoin(suppliers, eq15(suppliers.id, supplierOffers.supplierId)).where(eq15(suppliers.restaurantId, rid))),
+    one(db.select({ c: sql10`count(*)` }).from(sales).where(eq15(sales.restaurantId, rid))),
+    one(db.select({ c: sql10`count(*)` }).from(orders).where(and13(eq15(orders.restaurantId, rid), sql10`${orders.status} <> 'brouillon'`))),
+    one(db.select({ c: sql10`count(*)` }).from(deliveries).where(eq15(deliveries.restaurantId, rid))),
+    one(db.select({ c: sql10`count(*)` }).from(stockMovements).where(eq15(stockMovements.restaurantId, rid))),
+    one(db.select({ c: sql10`count(*)` }).from(alerts).where(and13(eq15(alerts.restaurantId, rid), eq15(alerts.isRead, false))))
   ]);
   return { recipes: recipesC, inventory: invC, supplier: supC, offers: offC, sales: salesC, order: ordersC, delivery: delivC, movements: movC, alertsUnread };
 }
@@ -4658,22 +4658,22 @@ function stepsFor(counts, manual) {
 }
 async function pilotHealth(rid, now = /* @__PURE__ */ new Date()) {
   const db = await getDb();
-  const [r] = await db.select().from(restaurants).where(eq14(restaurants.id, rid));
+  const [r] = await db.select().from(restaurants).where(eq15(restaurants.id, rid));
   const counts = await activityCounts(rid);
   const steps = stepsFor(counts, r.onboardingDone ?? []);
   const since7 = new Date(now.getTime() - 7 * 864e5);
-  const [{ c: events7 }] = await db.select({ c: sql9`count(*)` }).from(usageEvents).where(and12(eq14(usageEvents.restaurantId, rid), gte3(usageEvents.at, since7)));
-  const [{ c: sales7 }] = await db.select({ c: sql9`count(*)` }).from(sales).where(and12(eq14(sales.restaurantId, rid), gte3(sales.day, since7.toISOString().slice(0, 10))));
-  const [{ c: mov7 }] = await db.select({ c: sql9`count(*)` }).from(stockMovements).where(and12(eq14(stockMovements.restaurantId, rid), gte3(stockMovements.createdAt, since7)));
-  const [{ c: orders7 }] = await db.select({ c: sql9`count(*)` }).from(orders).where(and12(eq14(orders.restaurantId, rid), gte3(orders.createdAt, since7), sql9`${orders.status} <> 'brouillon'`));
-  const members = await db.select({ email: users.email, fullName: users.fullName, lastLoginAt: users.lastLoginAt, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(users, eq14(users.id, restaurantMembers.userId)).where(eq14(restaurantMembers.restaurantId, rid));
+  const [{ c: events7 }] = await db.select({ c: sql10`count(*)` }).from(usageEvents).where(and13(eq15(usageEvents.restaurantId, rid), gte4(usageEvents.at, since7)));
+  const [{ c: sales7 }] = await db.select({ c: sql10`count(*)` }).from(sales).where(and13(eq15(sales.restaurantId, rid), gte4(sales.day, since7.toISOString().slice(0, 10))));
+  const [{ c: mov7 }] = await db.select({ c: sql10`count(*)` }).from(stockMovements).where(and13(eq15(stockMovements.restaurantId, rid), gte4(stockMovements.createdAt, since7)));
+  const [{ c: orders7 }] = await db.select({ c: sql10`count(*)` }).from(orders).where(and13(eq15(orders.restaurantId, rid), gte4(orders.createdAt, since7), sql10`${orders.status} <> 'brouillon'`));
+  const members = await db.select({ email: users.email, fullName: users.fullName, lastLoginAt: users.lastLoginAt, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(users, eq15(users.id, restaurantMembers.userId)).where(eq15(restaurantMembers.restaurantId, rid));
   const lastLogin = members.map((m) => m.lastLoginAt?.getTime() ?? 0).reduce((a, b) => Math.max(a, b), 0);
   const daysSinceLogin = lastLogin ? Math.floor((now.getTime() - lastLogin) / 864e5) : null;
-  const [nps] = await db.select({ score: feedback.score, at: feedback.createdAt }).from(feedback).where(and12(eq14(feedback.restaurantId, rid), eq14(feedback.kind, "nps"))).orderBy(desc5(feedback.createdAt)).limit(1);
-  const [{ c: openFeedback }] = await db.select({ c: sql9`count(*)` }).from(feedback).where(and12(eq14(feedback.restaurantId, rid), eq14(feedback.status, "nouveau"), sql9`${feedback.kind} <> 'nps'`));
+  const [nps] = await db.select({ score: feedback.score, at: feedback.createdAt }).from(feedback).where(and13(eq15(feedback.restaurantId, rid), eq15(feedback.kind, "nps"))).orderBy(desc5(feedback.createdAt)).limit(1);
+  const [{ c: openFeedback }] = await db.select({ c: sql10`count(*)` }).from(feedback).where(and13(eq15(feedback.restaurantId, rid), eq15(feedback.status, "nouveau"), sql10`${feedback.kind} <> 'nps'`));
   const dayNumber = Math.floor((now.getTime() - r.createdAt.getTime()) / 864e5) + 1;
   const doneSteps = steps.filter((s) => s.done).length;
-  const active7 = n4(sales7) + n4(mov7) + n4(orders7) > 0 || n4(events7) >= 5;
+  const active7 = n5(sales7) + n5(mov7) + n5(orders7) > 0 || n5(events7) >= 5;
   let status = "vert";
   const reasons = [];
   if (daysSinceLogin === null ? dayNumber > 3 : daysSinceLogin >= 7) {
@@ -4694,8 +4694,8 @@ async function pilotHealth(rid, now = /* @__PURE__ */ new Date()) {
     status = "rouge";
     reasons.push(`NPS ${nps.score}/10`);
   }
-  if (n4(openFeedback) > 0) reasons.push(`${n4(openFeedback)} retour(s) sans r\xE9ponse`);
-  return { id: r.id, name: r.name, city: r.city, founder: r.founder, plan: r.plan, subscriptionStatus: r.subscriptionStatus, trialEndsAt: r.trialEndsAt, createdAt: r.createdAt, dayNumber, status, reasons, checklist: { done: doneSteps, total: steps.length }, counts, week: { events: n4(events7), sales: n4(sales7), movements: n4(mov7), orders: n4(orders7) }, daysSinceLogin, nps: nps ? { score: nps.score, at: nps.at } : null, openFeedback: n4(openFeedback), members: members.map((m) => ({ email: m.email, fullName: m.fullName, role: m.role, lastLoginAt: m.lastLoginAt })) };
+  if (n5(openFeedback) > 0) reasons.push(`${n5(openFeedback)} retour(s) sans r\xE9ponse`);
+  return { id: r.id, name: r.name, city: r.city, founder: r.founder, plan: r.plan, subscriptionStatus: r.subscriptionStatus, trialEndsAt: r.trialEndsAt, createdAt: r.createdAt, dayNumber, status, reasons, checklist: { done: doneSteps, total: steps.length }, counts, week: { events: n5(events7), sales: n5(sales7), movements: n5(mov7), orders: n5(orders7) }, daysSinceLogin, nps: nps ? { score: nps.score, at: nps.at } : null, openFeedback: n5(openFeedback), members: members.map((m) => ({ email: m.email, fullName: m.fullName, role: m.role, lastLoginAt: m.lastLoginAt })) };
 }
 async function buildWeeklyPilotReport(now = /* @__PURE__ */ new Date()) {
   const db = await getDb();
@@ -4703,12 +4703,12 @@ async function buildWeeklyPilotReport(now = /* @__PURE__ */ new Date()) {
   const pilots = [];
   for (const r of all) pilots.push(await pilotHealth(r.id, now));
   const since7 = new Date(now.getTime() - 7 * 864e5);
-  const newFb = await db.select({ f: feedback, restaurantName: restaurants.name }).from(feedback).innerJoin(restaurants, eq14(restaurants.id, feedback.restaurantId)).where(gte3(feedback.createdAt, since7)).orderBy(desc5(feedback.createdAt));
+  const newFb = await db.select({ f: feedback, restaurantName: restaurants.name }).from(feedback).innerJoin(restaurants, eq15(restaurants.id, feedback.restaurantId)).where(gte4(feedback.createdAt, since7)).orderBy(desc5(feedback.createdAt));
   const line = (p) => `${p.status === "vert" ? "\u{1F7E2}" : p.status === "orange" ? "\u{1F7E0}" : "\u{1F534}"} ${p.name} (J${p.dayNumber}, checklist ${p.checklist.done}/${p.checklist.total}, ${p.week.sales} ventes \xB7 ${p.week.movements} mvts \xB7 ${p.week.orders} cmd)${p.reasons.length ? " \u2014 " + p.reasons.join(", ") : ""}`;
   const text2 = [`Rapport pilotes \u2014 semaine du ${now.toLocaleDateString("fr-FR")}`, "", `${pilots.length} restaurants \xB7 ${pilots.filter((p) => p.status === "vert").length} \u{1F7E2} \xB7 ${pilots.filter((p) => p.status === "orange").length} \u{1F7E0} \xB7 ${pilots.filter((p) => p.status === "rouge").length} \u{1F534}`, `Actifs cette semaine : ${pilots.filter((p) => p.week.sales + p.week.movements + p.week.orders > 0).length}`, "", ...pilots.sort((a, b) => ["rouge", "orange", "vert"].indexOf(a.status) - ["rouge", "orange", "vert"].indexOf(b.status)).map(line), "", `Retours de la semaine (${newFb.length}) :`, ...newFb.map(({ f, restaurantName }) => `- [${f.kind}${f.score !== null ? ` ${f.score}/10` : ""}] ${restaurantName} : ${f.message ?? ""}`), "", `${APP2()}/app/admin/pilotes`].join("\n");
   return { text: text2, html: `<pre style="font-family:ui-sans-serif,system-ui;white-space:pre-wrap">${text2.replace(/</g, "&lt;")}</pre>`, pilots: pilots.length };
 }
-var isAdmin2, APP2, n4, ONBOARDING_STEPS, pilotPublicRoutes, pilotRoutes, pilotAdminRoutes;
+var isAdmin2, APP2, n5, ONBOARDING_STEPS, pilotPublicRoutes, pilotRoutes, pilotAdminRoutes;
 var init_pilots = __esm({
   "apps/api/src/routes/pilots.ts"() {
     "use strict";
@@ -4719,7 +4719,7 @@ var init_pilots = __esm({
     init_public();
     isAdmin2 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
     APP2 = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
-    n4 = (v) => Number(v ?? 0);
+    n5 = (v) => Number(v ?? 0);
     ONBOARDING_STEPS = [
       { id: "carte", label: "Configurer ma carte (recettes)", hint: "Choisissez vos plats : le stock \xE0 suivre se d\xE9duit tout seul.", to: "/app/demarrer", auto: "recipes" },
       { id: "inventaire", label: "Faire mon premier inventaire", hint: "10 minutes en saisie express, ou produit par produit.", to: "/app/express", auto: "inventory" },
@@ -4729,21 +4729,21 @@ var init_pilots = __esm({
       { id: "reception", label: "R\xE9ceptionner une livraison", hint: "Cochez les \xE9carts : le stock et les prix se mettent \xE0 jour.", to: "/app/achats", auto: "delivery" },
       { id: "app", label: "Installer l\u2019app sur mon t\xE9l\xE9phone", hint: "Depuis le navigateur : \xAB Ajouter \xE0 l\u2019\xE9cran d\u2019accueil \xBB.", to: "/app/express", auto: null }
     ];
-    pilotPublicRoutes = new Hono7();
+    pilotPublicRoutes = new Hono8();
     pilotPublicRoutes.get("/public/invite/:code", async (c) => {
       const code = c.req.param("code").toUpperCase().trim();
       const db = await getDb();
-      const [lead] = await db.select().from(leads).where(eq14(leads.inviteCode, code));
+      const [lead] = await db.select().from(leads).where(eq15(leads.inviteCode, code));
       if (!lead) return c.json({ valid: false }, 404);
       if (lead.restaurantId) return c.json({ valid: false, used: true }, 410);
       return c.json({ valid: true, restaurantName: lead.restaurantName, contactName: lead.contactName, email: lead.email, city: lead.city, coversPerDay: lead.coversPerDay, offer: FOUNDER_OFFER });
     });
-    pilotRoutes = new Hono7();
+    pilotRoutes = new Hono8();
     pilotRoutes.use("*", requireAuth, requireRestaurant);
     pilotRoutes.get("/onboarding/checklist", async (c) => {
       const rid = c.get("restaurantId");
       const db = await getDb();
-      const [r] = await db.select({ onboardingDone: restaurants.onboardingDone, founder: restaurants.founder, createdAt: restaurants.createdAt }).from(restaurants).where(eq14(restaurants.id, rid));
+      const [r] = await db.select({ onboardingDone: restaurants.onboardingDone, founder: restaurants.founder, createdAt: restaurants.createdAt }).from(restaurants).where(eq15(restaurants.id, rid));
       const steps = stepsFor(await activityCounts(rid), r.onboardingDone ?? []);
       const done = steps.filter((s) => s.done).length;
       const dayNumber = Math.floor((Date.now() - r.createdAt.getTime()) / 864e5) + 1;
@@ -4754,10 +4754,10 @@ var init_pilots = __esm({
       const step = c.req.param("step");
       const db = await getDb();
       if (![...ONBOARDING_STEPS.map((s) => s.id), "_dismissed"].includes(step)) return c.json({ error: "\xC9tape inconnue" }, 400);
-      const [r] = await db.select({ onboardingDone: restaurants.onboardingDone }).from(restaurants).where(eq14(restaurants.id, rid));
+      const [r] = await db.select({ onboardingDone: restaurants.onboardingDone }).from(restaurants).where(eq15(restaurants.id, rid));
       const set = new Set(r.onboardingDone ?? []);
       set.add(step);
-      await db.update(restaurants).set({ onboardingDone: [...set] }).where(eq14(restaurants.id, rid));
+      await db.update(restaurants).set({ onboardingDone: [...set] }).where(eq15(restaurants.id, rid));
       return c.json({ ok: true });
     });
     pilotRoutes.post("/feedback", async (c) => {
@@ -4767,7 +4767,7 @@ var init_pilots = __esm({
       const rid = c.get("restaurantId");
       const u = c.get("user");
       const [row] = await db.insert(feedback).values({ restaurantId: rid, userId: u.id, kind: b.kind, score: b.score, message: b.message?.trim() || null, page: b.page }).returning();
-      const [r] = await db.select({ name: restaurants.name }).from(restaurants).where(eq14(restaurants.id, rid));
+      const [r] = await db.select({ name: restaurants.name }).from(restaurants).where(eq15(restaurants.id, rid));
       const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
       if (admins.length && (b.kind === "bug" || b.kind === "nps" && (b.score ?? 10) <= 6 || b.kind === "question")) {
         const subject = b.kind === "bug" ? `\u{1F41B} Bug signal\xE9 par ${r.name}` : b.kind === "question" ? `\u2753 Question de ${r.name}` : `\u26A0\uFE0F NPS ${b.score}/10 \u2014 ${r.name}`;
@@ -4782,12 +4782,12 @@ ${APP2()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) \u2014 pag
     pilotRoutes.get("/feedback/nps-due", async (c) => {
       const db = await getDb();
       const rid = c.get("restaurantId");
-      const [r] = await db.select({ createdAt: restaurants.createdAt }).from(restaurants).where(eq14(restaurants.id, rid));
+      const [r] = await db.select({ createdAt: restaurants.createdAt }).from(restaurants).where(eq15(restaurants.id, rid));
       const day = Math.floor((Date.now() - r.createdAt.getTime()) / 864e5);
       const window = day >= 45 ? 45 : day >= 14 ? 14 : 0;
       if (!window) return c.json({ due: false });
       const since = new Date(r.createdAt.getTime() + (window - 1) * 864e5);
-      const [last] = await db.select({ id: feedback.id }).from(feedback).where(and12(eq14(feedback.restaurantId, rid), eq14(feedback.kind, "nps"), gte3(feedback.createdAt, since))).limit(1);
+      const [last] = await db.select({ id: feedback.id }).from(feedback).where(and13(eq15(feedback.restaurantId, rid), eq15(feedback.kind, "nps"), gte4(feedback.createdAt, since))).limit(1);
       return c.json({ due: !last, window });
     });
     pilotRoutes.post("/usage", async (c) => {
@@ -4799,7 +4799,7 @@ ${APP2()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) \u2014 pag
       await db.insert(usageEvents).values(b.events.map((e) => ({ restaurantId: rid, userId: uid, event: e.event, meta: e.meta, at: e.at ? new Date(e.at) : /* @__PURE__ */ new Date() })));
       return c.json({ ok: true });
     });
-    pilotAdminRoutes = new Hono7();
+    pilotAdminRoutes = new Hono8();
     pilotAdminRoutes.use("/admin/pilots/*", requireAuth);
     pilotAdminRoutes.use("/admin/pilots", requireAuth);
     pilotAdminRoutes.get("/admin/pilots", async (c) => {
@@ -4808,24 +4808,24 @@ ${APP2()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) \u2014 pag
       const all = await db.select({ id: restaurants.id }).from(restaurants).orderBy(desc5(restaurants.createdAt)).limit(200);
       const pilots = [];
       for (const r of all) pilots.push(await pilotHealth(r.id));
-      const fb = await db.select({ f: feedback, restaurantName: restaurants.name }).from(feedback).innerJoin(restaurants, eq14(restaurants.id, feedback.restaurantId)).orderBy(desc5(feedback.createdAt)).limit(100);
+      const fb = await db.select({ f: feedback, restaurantName: restaurants.name }).from(feedback).innerJoin(restaurants, eq15(restaurants.id, feedback.restaurantId)).orderBy(desc5(feedback.createdAt)).limit(100);
       const npsScores = pilots.map((p) => p.nps?.score).filter((s) => typeof s === "number");
       const npsValue = npsScores.length ? Math.round((npsScores.filter((s) => s >= 9).length - npsScores.filter((s) => s <= 6).length) / npsScores.length * 100) : null;
-      const invited = await db.select({ id: leads.id, restaurantName: leads.restaurantName, contactName: leads.contactName, email: leads.email, inviteCode: leads.inviteCode, invitedAt: leads.invitedAt, restaurantId: leads.restaurantId, status: leads.status }).from(leads).where(sql9`${leads.inviteCode} is not null`).orderBy(desc5(leads.invitedAt));
+      const invited = await db.select({ id: leads.id, restaurantName: leads.restaurantName, contactName: leads.contactName, email: leads.email, inviteCode: leads.inviteCode, invitedAt: leads.invitedAt, restaurantId: leads.restaurantId, status: leads.status }).from(leads).where(sql10`${leads.inviteCode} is not null`).orderBy(desc5(leads.invitedAt));
       return c.json({ pilots, feedback: fb.map(({ f, restaurantName }) => ({ ...f, restaurantName })), summary: { total: pilots.length, vert: pilots.filter((p) => p.status === "vert").length, orange: pilots.filter((p) => p.status === "orange").length, rouge: pilots.filter((p) => p.status === "rouge").length, activeThisWeek: pilots.filter((p) => p.week.sales + p.week.movements + p.week.orders > 0).length, nps: npsValue, npsResponses: npsScores.length, founders: pilots.filter((p) => p.founder).length, founderSeatsLeft: Math.max(0, FOUNDER_OFFER.seats - pilots.filter((p) => p.founder).length) }, invited, steps: ONBOARDING_STEPS });
     });
     pilotAdminRoutes.post("/admin/pilots/invite", async (c) => {
       if (!isAdmin2(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
       const b = z7.object({ leadId: z7.string().uuid().optional(), email: z7.string().email().optional(), restaurantName: z7.string().min(2).optional(), contactName: z7.string().min(2).optional(), city: z7.string().optional(), resend: z7.boolean().optional() }).parse(await c.req.json());
       const db = await getDb();
-      let lead = b.leadId ? (await db.select().from(leads).where(eq14(leads.id, b.leadId)))[0] : void 0;
+      let lead = b.leadId ? (await db.select().from(leads).where(eq15(leads.id, b.leadId)))[0] : void 0;
       if (!lead) {
         if (!b.email || !b.restaurantName || !b.contactName) return c.json({ error: "E-mail, restaurant et contact requis" }, 400);
         [lead] = await db.insert(leads).values({ email: b.email.toLowerCase(), restaurantName: b.restaurantName, contactName: b.contactName, city: b.city, source: "invitation", planInterest: "pilote", status: "pilote" }).returning();
       }
       if (lead.restaurantId) return c.json({ error: "Ce lead a d\xE9j\xE0 un compte" }, 409);
       const code = lead.inviteCode && b.resend ? lead.inviteCode : makeInviteCode();
-      await db.update(leads).set({ inviteCode: code, invitedAt: /* @__PURE__ */ new Date(), status: "pilote" }).where(eq14(leads.id, lead.id));
+      await db.update(leads).set({ inviteCode: code, invitedAt: /* @__PURE__ */ new Date(), status: "pilote" }).where(eq15(leads.id, lead.id));
       const link = `${APP2()}/inscription?code=${code}`;
       const first = lead.contactName.split(" ")[0];
       const mail = await sendMail({
@@ -4857,55 +4857,55 @@ L'\xE9quipe AFRISUPPLY`,
       if (!isAdmin2(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
       const { status } = z7.object({ status: z7.enum(["nouveau", "traite"]) }).parse(await c.req.json());
       const db = await getDb();
-      const [row] = await db.update(feedback).set({ status }).where(eq14(feedback.id, c.req.param("id"))).returning();
+      const [row] = await db.update(feedback).set({ status }).where(eq15(feedback.id, c.req.param("id"))).returning();
       return c.json({ feedback: row });
     });
   }
 });
 
 // apps/api/src/lib/pricing.ts
-import { and as and13, eq as eq15, inArray as inArray4, isNull as isNull7, or, gte as gte4 } from "drizzle-orm";
+import { and as and14, eq as eq16, inArray as inArray5, isNull as isNull7, or, gte as gte5 } from "drizzle-orm";
 async function loadPricing(offers, restaurantId) {
   const db = await getDb();
   const ids = offers.map((o) => o.id);
   const vendorIds = [...new Set(offers.map((o) => o.vendorId))];
-  const tiers = ids.length ? await db.select().from(vendorPriceTiers).where(inArray4(vendorPriceTiers.vendorOfferId, ids)).orderBy(vendorPriceTiers.minPacks) : [];
+  const tiers = ids.length ? await db.select().from(vendorPriceTiers).where(inArray5(vendorPriceTiers.vendorOfferId, ids)).orderBy(vendorPriceTiers.minPacks) : [];
   const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-  const custom = restaurantId && vendorIds.length ? await db.select().from(vendorCustomerPrices).where(and13(eq15(vendorCustomerPrices.restaurantId, restaurantId), inArray4(vendorCustomerPrices.vendorId, vendorIds), or(isNull7(vendorCustomerPrices.validUntil), gte4(vendorCustomerPrices.validUntil, today)))) : [];
+  const custom = restaurantId && vendorIds.length ? await db.select().from(vendorCustomerPrices).where(and14(eq16(vendorCustomerPrices.restaurantId, restaurantId), inArray5(vendorCustomerPrices.vendorId, vendorIds), or(isNull7(vendorCustomerPrices.validUntil), gte5(vendorCustomerPrices.validUntil, today)))) : [];
   return { tiers, custom };
 }
 function priceFor(offer, packs, ctx) {
-  const list = n5(offer.packPriceEur);
-  const tiers = ctx.tiers.filter((t) => t.vendorOfferId === offer.id).map((t) => ({ minPacks: t.minPacks, packPriceEur: n5(t.packPriceEur) })).sort((a, b) => a.minPacks - b.minPacks);
+  const list = n6(offer.packPriceEur);
+  const tiers = ctx.tiers.filter((t) => t.vendorOfferId === offer.id).map((t) => ({ minPacks: t.minPacks, packPriceEur: n6(t.packPriceEur) })).sort((a, b) => a.minPacks - b.minPacks);
   const applicable = tiers.filter((t) => packs >= t.minPacks).pop();
   const nextTier = tiers.find((t) => t.minPacks > packs) ?? null;
   const base = { packPriceEur: applicable ? applicable.packPriceEur : list, listPriceEur: list, source: applicable ? "palier" : "catalogue", tiers, negotiated: false, nextTier };
   const own = ctx.custom.find((c) => c.vendorOfferId === offer.id);
   const global = ctx.custom.find((c) => c.vendorId === offer.vendorId && !c.vendorOfferId);
-  if (own?.packPriceEur) return { ...base, packPriceEur: Math.min(n5(own.packPriceEur), base.packPriceEur), source: "negocie", negotiated: true };
-  if (own?.discountPct) return { ...base, packPriceEur: r2(Math.min(list * (1 - n5(own.discountPct) / 100), base.packPriceEur)), source: "negocie", negotiated: true };
-  if (global?.discountPct) return { ...base, packPriceEur: r2(Math.min(list * (1 - n5(global.discountPct) / 100), base.packPriceEur)), source: "remise_client", negotiated: true };
+  if (own?.packPriceEur) return { ...base, packPriceEur: Math.min(n6(own.packPriceEur), base.packPriceEur), source: "negocie", negotiated: true };
+  if (own?.discountPct) return { ...base, packPriceEur: r2(Math.min(list * (1 - n6(own.discountPct) / 100), base.packPriceEur)), source: "negocie", negotiated: true };
+  if (global?.discountPct) return { ...base, packPriceEur: r2(Math.min(list * (1 - n6(global.discountPct) / 100), base.packPriceEur)), source: "remise_client", negotiated: true };
   return base;
 }
-var n5, r2;
+var n6, r2;
 var init_pricing = __esm({
   "apps/api/src/lib/pricing.ts"() {
     "use strict";
     init_src();
-    n5 = (v) => Number(v ?? 0);
+    n6 = (v) => Number(v ?? 0);
     r2 = (v) => Math.round(v * 100) / 100;
   }
 });
 
 // apps/api/src/lib/reliability.ts
-import { and as and14, gte as gte5, inArray as inArray5, sql as sql10 } from "drizzle-orm";
+import { and as and15, gte as gte6, inArray as inArray6, sql as sql11 } from "drizzle-orm";
 async function reliabilityFor(vendorIds) {
   const db = await getDb();
   const out = /* @__PURE__ */ new Map();
   if (!vendorIds.length) return out;
-  const since = sql10`now() - interval '90 days'`;
-  const rev = await db.select({ vendorId: vendorReviews.vendorId, rating: sql10`avg(${vendorReviews.rating})`, count: sql10`count(*)`, onTime: sql10`count(*) filter (where ${vendorReviews.onTime})`, onTimeN: sql10`count(*) filter (where ${vendorReviews.onTime} is not null)`, conform: sql10`count(*) filter (where ${vendorReviews.conform})`, conformN: sql10`count(*) filter (where ${vendorReviews.conform} is not null)` }).from(vendorReviews).where(inArray5(vendorReviews.vendorId, vendorIds)).groupBy(vendorReviews.vendorId);
-  const ops = await db.select({ vendorId: orders.vendorId, total: sql10`count(*)`, decided: sql10`count(*) filter (where ${orders.vendorDecisionAt} is not null)`, refused: sql10`count(*) filter (where ${orders.status} = 'annulee' and ${orders.vendorDecisionAt} is not null)`, avgH: sql10`avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null and ${orders.sentAt} is not null)`, delivered: sql10`count(*) filter (where ${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, partial: sql10`count(*) filter (where ${orders.status} = 'livree_partiel')` }).from(orders).where(and14(inArray5(orders.vendorId, vendorIds), gte5(orders.createdAt, since))).groupBy(orders.vendorId);
+  const since = sql11`now() - interval '90 days'`;
+  const rev = await db.select({ vendorId: vendorReviews.vendorId, rating: sql11`avg(${vendorReviews.rating})`, count: sql11`count(*)`, onTime: sql11`count(*) filter (where ${vendorReviews.onTime})`, onTimeN: sql11`count(*) filter (where ${vendorReviews.onTime} is not null)`, conform: sql11`count(*) filter (where ${vendorReviews.conform})`, conformN: sql11`count(*) filter (where ${vendorReviews.conform} is not null)` }).from(vendorReviews).where(inArray6(vendorReviews.vendorId, vendorIds)).groupBy(vendorReviews.vendorId);
+  const ops = await db.select({ vendorId: orders.vendorId, total: sql11`count(*)`, decided: sql11`count(*) filter (where ${orders.vendorDecisionAt} is not null)`, refused: sql11`count(*) filter (where ${orders.status} = 'annulee' and ${orders.vendorDecisionAt} is not null)`, avgH: sql11`avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null and ${orders.sentAt} is not null)`, delivered: sql11`count(*) filter (where ${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, partial: sql11`count(*) filter (where ${orders.status} = 'livree_partiel')` }).from(orders).where(and15(inArray6(orders.vendorId, vendorIds), gte6(orders.createdAt, since))).groupBy(orders.vendorId);
   for (const vid of vendorIds) {
     const r = rev.find((x) => x.vendorId === vid);
     const o = ops.find((x) => x.vendorId === vid);
@@ -4948,9 +4948,9 @@ __export(marketplace_exports, {
   restaurantZones: () => restaurantZones,
   runRecurringOrders: () => runRecurringOrders
 });
-import { Hono as Hono8 } from "hono";
+import { Hono as Hono9 } from "hono";
 import { z as z8 } from "zod";
-import { and as and15, desc as desc6, eq as eq17, gte as gte6, inArray as inArray6, sql as sql11 } from "drizzle-orm";
+import { and as and16, desc as desc6, eq as eq18, gte as gte7, inArray as inArray7, sql as sql12 } from "drizzle-orm";
 function restaurantZones(r) {
   const z21 = /* @__PURE__ */ new Set(["France"]);
   if (r.city) z21.add(r.city.trim().toLowerCase());
@@ -4959,17 +4959,17 @@ function restaurantZones(r) {
 }
 async function linkVendor(rid, vid) {
   const db = await getDb();
-  const [v] = await db.select().from(vendors).where(and15(eq17(vendors.id, vid), eq17(vendors.status, "actif")));
+  const [v] = await db.select().from(vendors).where(and16(eq18(vendors.id, vid), eq18(vendors.status, "actif")));
   if (!v) return null;
-  let [sup] = await db.select().from(suppliers).where(and15(eq17(suppliers.restaurantId, rid), eq17(suppliers.vendorId, vid)));
+  let [sup] = await db.select().from(suppliers).where(and16(eq18(suppliers.restaurantId, rid), eq18(suppliers.vendorId, vid)));
   if (!sup) {
     [sup] = await db.insert(suppliers).values({ restaurantId: rid, vendorId: vid, name: v.name, contactName: null, email: v.contactEmail, phone: v.contactPhone, whatsapp: v.whatsapp, city: v.city, categories: v.categories, leadTimeHours: v.leadTimeHours, deliveryDays: v.deliveryDays, minOrderEur: v.minOrderEur, deliveryFeeEur: v.deliveryFeeEur, preferredChannel: "plateforme", notes: `Fournisseur AFRISUPPLY Marketplace \u2014 ${v.description ?? ""}`.trim() }).returning();
   }
-  const vo = await db.select().from(vendorOffers).where(and15(eq17(vendorOffers.vendorId, vid), eq17(vendorOffers.inStock, true)));
+  const vo = await db.select().from(vendorOffers).where(and16(eq18(vendorOffers.vendorId, vid), eq18(vendorOffers.inStock, true)));
   let synced = 0;
   for (const o of vo) {
     const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid, supplierId: sup.id, productId: o.productId, packLabel: o.packLabel, packQty: o.packQty, packPriceEur: o.packPriceEur, inStock: true }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: o.packQty, packPriceEur: o.packPriceEur, inStock: true, lastSeenAt: /* @__PURE__ */ new Date() } }).returning();
-    await db.insert(priceHistory).values({ restaurantId: rid, offerId: offer.id, unitPriceEur: (n6(o.packPriceEur) / n6(o.packQty)).toFixed(4), source: "catalogue" });
+    await db.insert(priceHistory).values({ restaurantId: rid, offerId: offer.id, unitPriceEur: (n7(o.packPriceEur) / n7(o.packQty)).toFixed(4), source: "catalogue" });
     synced++;
   }
   return { supplier: sup, synced };
@@ -4978,20 +4978,20 @@ async function placeVendorOrder(rid, vid, userId, input) {
   const db = await getDb();
   const link = await linkVendor(rid, vid);
   if (!link) return { ok: false, error: "Fournisseur introuvable", status: 404 };
-  const [v] = await db.select().from(vendors).where(eq17(vendors.id, vid));
+  const [v] = await db.select().from(vendors).where(eq18(vendors.id, vid));
   if (v.status !== "actif") return { ok: false, error: `${v.name} n'est plus actif sur la plateforme`, status: 400 };
-  const vo = await db.select().from(vendorOffers).where(and15(eq17(vendorOffers.vendorId, vid), inArray6(vendorOffers.id, input.lines.map((l) => l.vendorOfferId))));
+  const vo = await db.select().from(vendorOffers).where(and16(eq18(vendorOffers.vendorId, vid), inArray7(vendorOffers.id, input.lines.map((l) => l.vendorOfferId))));
   if (vo.length !== input.lines.length) return { ok: false, error: "Offre invalide", status: 400 };
   const out = vo.filter((o) => !o.inStock);
   if (out.length) return { ok: false, error: `Plus disponible chez ${v.name} : ${out.map((o) => o.packLabel).join(", ")}`, status: 400 };
   if (input.lines.length > MAX_ORDER_LINES) return { ok: false, error: `Trop de lignes dans la commande (${input.lines.length}), maximum ${MAX_ORDER_LINES}.`, status: 400 };
   const tooMany = input.lines.find((l) => l.packs > MAX_PACKS_PER_LINE2);
   if (tooMany) return { ok: false, error: `Nombre de colis invraisemblable sur une ligne (${tooMany.packs}), maximum ${MAX_PACKS_PER_LINE2}.`, status: 400 };
-  const prodRows = await db.select({ id: products.id, name: products.name, unit: products.baseUnit, category: products.category }).from(products).where(inArray6(products.id, vo.map((o) => o.productId)));
+  const prodRows = await db.select({ id: products.id, name: products.name, unit: products.baseUnit, category: products.category }).from(products).where(inArray7(products.id, vo.map((o) => o.productId)));
   const outOfRange = await assertPlausibleQuantity(rid, input.lines.map((l) => {
     const o = vo.find((x) => x.id === l.vendorOfferId);
     const pr = prodRows.find((x) => x.id === o.productId);
-    const packQty = n6(o.packQty) || 1;
+    const packQty = n7(o.packQty) || 1;
     return { productId: o.productId, productName: pr?.name ?? "Produit", unit: pr?.unit ?? "kg", category: pr?.category ?? null, packQty, packs: l.packs, quantity: l.packs * packQty };
   }), { override: input.override });
   if (outOfRange) return { ok: false, error: outOfRange.error, status: 400 };
@@ -4999,15 +4999,15 @@ async function placeVendorOrder(rid, vid, userId, input) {
   const linesData = input.lines.map((l) => {
     const o = vo.find((x) => x.id === l.vendorOfferId);
     const pp = priceFor(o, l.packs, pricing).packPriceEur;
-    return { productId: o.productId, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n6(o.packQty)).toFixed(3), unitPriceEur: (pp / n6(o.packQty)).toFixed(4), lineTotalEur: (l.packs * pp).toFixed(2) };
+    return { productId: o.productId, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n7(o.packQty)).toFixed(3), unitPriceEur: (pp / n7(o.packQty)).toFixed(4), lineTotalEur: (l.packs * pp).toFixed(2) };
   });
   const total = linesData.reduce((a, l) => a + Number(l.lineTotalEur), 0);
-  if (!input.skipMin && total < n6(v.minOrderEur)) return { ok: false, error: `Minimum de commande ${eur7(n6(v.minOrderEur))} chez ${v.name} (panier : ${eur7(total)})`, status: 400 };
+  if (!input.skipMin && total < n7(v.minOrderEur)) return { ok: false, error: `Minimum de commande ${eur7(n7(v.minOrderEur))} chez ${v.name} (panier : ${eur7(total)})`, status: 400 };
   const reference = await nextOrderReference();
   const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: "envoyee", channel: "plateforme", sentAt: /* @__PURE__ */ new Date(), expectedAt: new Date(Date.now() + v.leadTimeHours * 36e5).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? "marketplace", notes: input.notes, createdBy: userId }).returning();
-  const priv = await db.select().from(supplierOffers).where(eq17(supplierOffers.supplierId, link.supplier.id));
+  const priv = await db.select().from(supplierOffers).where(eq18(supplierOffers.supplierId, link.supplier.id));
   await db.insert(orderLines).values(linesData.map((l) => ({ ...l, orderId: order.id, offerId: priv.find((p) => p.productId === l.productId && p.packLabel === l.packLabel)?.id ?? null })));
-  const [r] = await db.select({ name: restaurants.name, city: restaurants.city }).from(restaurants).where(eq17(restaurants.id, rid));
+  const [r] = await db.select({ name: restaurants.name, city: restaurants.city }).from(restaurants).where(eq18(restaurants.id, rid));
   if (v.contactEmail) void sendMail({ to: v.contactEmail, subject: `Nouvelle commande ${reference} \u2014 ${r.name}${r.city ? ` (${r.city})` : ""} \u2014 ${eur7(total)}`, text: `Bonjour,
 
 ${r.name} vous passe commande via AFRISUPPLY :
@@ -5037,25 +5037,25 @@ function nextRunOn(weekdays, from = /* @__PURE__ */ new Date()) {
 async function runRecurringOrders(now = /* @__PURE__ */ new Date()) {
   const db = await getDb();
   const today = now.toISOString().slice(0, 10);
-  const due = await db.select().from(recurringOrders).where(and15(eq17(recurringOrders.enabled, true), eq17(recurringOrders.nextRunOn, today)));
+  const due = await db.select().from(recurringOrders).where(and16(eq18(recurringOrders.enabled, true), eq18(recurringOrders.nextRunOn, today)));
   const out = [];
   for (const r of due) {
     if (r.lastRunAt && r.lastRunAt.toISOString().slice(0, 10) === today) continue;
     const res = await placeVendorOrder(r.restaurantId, r.vendorId, r.createdBy, { lines: r.lines, notes: r.notes ?? void 0, source: "recurrente" });
     const next = nextRunOn(r.weekdays, now);
     if (res.ok) {
-      await db.update(recurringOrders).set({ lastRunAt: now, lastOrderId: res.order.id, nextRunOn: next }).where(eq17(recurringOrders.id, r.id));
+      await db.update(recurringOrders).set({ lastRunAt: now, lastOrderId: res.order.id, nextRunOn: next }).where(eq18(recurringOrders.id, r.id));
       out.push({ id: r.id, name: r.name, ok: true, reference: res.order.reference });
     } else {
-      await db.update(recurringOrders).set({ nextRunOn: next }).where(eq17(recurringOrders.id, r.id));
+      await db.update(recurringOrders).set({ nextRunOn: next }).where(eq18(recurringOrders.id, r.id));
       out.push({ id: r.id, name: r.name, ok: false, error: res.error });
-      const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq17(users.id, restaurantMembers.userId)).where(and15(eq17(restaurantMembers.restaurantId, r.restaurantId), inArray6(restaurantMembers.role, ["owner", "manager"])));
+      const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq18(users.id, restaurantMembers.userId)).where(and16(eq18(restaurantMembers.restaurantId, r.restaurantId), inArray7(restaurantMembers.role, ["owner", "manager"])));
       for (const x of rcpts) void sendMail({ to: x.email, subject: `\u26A0\uFE0F Commande r\xE9currente \xAB ${r.name} \xBB non envoy\xE9e`, text: `La commande r\xE9currente \xAB ${r.name} \xBB n'a pas pu \xEAtre envoy\xE9e aujourd'hui : ${res.error}. V\xE9rifiez-la dans Achats \u2192 R\xE9currentes.`, html: `<p>La commande r\xE9currente \xAB <b>${r.name}</b> \xBB n'a pas pu \xEAtre envoy\xE9e aujourd'hui : ${res.error}.</p><p><a href="${APP_URL2()}/app/achats">V\xE9rifier</a></p>`, tags: { type: "recurring" } });
     }
   }
   return { date: today, due: due.length, results: out };
 }
-var marketplaceRoutes, MAX_PACKS_PER_LINE2, MAX_ORDER_LINES, n6, eur7, servesZone, DAYS;
+var marketplaceRoutes, MAX_PACKS_PER_LINE2, MAX_ORDER_LINES, n7, eur7, servesZone, DAYS;
 var init_marketplace = __esm({
   "apps/api/src/routes/marketplace.ts"() {
     "use strict";
@@ -5069,25 +5069,25 @@ var init_marketplace = __esm({
     init_daily();
     init_pricing();
     init_reliability();
-    marketplaceRoutes = new Hono8();
+    marketplaceRoutes = new Hono9();
     marketplaceRoutes.on(["POST"], "/marketplace/vendors/:id/orders", requireMinRole("manager"));
     marketplaceRoutes.on(["POST"], "/marketplace/vendors/:id/link", requireMinRole("manager"));
     marketplaceRoutes.on(["POST"], "/marketplace/group-buys/:id/join", requireMinRole("manager"));
     MAX_PACKS_PER_LINE2 = 1e3;
     MAX_ORDER_LINES = 80;
     marketplaceRoutes.use("*", requireAuth, requireRestaurant);
-    n6 = (v) => v === null || v === void 0 ? 0 : Number(v);
+    n7 = (v) => v === null || v === void 0 ? 0 : Number(v);
     eur7 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     servesZone = (v, zones) => v.deliveryZones.length === 0 || v.deliveryZones.some((d) => zones.has(d.trim().toLowerCase()) || zones.has(d));
     marketplaceRoutes.get("/marketplace/vendors", async (c) => {
       const rid = c.get("restaurantId");
       const db = await getDb();
-      const [r] = await db.select().from(restaurants).where(eq17(restaurants.id, rid));
+      const [r] = await db.select().from(restaurants).where(eq18(restaurants.id, rid));
       const zones = restaurantZones(r);
-      const all = await db.select().from(vendors).where(eq17(vendors.status, "actif"));
-      const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq17(inventoryItems.restaurantId, rid))).map((x) => x.productId));
-      const linked = new Map((await db.select({ vendorId: suppliers.vendorId, supplierId: suppliers.id }).from(suppliers).where(and15(eq17(suppliers.restaurantId, rid), sql11`${suppliers.vendorId} is not null`))).map((x) => [x.vendorId, x.supplierId]));
-      const offers = await db.select({ vendorId: vendorOffers.vendorId, productId: vendorOffers.productId }).from(vendorOffers).where(eq17(vendorOffers.inStock, true));
+      const all = await db.select().from(vendors).where(eq18(vendors.status, "actif"));
+      const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq18(inventoryItems.restaurantId, rid))).map((x) => x.productId));
+      const linked = new Map((await db.select({ vendorId: suppliers.vendorId, supplierId: suppliers.id }).from(suppliers).where(and16(eq18(suppliers.restaurantId, rid), sql12`${suppliers.vendorId} is not null`))).map((x) => [x.vendorId, x.supplierId]));
+      const offers = await db.select({ vendorId: vendorOffers.vendorId, productId: vendorOffers.productId }).from(vendorOffers).where(eq18(vendorOffers.inStock, true));
       const rel = await reliabilityFor(all.map((v) => v.id));
       const out = all.filter((v) => servesZone(v, zones)).map((v) => {
         const vo = offers.filter((o) => o.vendorId === v.id);
@@ -5100,21 +5100,21 @@ var init_marketplace = __esm({
       const rid = c.get("restaurantId");
       const db = await getDb();
       const vid = c.req.param("id");
-      const [v] = await db.select().from(vendors).where(and15(eq17(vendors.id, vid), eq17(vendors.status, "actif")));
+      const [v] = await db.select().from(vendors).where(and16(eq18(vendors.id, vid), eq18(vendors.status, "actif")));
       if (!v) return c.json({ error: "Fournisseur introuvable" }, 404);
-      const rows = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq17(products.id, vendorOffers.productId)).where(eq17(vendorOffers.vendorId, vid)).orderBy(products.category, products.name);
+      const rows = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq18(products.id, vendorOffers.productId)).where(eq18(vendorOffers.vendorId, vid)).orderBy(products.category, products.name);
       const myBest = /* @__PURE__ */ new Map();
-      for (const o of await db.select({ productId: supplierOffers.productId, unit: sql11`min(${supplierOffers.packPriceEur} / ${supplierOffers.packQty})` }).from(supplierOffers).where(eq17(supplierOffers.restaurantId, rid)).groupBy(supplierOffers.productId)) myBest.set(o.productId, n6(o.unit));
-      const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq17(inventoryItems.restaurantId, rid))).map((x) => x.productId));
-      const [link] = await db.select({ id: suppliers.id }).from(suppliers).where(and15(eq17(suppliers.restaurantId, rid), eq17(suppliers.vendorId, vid)));
+      for (const o of await db.select({ productId: supplierOffers.productId, unit: sql12`min(${supplierOffers.packPriceEur} / ${supplierOffers.packQty})` }).from(supplierOffers).where(eq18(supplierOffers.restaurantId, rid)).groupBy(supplierOffers.productId)) myBest.set(o.productId, n7(o.unit));
+      const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq18(inventoryItems.restaurantId, rid))).map((x) => x.productId));
+      const [link] = await db.select({ id: suppliers.id }).from(suppliers).where(and16(eq18(suppliers.restaurantId, rid), eq18(suppliers.vendorId, vid)));
       const pricing = await loadPricing(rows.map((r) => r.offer), rid);
       const offers = rows.map(({ offer, product }) => {
         const pi = priceFor(offer, 1, pricing);
-        const unit2 = pi.packPriceEur / n6(offer.packQty);
+        const unit2 = pi.packPriceEur / n7(offer.packQty);
         const best = myBest.get(product.id);
         return { ...offer, listPriceEur: pi.listPriceEur, packPriceEur: pi.packPriceEur.toFixed(2), negotiated: pi.negotiated, priceSource: pi.source, tiers: pi.tiers, productName: product.name, category: product.category, unit: product.baseUnit, unitPrice: Math.round(unit2 * 1e4) / 1e4, myBestUnitPrice: best ?? null, savingPct: best ? Math.round((best - unit2) / best * 1e3) / 10 : null, tracked: mine.has(product.id) };
       });
-      const gbs = await db.select().from(groupBuys).where(and15(eq17(groupBuys.vendorId, vid), eq17(groupBuys.status, "ouvert"), gte6(groupBuys.closesAt, /* @__PURE__ */ new Date())));
+      const gbs = await db.select().from(groupBuys).where(and16(eq18(groupBuys.vendorId, vid), eq18(groupBuys.status, "ouvert"), gte7(groupBuys.closesAt, /* @__PURE__ */ new Date())));
       return c.json({ vendor: v, reliability: (await reliabilityFor([vid])).get(vid) ?? emptyReliability, offers, linkedSupplierId: link?.id ?? null, groupBuys: gbs });
     });
     marketplaceRoutes.post("/marketplace/vendors/:id/link", async (c) => {
@@ -5144,7 +5144,7 @@ var init_marketplace = __esm({
       const vid = c.req.param("id");
       const body3 = z8.object({ lines: z8.array(z8.object({ vendorOfferId: z8.string().uuid(), packs: z8.number().int().positive() })).min(1) }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
-      const vo = await db.select().from(vendorOffers).where(and15(eq17(vendorOffers.vendorId, vid), inArray6(vendorOffers.id, body3.data.lines.map((l) => l.vendorOfferId))));
+      const vo = await db.select().from(vendorOffers).where(and16(eq18(vendorOffers.vendorId, vid), inArray7(vendorOffers.id, body3.data.lines.map((l) => l.vendorOfferId))));
       const pricing = await loadPricing(vo, rid);
       const lines = body3.data.lines.map((l) => {
         const o = vo.find((x) => x.id === l.vendorOfferId);
@@ -5157,17 +5157,17 @@ var init_marketplace = __esm({
     marketplaceRoutes.get("/orders/:id/reorder-preview", async (c) => {
       const rid = c.get("restaurantId");
       const db = await getDb();
-      const [o] = await db.select().from(orders).where(and15(eq17(orders.id, c.req.param("id")), eq17(orders.restaurantId, rid)));
+      const [o] = await db.select().from(orders).where(and16(eq18(orders.id, c.req.param("id")), eq18(orders.restaurantId, rid)));
       if (!o?.vendorId) return c.json({ error: "Commande plateforme introuvable" }, 404);
-      const lines = await db.select({ l: orderLines, productName: products.name }).from(orderLines).innerJoin(products, eq17(products.id, orderLines.productId)).where(eq17(orderLines.orderId, o.id));
-      const offers = await db.select().from(vendorOffers).where(eq17(vendorOffers.vendorId, o.vendorId));
-      const [v] = await db.select({ name: vendors.name, status: vendors.status, minOrderEur: vendors.minOrderEur }).from(vendors).where(eq17(vendors.id, o.vendorId));
+      const lines = await db.select({ l: orderLines, productName: products.name }).from(orderLines).innerJoin(products, eq18(products.id, orderLines.productId)).where(eq18(orderLines.orderId, o.id));
+      const offers = await db.select().from(vendorOffers).where(eq18(vendorOffers.vendorId, o.vendorId));
+      const [v] = await db.select({ name: vendors.name, status: vendors.status, minOrderEur: vendors.minOrderEur }).from(vendors).where(eq18(vendors.id, o.vendorId));
       const items = lines.map(({ l, productName }) => {
         const off = offers.find((x) => x.productId === l.productId && x.packLabel === l.packLabel) ?? offers.find((x) => x.productId === l.productId);
-        return { productName, packLabel: off?.packLabel ?? l.packLabel, packs: n6(l.packs), vendorOfferId: off?.id ?? null, available: !!off?.inStock, oldPackPrice: Math.round(n6(l.lineTotalEur) / Math.max(1, n6(l.packs)) * 100) / 100, newPackPrice: off ? n6(off.packPriceEur) : null };
+        return { productName, packLabel: off?.packLabel ?? l.packLabel, packs: n7(l.packs), vendorOfferId: off?.id ?? null, available: !!off?.inStock, oldPackPrice: Math.round(n7(l.lineTotalEur) / Math.max(1, n7(l.packs)) * 100) / 100, newPackPrice: off ? n7(off.packPriceEur) : null };
       });
       const total = items.reduce((a, i) => a + (i.available && i.newPackPrice !== null ? i.packs * i.newPackPrice : 0), 0);
-      return c.json({ vendor: { id: o.vendorId, ...v }, items, total: Math.round(total * 100) / 100, oldTotal: n6(o.totalEur) });
+      return c.json({ vendor: { id: o.vendorId, ...v }, items, total: Math.round(total * 100) / 100, oldTotal: n7(o.totalEur) });
     });
     marketplaceRoutes.post("/orders/:id/reorder", async (c) => {
       const rid = c.get("restaurantId");
@@ -5175,15 +5175,15 @@ var init_marketplace = __esm({
       const db = await getDb();
       const body3 = z8.object({ lines: z8.array(z8.object({ vendorOfferId: z8.string().uuid(), packs: z8.number().int().positive() })).min(1).optional(), notes: z8.string().max(300).optional() }).safeParse(await c.req.json().catch(() => ({})));
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
-      const [o] = await db.select().from(orders).where(and15(eq17(orders.id, c.req.param("id")), eq17(orders.restaurantId, rid)));
+      const [o] = await db.select().from(orders).where(and16(eq18(orders.id, c.req.param("id")), eq18(orders.restaurantId, rid)));
       if (!o?.vendorId) return c.json({ error: "Commande plateforme introuvable" }, 404);
       let lines = body3.data.lines;
       if (!lines) {
-        const prev = await db.select().from(orderLines).where(eq17(orderLines.orderId, o.id));
-        const offers = await db.select().from(vendorOffers).where(and15(eq17(vendorOffers.vendorId, o.vendorId), eq17(vendorOffers.inStock, true)));
+        const prev = await db.select().from(orderLines).where(eq18(orderLines.orderId, o.id));
+        const offers = await db.select().from(vendorOffers).where(and16(eq18(vendorOffers.vendorId, o.vendorId), eq18(vendorOffers.inStock, true)));
         lines = prev.map((l) => {
           const off = offers.find((x) => x.productId === l.productId && x.packLabel === l.packLabel) ?? offers.find((x) => x.productId === l.productId);
-          return off ? { vendorOfferId: off.id, packs: n6(l.packs) } : null;
+          return off ? { vendorOfferId: off.id, packs: n7(l.packs) } : null;
         }).filter((x) => !!x);
       }
       if (!lines.length) return c.json({ error: "Aucun produit de cette commande n\u2019est disponible actuellement" }, 400);
@@ -5195,15 +5195,15 @@ var init_marketplace = __esm({
     marketplaceRoutes.get("/recurring", async (c) => {
       const rid = c.get("restaurantId");
       const db = await getDb();
-      const rows = await db.select({ r: recurringOrders, vendorName: vendors.name }).from(recurringOrders).innerJoin(vendors, eq17(vendors.id, recurringOrders.vendorId)).where(eq17(recurringOrders.restaurantId, rid)).orderBy(recurringOrders.createdAt);
+      const rows = await db.select({ r: recurringOrders, vendorName: vendors.name }).from(recurringOrders).innerJoin(vendors, eq18(vendors.id, recurringOrders.vendorId)).where(eq18(recurringOrders.restaurantId, rid)).orderBy(recurringOrders.createdAt);
       const offerIds = [...new Set(rows.flatMap((x) => x.r.lines.map((l) => l.vendorOfferId)))];
-      const offers = offerIds.length ? await db.select({ o: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq17(products.id, vendorOffers.productId)).where(inArray6(vendorOffers.id, offerIds)) : [];
+      const offers = offerIds.length ? await db.select({ o: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq18(products.id, vendorOffers.productId)).where(inArray7(vendorOffers.id, offerIds)) : [];
       return c.json({ recurring: rows.map(({ r, vendorName }) => ({ ...r, vendorName, daysLabel: r.weekdays.map((d) => DAYS[d]).join(", "), lines: r.lines.map((l) => {
         const o = offers.find((x) => x.o.id === l.vendorOfferId);
-        return { ...l, productName: o?.productName ?? "?", packLabel: o?.o.packLabel ?? null, packPriceEur: o ? n6(o.o.packPriceEur) : null, available: !!o?.o.inStock };
+        return { ...l, productName: o?.productName ?? "?", packLabel: o?.o.packLabel ?? null, packPriceEur: o ? n7(o.o.packPriceEur) : null, available: !!o?.o.inStock };
       }), estimatedTotal: Math.round(r.lines.reduce((a, l) => {
         const o = offers.find((x) => x.o.id === l.vendorOfferId);
-        return a + (o ? l.packs * n6(o.o.packPriceEur) : 0);
+        return a + (o ? l.packs * n7(o.o.packPriceEur) : 0);
       }, 0) * 100) / 100 })) });
     });
     marketplaceRoutes.post("/recurring", async (c) => {
@@ -5214,15 +5214,15 @@ var init_marketplace = __esm({
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
       let { vendorId, lines } = body3.data;
       if (body3.data.fromOrderId) {
-        const [o] = await db.select().from(orders).where(and15(eq17(orders.id, body3.data.fromOrderId), eq17(orders.restaurantId, rid)));
+        const [o] = await db.select().from(orders).where(and16(eq18(orders.id, body3.data.fromOrderId), eq18(orders.restaurantId, rid)));
         if (!o?.vendorId) return c.json({ error: "Commande introuvable" }, 404);
         vendorId = o.vendorId;
         if (!lines) {
-          const prev = await db.select().from(orderLines).where(eq17(orderLines.orderId, o.id));
-          const offers = await db.select().from(vendorOffers).where(eq17(vendorOffers.vendorId, o.vendorId));
+          const prev = await db.select().from(orderLines).where(eq18(orderLines.orderId, o.id));
+          const offers = await db.select().from(vendorOffers).where(eq18(vendorOffers.vendorId, o.vendorId));
           lines = prev.map((l) => {
             const off = offers.find((x) => x.productId === l.productId && x.packLabel === l.packLabel) ?? offers.find((x) => x.productId === l.productId);
-            return off ? { vendorOfferId: off.id, packs: n6(l.packs) } : null;
+            return off ? { vendorOfferId: off.id, packs: n7(l.packs) } : null;
           }).filter((x) => !!x);
         }
       }
@@ -5240,14 +5240,14 @@ var init_marketplace = __esm({
         patch.weekdays = [...new Set(body3.data.weekdays)].sort();
         patch.nextRunOn = nextRunOn(patch.weekdays);
       }
-      const [row] = await db.update(recurringOrders).set(patch).where(and15(eq17(recurringOrders.id, c.req.param("id")), eq17(recurringOrders.restaurantId, rid))).returning();
+      const [row] = await db.update(recurringOrders).set(patch).where(and16(eq18(recurringOrders.id, c.req.param("id")), eq18(recurringOrders.restaurantId, rid))).returning();
       if (!row) return c.json({ error: "Introuvable" }, 404);
       return c.json({ recurring: row });
     });
     marketplaceRoutes.delete("/recurring/:id", async (c) => {
       const rid = c.get("restaurantId");
       const db = await getDb();
-      const [row] = await db.delete(recurringOrders).where(and15(eq17(recurringOrders.id, c.req.param("id")), eq17(recurringOrders.restaurantId, rid))).returning();
+      const [row] = await db.delete(recurringOrders).where(and16(eq18(recurringOrders.id, c.req.param("id")), eq18(recurringOrders.restaurantId, rid))).returning();
       if (!row) return c.json({ error: "Introuvable" }, 404);
       return c.json({ ok: true });
     });
@@ -5255,28 +5255,28 @@ var init_marketplace = __esm({
       const rid = c.get("restaurantId");
       const user = c.get("user");
       const db = await getDb();
-      const [r] = await db.select().from(recurringOrders).where(and15(eq17(recurringOrders.id, c.req.param("id")), eq17(recurringOrders.restaurantId, rid)));
+      const [r] = await db.select().from(recurringOrders).where(and16(eq18(recurringOrders.id, c.req.param("id")), eq18(recurringOrders.restaurantId, rid)));
       if (!r) return c.json({ error: "Introuvable" }, 404);
       const res = await placeVendorOrder(rid, r.vendorId, user.id, { lines: r.lines, notes: r.notes ?? void 0, source: "recurrente" });
       if (!res.ok) return c.json({ error: res.error }, res.status);
-      await db.update(recurringOrders).set({ lastRunAt: /* @__PURE__ */ new Date(), lastOrderId: res.order.id, nextRunOn: nextRunOn(r.weekdays) }).where(eq17(recurringOrders.id, r.id));
+      await db.update(recurringOrders).set({ lastRunAt: /* @__PURE__ */ new Date(), lastOrderId: res.order.id, nextRunOn: nextRunOn(r.weekdays) }).where(eq18(recurringOrders.id, r.id));
       return c.json({ order: res.order, message: `Commande ${res.order.reference} envoy\xE9e \xE0 ${res.vendorName} (${eur7(res.total)}).` }, 201);
     });
     marketplaceRoutes.get("/marketplace/group-buys", async (c) => {
       const rid = c.get("restaurantId");
       const db = await getDb();
-      const [r] = await db.select().from(restaurants).where(eq17(restaurants.id, rid));
+      const [r] = await db.select().from(restaurants).where(eq18(restaurants.id, rid));
       const zones = restaurantZones(r);
-      const rows = await db.select({ gb: groupBuys, vendorName: vendors.name, offer: vendorOffers, productName: products.name, unit: products.baseUnit }).from(groupBuys).innerJoin(vendors, eq17(vendors.id, groupBuys.vendorId)).innerJoin(vendorOffers, eq17(vendorOffers.id, groupBuys.vendorOfferId)).innerJoin(products, eq17(products.id, vendorOffers.productId)).where(inArray6(groupBuys.status, ["ouvert", "atteint"])).orderBy(groupBuys.closesAt);
+      const rows = await db.select({ gb: groupBuys, vendorName: vendors.name, offer: vendorOffers, productName: products.name, unit: products.baseUnit }).from(groupBuys).innerJoin(vendors, eq18(vendors.id, groupBuys.vendorId)).innerJoin(vendorOffers, eq18(vendorOffers.id, groupBuys.vendorOfferId)).innerJoin(products, eq18(products.id, vendorOffers.productId)).where(inArray7(groupBuys.status, ["ouvert", "atteint"])).orderBy(groupBuys.closesAt);
       const ids = rows.map((x) => x.gb.id);
-      const parts = ids.length ? await db.select().from(groupBuyParticipations).where(inArray6(groupBuyParticipations.groupBuyId, ids)) : [];
+      const parts = ids.length ? await db.select().from(groupBuyParticipations).where(inArray7(groupBuyParticipations.groupBuyId, ids)) : [];
       const out = rows.filter((x) => zones.has(x.gb.zone.toLowerCase()) || x.gb.zone === "France").map((x) => {
         const p = parts.filter((y) => y.groupBuyId === x.gb.id);
         const committed = p.reduce((a, y) => a + y.packs, 0);
         const mine = p.find((y) => y.restaurantId === rid);
-        const price = n6(x.offer.packPriceEur);
-        const disc = price * (1 - n6(x.gb.discountPct) / 100);
-        return { ...x.gb, vendorName: x.vendorName, productName: x.productName, unit: x.unit, packLabel: x.offer.packLabel, packQty: n6(x.offer.packQty), packPrice: price, discountedPackPrice: Math.round(disc * 100) / 100, committedPacks: committed, participants: p.length, progressPct: Math.min(100, Math.round(committed / x.gb.targetPacks * 100)), myPacks: mine?.packs ?? 0, hoursLeft: Math.max(0, Math.round((new Date(x.gb.closesAt).getTime() - Date.now()) / 36e5)) };
+        const price = n7(x.offer.packPriceEur);
+        const disc = price * (1 - n7(x.gb.discountPct) / 100);
+        return { ...x.gb, vendorName: x.vendorName, productName: x.productName, unit: x.unit, packLabel: x.offer.packLabel, packQty: n7(x.offer.packQty), packPrice: price, discountedPackPrice: Math.round(disc * 100) / 100, committedPacks: committed, participants: p.length, progressPct: Math.min(100, Math.round(committed / x.gb.targetPacks * 100)), myPacks: mine?.packs ?? 0, hoursLeft: Math.max(0, Math.round((new Date(x.gb.closesAt).getTime() - Date.now()) / 36e5)) };
       });
       return c.json({ groupBuys: out });
     });
@@ -5286,26 +5286,26 @@ var init_marketplace = __esm({
       const id = c.req.param("id");
       const body3 = z8.object({ packs: z8.number().int().min(0).max(500) }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Nombre de colis invalide" }, 400);
-      const [gb] = await db.select().from(groupBuys).where(eq17(groupBuys.id, id));
+      const [gb] = await db.select().from(groupBuys).where(eq18(groupBuys.id, id));
       if (!gb || gb.status !== "ouvert" || new Date(gb.closesAt) < /* @__PURE__ */ new Date()) return c.json({ error: "Achat group\xE9 ferm\xE9" }, 400);
       if (body3.data.packs === 0) {
-        await db.delete(groupBuyParticipations).where(and15(eq17(groupBuyParticipations.groupBuyId, id), eq17(groupBuyParticipations.restaurantId, rid)));
+        await db.delete(groupBuyParticipations).where(and16(eq18(groupBuyParticipations.groupBuyId, id), eq18(groupBuyParticipations.restaurantId, rid)));
       } else await db.insert(groupBuyParticipations).values({ groupBuyId: id, restaurantId: rid, packs: body3.data.packs }).onConflictDoUpdate({ target: [groupBuyParticipations.groupBuyId, groupBuyParticipations.restaurantId], set: { packs: body3.data.packs } });
-      const [{ total }] = await db.select({ total: sql11`coalesce(sum(${groupBuyParticipations.packs}),0)` }).from(groupBuyParticipations).where(eq17(groupBuyParticipations.groupBuyId, id));
-      if (n6(total) >= gb.targetPacks && gb.status === "ouvert") await db.update(groupBuys).set({ status: "atteint" }).where(eq17(groupBuys.id, id));
-      return c.json({ ok: true, myPacks: body3.data.packs, committedPacks: n6(total), reached: n6(total) >= gb.targetPacks });
+      const [{ total }] = await db.select({ total: sql12`coalesce(sum(${groupBuyParticipations.packs}),0)` }).from(groupBuyParticipations).where(eq18(groupBuyParticipations.groupBuyId, id));
+      if (n7(total) >= gb.targetPacks && gb.status === "ouvert") await db.update(groupBuys).set({ status: "atteint" }).where(eq18(groupBuys.id, id));
+      return c.json({ ok: true, myPacks: body3.data.packs, committedPacks: n7(total), reached: n7(total) >= gb.targetPacks });
     });
     marketplaceRoutes.get("/marketplace/my-orders", async (c) => {
       const rid = c.get("restaurantId");
       const db = await getDb();
-      const rows = await db.select({ order: orders, vendorName: vendors.name }).from(orders).innerJoin(vendors, eq17(vendors.id, orders.vendorId)).where(eq17(orders.restaurantId, rid)).orderBy(desc6(orders.createdAt)).limit(30);
+      const rows = await db.select({ order: orders, vendorName: vendors.name }).from(orders).innerJoin(vendors, eq18(vendors.id, orders.vendorId)).where(eq18(orders.restaurantId, rid)).orderBy(desc6(orders.createdAt)).limit(30);
       return c.json({ orders: rows.map((r) => ({ ...r.order, vendorName: r.vendorName })) });
     });
   }
 });
 
 // apps/api/src/jobs/daily.ts
-import { and as and16, desc as desc7, eq as eq18, gte as gte7, inArray as inArray7, sql as sql12 } from "drizzle-orm";
+import { and as and17, desc as desc7, eq as eq19, gte as gte8, inArray as inArray8, sql as sql13 } from "drizzle-orm";
 async function buildDigestForRestaurant(rid, opts = {}) {
   const db = await getDb();
   const now = opts.now ?? /* @__PURE__ */ new Date();
@@ -5321,21 +5321,21 @@ async function buildDigestForRestaurant(rid, opts = {}) {
   });
   const cart = needs.length ? buildSmartCart(needs, ctx.offers) : null;
   const since = new Date(now.getTime() - 36 * 36e5);
-  const recentAlerts = await db.select().from(alerts).where(and16(eq18(alerts.restaurantId, rid), eq18(alerts.isRead, false), gte7(alerts.createdAt, since))).orderBy(desc7(alerts.createdAt)).limit(50);
-  const [disc] = await db.select({ count: sql12`count(*)`, value: sql12`coalesce(sum(greatest(${deliveryDiscrepancies.orderedQty} - ${deliveryDiscrepancies.receivedQty}, 0) * ${orderLines.unitPriceEur}), 0)` }).from(deliveryDiscrepancies).innerJoin(deliveries, eq18(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orderLines, eq18(orderLines.id, deliveryDiscrepancies.orderLineId)).where(and16(eq18(deliveries.restaurantId, rid), eq18(deliveryDiscrepancies.resolved, false)));
-  const pending = await db.select({ reference: orders.reference, supplierName: suppliers.name, status: orders.status, expectedAt: orders.expectedAt }).from(orders).innerJoin(suppliers, eq18(suppliers.id, orders.supplierId)).where(and16(eq18(orders.restaurantId, rid), inArray7(orders.status, ["envoyee", "confirmee"]))).orderBy(orders.expectedAt).limit(10);
+  const recentAlerts = await db.select().from(alerts).where(and17(eq19(alerts.restaurantId, rid), eq19(alerts.isRead, false), gte8(alerts.createdAt, since))).orderBy(desc7(alerts.createdAt)).limit(50);
+  const [disc] = await db.select({ count: sql13`count(*)`, value: sql13`coalesce(sum(greatest(${deliveryDiscrepancies.orderedQty} - ${deliveryDiscrepancies.receivedQty}, 0) * ${orderLines.unitPriceEur}), 0)` }).from(deliveryDiscrepancies).innerJoin(deliveries, eq19(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orderLines, eq19(orderLines.id, deliveryDiscrepancies.orderLineId)).where(and17(eq19(deliveries.restaurantId, rid), eq19(deliveryDiscrepancies.resolved, false)));
+  const pending = await db.select({ reference: orders.reference, supplierName: suppliers.name, status: orders.status, expectedAt: orders.expectedAt }).from(orders).innerJoin(suppliers, eq19(suppliers.id, orders.supplierId)).where(and17(eq19(orders.restaurantId, rid), inArray8(orders.status, ["envoyee", "confirmee"]))).orderBy(orders.expectedAt).limit(10);
   const yesterday = new Date(now.getTime() - 864e5).toISOString().slice(0, 10);
-  const [ys] = await db.select({ p: sql12`coalesce(sum(${sales.portions}), 0)`, c: sql12`count(*)` }).from(sales).where(and16(eq18(sales.restaurantId, rid), eq18(sales.day, yesterday)));
+  const [ys] = await db.select({ p: sql13`coalesce(sum(${sales.portions}), 0)`, c: sql13`count(*)` }).from(sales).where(and17(eq19(sales.restaurantId, rid), eq19(sales.day, yesterday)));
   const startMonth = new Date(now);
   startMonth.setDate(1);
   startMonth.setHours(0, 0, 0, 0);
   const d30 = new Date(now.getTime() - 30 * 864e5).toISOString(), d60 = new Date(now.getTime() - 60 * 864e5).toISOString();
   const [sp] = await db.select({
-    thisMonth: sql12`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${startMonth.toISOString()}),0)`,
-    last30: sql12`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${d30}),0)`,
-    prev30: sql12`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${d60} and ${orders.createdAt} < ${d30}),0)`
-  }).from(orders).where(and16(eq18(orders.restaurantId, rid), sql12`${orders.status} <> 'annulee'`));
-  const evolutionPct = n7(sp.prev30) > 0 ? Math.round((n7(sp.last30) - n7(sp.prev30)) / n7(sp.prev30) * 1e3) / 10 : null;
+    thisMonth: sql13`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${startMonth.toISOString()}),0)`,
+    last30: sql13`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${d30}),0)`,
+    prev30: sql13`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${d60} and ${orders.createdAt} < ${d30}),0)`
+  }).from(orders).where(and17(eq19(orders.restaurantId, rid), sql13`${orders.status} <> 'annulee'`));
+  const evolutionPct = n8(sp.prev30) > 0 ? Math.round((n8(sp.last30) - n8(sp.prev30)) / n8(sp.prev30) * 1e3) / 10 : null;
   const statuses = [...statusOf.values()];
   const input = {
     restaurantName: ctx.restaurant.name,
@@ -5347,23 +5347,23 @@ async function buildDigestForRestaurant(rid, opts = {}) {
     autoReorder: opts.autoReorderPrepared ?? [],
     priceAlerts: recentAlerts.filter((a) => a.kind === "hausse_prix").map((a) => ({ title: a.title, message: a.message })),
     opportunities: recentAlerts.filter((a) => a.kind === "opportunite").map((a) => ({ title: a.title, message: a.message })),
-    discrepancies: { count: n7(disc.count), openValue: Math.round(n7(disc.value) * 100) / 100 },
+    discrepancies: { count: n8(disc.count), openValue: Math.round(n8(disc.value) * 100) / 100 },
     pendingOrders: pending,
-    salesYesterday: n7(ys.c) > 0 ? n7(ys.p) : null,
-    spend: { thisMonth: n7(sp.thisMonth), evolutionPct }
+    salesYesterday: n8(ys.c) > 0 ? n8(ys.p) : null,
+    spend: { thisMonth: n8(sp.thisMonth), evolutionPct }
   };
   return { input, ctx };
 }
 async function recipientsFor(rid, settingsRecipients) {
   if (settingsRecipients?.length) return settingsRecipients.map((e) => ({ email: e, firstName: "chef" }));
   const db = await getDb();
-  const rows = await db.select({ email: users.email, fullName: users.fullName, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(users, eq18(users.id, restaurantMembers.userId)).where(eq18(restaurantMembers.restaurantId, rid));
+  const rows = await db.select({ email: users.email, fullName: users.fullName, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(users, eq19(users.id, restaurantMembers.userId)).where(eq19(restaurantMembers.restaurantId, rid));
   return rows.filter((r) => r.role !== "staff").map((r) => ({ email: r.email, firstName: r.fullName.split(" ")[0] || "chef" }));
 }
 async function runDailyForRestaurant(rid, opts = {}) {
   const db = await getDb();
   const now = opts.now ?? /* @__PURE__ */ new Date();
-  const [r] = await db.select().from(restaurants).where(eq18(restaurants.id, rid));
+  const [r] = await db.select().from(restaurants).where(eq19(restaurants.id, rid));
   const base = { restaurantId: rid, name: r.name, alerts: 0, autoReorder: 0, digest: "skipped_disabled", recipients: [] };
   try {
     const { inserted } = await refreshAlerts(rid);
@@ -5462,7 +5462,7 @@ L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY
   }
   return summary;
 }
-var n7, APP_URL2;
+var n8, APP_URL2;
 var init_daily = __esm({
   "apps/api/src/jobs/daily.ts"() {
     "use strict";
@@ -5479,7 +5479,7 @@ var init_daily = __esm({
     init_pilots();
     init_reminders();
     init_marketplace();
-    n7 = (v) => v === null || v === void 0 ? 0 : Number(v);
+    n8 = (v) => v === null || v === void 0 ? 0 : Number(v);
     APP_URL2 = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   }
 });
@@ -5488,7 +5488,7 @@ var init_daily = __esm({
 import { getRequestListener } from "@hono/node-server";
 
 // apps/api/src/app.ts
-import { Hono as Hono23 } from "hono";
+import { Hono as Hono24 } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
@@ -5735,16 +5735,16 @@ function pick(row, key) {
 }
 var toNumber = (s) => {
   const clean = s.replace(/[€\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
-  const n15 = Number(clean);
-  return Number.isFinite(n15) && clean !== "" ? n15 : null;
+  const n16 = Number(clean);
+  return Number.isFinite(n16) && clean !== "" ? n16 : null;
 };
 function parsePack(label) {
   const s = label.toLowerCase().replace(",", ".");
   const mult = s.match(/(\d+)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*(kg|g|l|cl|ml)/);
   if (mult) {
-    const n15 = Number(mult[1]);
+    const n16 = Number(mult[1]);
     const q2 = Number(mult[2]);
-    return convert(n15 * q2, mult[3]);
+    return convert(n16 * q2, mult[3]);
   }
   const single = s.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|cl|ml)\b/);
   if (single) return convert(Number(single[1]), single[2]);
@@ -5970,13 +5970,414 @@ catalogRoutes.get("/import/template.csv", (c) => {
 // apps/api/src/app.ts
 init_intelligence();
 
+// apps/api/src/routes/analysis.ts
+init_src();
+init_auth();
+import { Hono as Hono5 } from "hono";
+import { and as and9, eq as eq11, gte as gte3, inArray as inArray4, isNotNull, ne, sql as sql7 } from "drizzle-orm";
+
+// apps/api/src/lib/analysis.ts
+function monthKey(at) {
+  const d = typeof at === "string" ? new Date(at) : at;
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+function monthRange(months, today = /* @__PURE__ */ new Date()) {
+  const out = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - i, 1));
+    out.push(monthKey(d));
+  }
+  return out;
+}
+var sum = (a, b) => a + b;
+var round2 = (v) => Math.round(v * 100) / 100;
+function monthlySpend(purchases, months) {
+  const index2 = new Map(months.map((m, i) => [m, i]));
+  const totals = months.map(() => 0);
+  const perCategory = /* @__PURE__ */ new Map();
+  for (const p of purchases) {
+    const i = index2.get(monthKey(p.at));
+    if (i === void 0) continue;
+    const amount = p.quantity * p.unitCostEur;
+    totals[i] += amount;
+    if (!perCategory.has(p.category)) perCategory.set(p.category, months.map(() => 0));
+    perCategory.get(p.category)[i] += amount;
+  }
+  const byCategory = [...perCategory.entries()].map(([category, t]) => ({ category, totals: t.map(round2), total: round2(t.reduce(sum, 0)) })).sort((a, b) => b.total - a.total);
+  return { months, totals: totals.map(round2), total: round2(totals.reduce(sum, 0)), byCategory };
+}
+function priceIndexByCategory(points, months, opts = {}) {
+  const index2 = new Map(months.map((m, i) => [m, i]));
+  const kept = points.filter((p) => (!opts.invoicedOnly || p.source === "facture") && p.unitPrice > 0 && index2.has(monthKey(p.recordedAt)));
+  if (kept.length === 0) return [];
+  const perProduct = /* @__PURE__ */ new Map();
+  for (const p of kept) {
+    if (!perProduct.has(p.productId)) perProduct.set(p.productId, { category: p.category, sum: months.map(() => 0), count: months.map(() => 0) });
+    const acc = perProduct.get(p.productId);
+    const i = index2.get(monthKey(p.recordedAt));
+    acc.sum[i] += p.unitPrice;
+    acc.count[i] += 1;
+  }
+  const byCategory = /* @__PURE__ */ new Map();
+  for (const [productId, acc] of perProduct) {
+    const avg = acc.sum.map((v, i) => acc.count[i] ? v / acc.count[i] : null);
+    const firstIdx = avg.findIndex((v) => v !== null);
+    if (firstIdx === -1) continue;
+    const base = avg[firstIdx];
+    const series = avg.map((v) => v === null ? null : v / base * 100);
+    const raw = kept.filter((p) => p.productId === productId).sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+    if (!byCategory.has(acc.category)) byCategory.set(acc.category, []);
+    byCategory.get(acc.category).push({ id: productId, series, first: raw[0]?.unitPrice ?? null, last: raw[raw.length - 1]?.unitPrice ?? null });
+  }
+  const out = [];
+  for (const [category, products2] of byCategory) {
+    const pointsIdx = months.map((_, i) => {
+      const vals = products2.map((p) => p.series[i]).filter((v) => v !== null);
+      return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 10) / 10 : null;
+    });
+    const monthCount = pointsIdx.filter((v) => v !== null).length;
+    const rawMonth = (i) => {
+      const vals = kept.filter((p) => p.category === category && index2.get(monthKey(p.recordedAt)) === i).map((p) => p.unitPrice);
+      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    };
+    const firstIdx = pointsIdx.findIndex((v) => v !== null);
+    const lastIdx = pointsIdx.length - 1 - [...pointsIdx].reverse().findIndex((v) => v !== null);
+    const firstPrice = rawMonth(firstIdx), lastPrice = rawMonth(lastIdx);
+    const changes = products2.map((p) => p.first && p.last ? (p.last - p.first) / p.first * 100 : null).filter((v) => v !== null);
+    out.push({
+      category,
+      points: pointsIdx,
+      monthCount,
+      productsTracked: products2.length,
+      risingProducts: changes.filter((c) => c > 1).length,
+      avgProductChangePct: changes.length ? Math.round(changes.reduce((a, b) => a + b, 0) / changes.length * 10) / 10 : null,
+      firstPrice: round2(firstPrice ?? 0),
+      lastPrice: round2(lastPrice ?? 0),
+      // Variation de l'INDICE (composition constante), pas des prix moyens bruts : un produit
+      // qui arrive dans le panier ne doit pas fabriquer une hausse. Et avec un seul mois de
+      // relevés on refuse d'afficher « 0 % » — ce serait faux.
+      changePct: monthCount >= 2 && pointsIdx[lastIdx] !== null ? Math.round((pointsIdx[lastIdx] - 100) * 10) / 10 : null
+    });
+  }
+  return out.sort((a, b) => (b.changePct ?? b.avgProductChangePct ?? -Infinity) - (a.changePct ?? a.avgProductChangePct ?? -Infinity));
+}
+function topPriceDrifts(points, purchases, limit = 10, opts = {}) {
+  const onlyWithVolume = opts.onlyWithVolume ?? true;
+  const perProduct = /* @__PURE__ */ new Map();
+  for (const p of points) {
+    if (!(p.unitPrice > 0)) continue;
+    if (!perProduct.has(p.productId)) perProduct.set(p.productId, []);
+    perProduct.get(p.productId).push(p);
+  }
+  const out = [];
+  for (const [productId, list] of perProduct) {
+    if (list.length < 2) continue;
+    const sorted = [...list].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+    const first = sorted[0], last = sorted[sorted.length - 1];
+    const changePct = Math.round((last.unitPrice - first.unitPrice) / first.unitPrice * 1e3) / 10;
+    if (changePct < 1) continue;
+    const quantitySince = purchases.filter((p) => p.productId === productId && p.at >= first.recordedAt).reduce((a, p) => a + p.quantity, 0);
+    if (onlyWithVolume && quantitySince <= 0) continue;
+    out.push({
+      productId,
+      productName: last.productName,
+      category: last.category,
+      unit: last.unit,
+      supplierId: last.supplierId,
+      supplierName: last.supplierName,
+      firstPrice: round2(first.unitPrice),
+      lastPrice: round2(last.unitPrice),
+      changePct,
+      quantitySince: round2(quantitySince),
+      impactEur: round2((last.unitPrice - first.unitPrice) * quantitySince),
+      invoiced: sorted.some((p) => p.source === "facture")
+    });
+  }
+  return out.sort((a, b) => b.impactEur - a.impactEur).slice(0, limit);
+}
+function explainCostChange(purchases, months, today = /* @__PURE__ */ new Date()) {
+  const cur = months[months.length - 1] ?? monthKey(today);
+  const prev = months[months.length - 2] ?? cur;
+  const agg = (month) => {
+    const m = /* @__PURE__ */ new Map();
+    for (const p of purchases) {
+      if (monthKey(p.at) !== month) continue;
+      const row = m.get(p.productId) ?? { name: p.productName, qty: 0, amount: 0 };
+      row.qty += p.quantity;
+      row.amount += p.quantity * p.unitCostEur;
+      m.set(p.productId, row);
+    }
+    return m;
+  };
+  const a = agg(prev), b = agg(cur);
+  const ids = /* @__PURE__ */ new Set([...a.keys(), ...b.keys()]);
+  let priceEffect = 0, volumeEffect = 0, currentTotal = 0, previousTotal = 0;
+  const contributors = [];
+  for (const id of ids) {
+    const p = a.get(id), c = b.get(id);
+    const qPrev = p?.qty ?? 0, qCur = c?.qty ?? 0;
+    const pPrev = p && p.qty > 0 ? p.amount / p.qty : null;
+    const pCur = c && c.qty > 0 ? c.amount / c.qty : null;
+    currentTotal += c?.amount ?? 0;
+    previousTotal += p?.amount ?? 0;
+    const refPrice = pPrev ?? pCur ?? 0;
+    const pricePart = (pCur ?? pPrev ?? 0) - refPrice === 0 ? 0 : ((pCur ?? refPrice) - (pPrev ?? refPrice)) * qCur;
+    const volumePart = (qCur - qPrev) * refPrice;
+    priceEffect += pricePart;
+    volumeEffect += volumePart;
+    const delta = (c?.amount ?? 0) - (p?.amount ?? 0);
+    if (Math.abs(delta) < 0.5) continue;
+    const reason = Math.abs(pricePart) < 0.5 ? "volume" : Math.abs(volumePart) < 0.5 ? "prix" : "les deux";
+    contributors.push({
+      productId: id,
+      productName: c?.name ?? p.name,
+      deltaEur: round2(delta),
+      pricePart: round2(pricePart),
+      volumePart: round2(volumePart),
+      reason,
+      productUrl: `/app/achats/comparer/${id}`
+    });
+  }
+  contributors.sort((x, y) => Math.abs(y.deltaEur) - Math.abs(x.deltaEur));
+  const deltaTotal = round2(currentTotal - previousTotal);
+  const monthLabel = (m) => (/* @__PURE__ */ new Date(`${m}-01T00:00:00Z`)).toLocaleDateString("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" });
+  const eur11 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+  let sentence;
+  if (Math.abs(deltaTotal) < 1) {
+    sentence = `Vos achats sont stables : ${eur11(currentTotal)} en ${monthLabel(cur)}, comme le mois pr\xE9c\xE9dent.`;
+  } else if (deltaTotal > 0) {
+    const pricePart = Math.max(0, priceEffect), volumePart = Math.max(0, volumeEffect);
+    const main = contributors[0];
+    sentence = `Vos achats ont co\xFBt\xE9 ${eur11(currentTotal)} en ${monthLabel(cur)}, soit ${eur11(deltaTotal)} de plus qu\u2019en ${monthLabel(prev)}. ` + (pricePart >= volumePart ? `La hausse des PRIX explique l\u2019essentiel (+${eur11(pricePart)})` : `Le VOLUME achet\xE9 explique l\u2019essentiel (+${eur11(volumePart)})`) + (main ? `, principalement sur \xAB ${main.productName} \xBB (${main.deltaEur > 0 ? "+" : ""}${eur11(main.deltaEur)}).` : ".");
+  } else {
+    const main = contributors[0];
+    sentence = `Vos achats ont co\xFBt\xE9 ${eur11(currentTotal)} en ${monthLabel(cur)}, soit ${eur11(-deltaTotal)} de moins qu\u2019en ${monthLabel(prev)}` + (main ? `, notamment gr\xE2ce \xE0 \xAB ${main.productName} \xBB (${eur11(main.deltaEur)}).` : ".");
+  }
+  return {
+    currentMonth: cur,
+    previousMonth: prev,
+    currentTotal: round2(currentTotal),
+    previousTotal: round2(previousTotal),
+    deltaTotal,
+    priceEffectEur: round2(priceEffect),
+    volumeEffectEur: round2(volumeEffect),
+    contributors: contributors.slice(0, 8),
+    sentence
+  };
+}
+function recipeMargins(recipes2, unitCostByProduct) {
+  const out = recipes2.filter((r) => r.isActive).map((r) => {
+    const ingredients = r.ingredients.map((i) => {
+      const unitCostEur = unitCostByProduct.get(i.productId) ?? null;
+      return { ...i, unitCostEur, lineCost: unitCostEur === null ? null : round2(unitCostEur * i.quantity) };
+    });
+    const missingPrices = ingredients.filter((i) => i.unitCostEur === null).map((i) => i.productName);
+    const costPerPortion = missingPrices.length ? null : round2(ingredients.reduce((a, i) => a + (i.lineCost ?? 0), 0));
+    const marginEur = costPerPortion !== null && r.sellingPriceEur !== null ? round2(r.sellingPriceEur - costPerPortion) : null;
+    const marginPct = marginEur !== null && r.sellingPriceEur ? Math.round(marginEur / r.sellingPriceEur * 1e3) / 10 : null;
+    return {
+      id: r.id,
+      name: r.name,
+      costPerPortion,
+      sellingPriceEur: r.sellingPriceEur,
+      marginEur,
+      marginPct,
+      targetMarginPct: r.targetMarginPct,
+      portions30: r.portions30,
+      marginTotalEur: marginEur === null ? null : round2(marginEur * r.portions30),
+      missingPrices,
+      ingredients,
+      url: "/app/recettes"
+    };
+  });
+  return out.sort((a, b) => (a.marginPct ?? 999) - (b.marginPct ?? 999));
+}
+function recipeCostHistory(recipes2, points, months) {
+  const monthEnds = months.map((m) => {
+    const [y, mo] = m.split("-").map(Number);
+    return new Date(Date.UTC(y, mo, 1)).toISOString();
+  });
+  const byProduct = /* @__PURE__ */ new Map();
+  for (const p of points) {
+    if (!(p.unitPrice > 0)) continue;
+    if (!byProduct.has(p.productId)) byProduct.set(p.productId, []);
+    byProduct.get(p.productId).push(p);
+  }
+  const priceAt = (productId, at) => {
+    const list = (byProduct.get(productId) ?? []).filter((p) => p.recordedAt <= at).sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+    if (list.length) return list[list.length - 1].unitPrice;
+    const after = (byProduct.get(productId) ?? []).filter((p) => p.recordedAt > at).sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+    return after.length ? after[0].unitPrice : null;
+  };
+  return recipes2.filter((r) => r.isActive && r.ingredients.length).map((r) => {
+    const pts = months.map((_, i) => {
+      const costs = r.ingredients.map((ing) => {
+        const price = priceAt(ing.productId, monthEnds[i]);
+        return price === null ? null : price * ing.quantity;
+      });
+      if (costs.some((c) => c === null)) return null;
+      return round2(costs.reduce((a, c) => a + (c ?? 0), 0));
+    });
+    const first = pts.find((p) => p !== null) ?? null;
+    const lastIdx = [...pts].reverse().findIndex((p) => p !== null);
+    const last = lastIdx === -1 ? null : pts[pts.length - 1 - lastIdx];
+    return {
+      id: r.id,
+      name: r.name,
+      points: pts,
+      firstCost: first,
+      lastCost: last,
+      changePct: first && last ? Math.round((last - first) / first * 1e3) / 10 : null
+    };
+  });
+}
+
+// apps/api/src/routes/analysis.ts
+var analysisRoutes = new Hono5();
+analysisRoutes.use("*", requireAuth, requireRestaurant);
+var n4 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var PRICE_WINDOW_DAYS = 300;
+analysisRoutes.get("/analysis", async (c) => {
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const rawMonths = c.req.query("months") ?? "6";
+  const months = Number(rawMonths);
+  if (!Number.isInteger(months) || months < 1 || months > 24) {
+    return c.json({ error: "Fen\xEAtre invalide : \xAB months \xBB doit \xEAtre un entier entre 1 et 24." }, 400);
+  }
+  const window = monthRange(months);
+  const [firstYear, firstMonth] = window[0].split("-").map(Number);
+  const start = new Date(Date.UTC(firstYear, firstMonth - 1, 1)).toISOString();
+  const priceStart = new Date(Date.now() - PRICE_WINDOW_DAYS * 864e5).toISOString();
+  const [lines, priceRows, recipeRows, ingredientRows, salesRows] = await Promise.all([
+    // Achats réellement engagés : les brouillons et les commandes annulées ne sont pas des dépenses.
+    db.select({
+      orderId: orders.id,
+      reference: orders.reference,
+      at: orders.createdAt,
+      status: orders.status,
+      productId: orderLines.productId,
+      productName: products.name,
+      category: products.category,
+      unit: products.baseUnit,
+      quantity: orderLines.quantity,
+      receivedQty: orderLines.receivedQty,
+      unitPriceEur: orderLines.unitPriceEur,
+      invoicedUnitPriceEur: orderLines.invoicedUnitPriceEur,
+      supplierId: suppliers.id,
+      supplierName: suppliers.name
+    }).from(orderLines).innerJoin(orders, eq11(orders.id, orderLines.orderId)).innerJoin(products, eq11(products.id, orderLines.productId)).innerJoin(suppliers, eq11(suppliers.id, orders.supplierId)).where(and9(eq11(orders.restaurantId, rid), gte3(orders.createdAt, new Date(start)), isNotNull(orders.sentAt), ne(orders.status, "annulee"))),
+    db.select({
+      productId: supplierOffers.productId,
+      productName: products.name,
+      category: products.category,
+      unit: products.baseUnit,
+      supplierId: suppliers.id,
+      supplierName: suppliers.name,
+      unitPrice: priceHistory.unitPriceEur,
+      recordedAt: priceHistory.recordedAt,
+      source: priceHistory.source
+    }).from(priceHistory).innerJoin(supplierOffers, eq11(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq11(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq11(products.id, supplierOffers.productId)).where(and9(eq11(priceHistory.restaurantId, rid), gte3(priceHistory.recordedAt, new Date(priceStart)))),
+    db.select().from(recipes).where(eq11(recipes.restaurantId, rid)),
+    db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, productName: products.name, unit: products.baseUnit, quantity: recipeIngredients.quantity }).from(recipeIngredients).innerJoin(products, eq11(products.id, recipeIngredients.productId)).where(eq11(recipeIngredients.recipeId, sql7`any(select id from recipes where restaurant_id = ${rid})`)),
+    db.select({ recipeId: sales.recipeId, portions: sql7`coalesce(sum(${sales.portions}),0)` }).from(sales).where(and9(eq11(sales.restaurantId, rid), gte3(sales.day, new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)))).groupBy(sales.recipeId)
+  ]);
+  const purchases = lines.map((l) => {
+    const invoicedUnit = l.invoicedUnitPriceEur === null || l.invoicedUnitPriceEur === void 0 ? null : n4(l.invoicedUnitPriceEur);
+    const received = l.receivedQty === null || l.receivedQty === void 0 ? null : n4(l.receivedQty);
+    return {
+      productId: l.productId,
+      productName: l.productName,
+      category: l.category,
+      unit: l.unit,
+      supplierId: l.supplierId,
+      supplierName: l.supplierName,
+      orderId: l.orderId,
+      reference: l.reference,
+      at: l.at.toISOString(),
+      quantity: received !== null && received > 0 ? received : n4(l.quantity),
+      unitCostEur: invoicedUnit ?? n4(l.unitPriceEur),
+      invoiced: invoicedUnit !== null
+    };
+  });
+  const points = priceRows.map((p) => ({
+    productId: p.productId,
+    productName: p.productName,
+    category: p.category,
+    unit: p.unit,
+    supplierId: p.supplierId,
+    supplierName: p.supplierName,
+    unitPrice: n4(p.unitPrice),
+    recordedAt: p.recordedAt.toISOString(),
+    source: p.source
+  }));
+  const unitCostByProduct = /* @__PURE__ */ new Map();
+  for (const p of [...purchases].sort((a, b) => a.at.localeCompare(b.at))) {
+    if (p.unitCostEur > 0) unitCostByProduct.set(p.productId, p.unitCostEur);
+  }
+  for (const p of [...points].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))) {
+    if (!unitCostByProduct.has(p.productId) && p.unitPrice > 0) unitCostByProduct.set(p.productId, p.unitPrice);
+  }
+  const portionsByRecipe = new Map(salesRows.map((s) => [s.recipeId, Number(s.portions)]));
+  const recipeInputs = recipeRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    sellingPriceEur: r.sellingPriceEur === null ? null : n4(r.sellingPriceEur),
+    targetMarginPct: r.targetMarginPct === null ? null : n4(r.targetMarginPct),
+    isActive: r.isActive,
+    ingredients: ingredientRows.filter((i) => i.recipeId === r.id).map((i) => ({ productId: i.productId, productName: i.productName, unit: i.unit, quantity: n4(i.quantity) })),
+    portions30: portionsByRecipe.get(r.id) ?? 0
+  }));
+  const spend = monthlySpend(purchases, window);
+  const bySupplierMap = /* @__PURE__ */ new Map();
+  for (const p of purchases) {
+    const key = p.supplierId ?? p.supplierName;
+    const row = bySupplierMap.get(key) ?? { supplierId: p.supplierId, supplierName: p.supplierName, total: 0, invoiced: false };
+    row.total += p.quantity * p.unitCostEur;
+    row.invoiced = row.invoiced || p.invoiced;
+    bySupplierMap.set(key, row);
+  }
+  const bySupplier = [...bySupplierMap.values()].map((r) => ({ ...r, total: Math.round(r.total * 100) / 100 })).sort((a, b) => b.total - a.total);
+  const invoicedShare = purchases.length ? Math.round(purchases.filter((p) => p.invoiced).length / purchases.length * 100) : 0;
+  const currentMonth = window[window.length - 1];
+  const currentSpend = purchases.filter((p) => p.at.slice(0, 7) === currentMonth).reduce((a, p) => a + p.quantity * p.unitCostEur, 0);
+  return c.json({
+    months: window,
+    spend: { ...spend, currentMonth, currentMonthTotal: Math.round(currentSpend * 100) / 100, invoicedSharePct: invoicedShare },
+    bySupplier,
+    prices: priceIndexByCategory(points, window),
+    pricesInvoiced: priceIndexByCategory(points, window, { invoicedOnly: true }),
+    // Ce qui coûte réellement de l'argent (hausses × quantités achetées)…
+    drifts: topPriceDrifts(points, purchases, 10),
+    // …et les hausses pas encore chiffrables (aucun achat sur la période) : à surveiller, pas à chiffrer.
+    watchlist: topPriceDrifts(points, purchases, 5, { onlyWithVolume: false }).filter((d) => d.quantitySince <= 0),
+    explanation: explainCostChange(purchases, window),
+    recipes: recipeMargins(recipeInputs, unitCostByProduct),
+    recipeHistory: recipeCostHistory(recipeInputs, points, window),
+    unitCosts: [...unitCostByProduct.entries()].map(([productId, unitCostEur]) => ({ productId, unitCostEur: Math.round(unitCostEur * 1e4) / 1e4 }))
+  });
+});
+analysisRoutes.get("/analysis/gaps", async (c) => {
+  const rid = c.get("restaurantId");
+  const db = await getDb();
+  const recs = await db.select().from(recipes).where(and9(eq11(recipes.restaurantId, rid), eq11(recipes.isActive, true)));
+  const ing = recs.length ? await db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, quantity: recipeIngredients.quantity }).from(recipeIngredients).where(inArray4(recipeIngredients.recipeId, recs.map((r) => r.id))) : [];
+  const priced = await db.select({ productId: priceHistory.offerId }).from(priceHistory).where(eq11(priceHistory.restaurantId, rid)).limit(1);
+  const knownProducts = new Set((await db.select({ productId: supplierOffers.productId }).from(supplierOffers).where(eq11(supplierOffers.restaurantId, rid))).map((o) => o.productId));
+  const missing = recs.map((r) => {
+    const items = ing.filter((i) => i.recipeId === r.id);
+    return { id: r.id, name: r.name, noIngredients: items.length === 0, unknownPrices: items.filter((i) => !knownProducts.has(i.productId)).length };
+  }).filter((r) => r.noIngredients || r.unknownPrices > 0);
+  return c.json({ gaps: missing });
+});
+
 // apps/api/src/routes/manage.ts
 init_src();
 init_mailer();
 init_auth();
-import { Hono as Hono11 } from "hono";
+import { Hono as Hono12 } from "hono";
 import { z as z11 } from "zod";
-import { and as and19, eq as eq21, desc as desc10, gte as gte8, inArray as inArray9, sql as sql15 } from "drizzle-orm";
+import { and as and20, eq as eq22, desc as desc10, gte as gte9, inArray as inArray10, sql as sql16 } from "drizzle-orm";
 
 // apps/api/src/lib/messages.ts
 var eur3 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
@@ -6023,9 +6424,9 @@ function buildOrderMessage(i) {
 
 // apps/api/src/routes/vendor.ts
 init_src();
-import { Hono as Hono10 } from "hono";
+import { Hono as Hono11 } from "hono";
 import { z as z10 } from "zod";
-import { and as and18, desc as desc9, eq as eq20, inArray as inArray8, sql as sql14 } from "drizzle-orm";
+import { and as and19, desc as desc9, eq as eq21, inArray as inArray9, sql as sql15 } from "drizzle-orm";
 
 // apps/api/src/lib/quick.ts
 var normalize2 = (s) => s.replace(/(\d),(\d)/g, "$1.$2").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9. ]+/g, " ").replace(/\.(?!\d)/g, " ").replace(/\s+/g, " ").trim();
@@ -6039,8 +6440,8 @@ var UNITS = { kg: "kg", kilo: "kg", kilos: "kg", g: "g", gr: "g", grammes: "g", 
 var NUM_WORDS = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11, douze: 12, quinze: 15, vingt: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60, cent: 100 };
 var STOP = /* @__PURE__ */ new Set(["de", "du", "des", "le", "la", "les", "et", "a", "au", "aux", "en", "pour", "ce", "ces", "soir", "midi", "aujourd", "hui", "hier", "matin", "avec", "sur"]);
 function detectKind(text2, fallback = "vente") {
-  const n15 = normalize2(text2);
-  for (const [re, k] of KIND_WORDS) if (re.test(n15)) return k;
+  const n16 = normalize2(text2);
+  for (const [re, k] of KIND_WORDS) if (re.test(n16)) return k;
   return fallback;
 }
 function similarity(a, b) {
@@ -6074,13 +6475,13 @@ function bestMatches(name, entities2, limit = 3) {
   return entities2.map((e) => ({ id: e.id, name: e.name, score: Math.max(similarity(name, e.name), ...(e.aliases ?? []).map((a) => similarity(name, a))) })).filter((m) => m.score >= 0.45).sort((a, b) => b.score - a.score).slice(0, limit);
 }
 function tokenize(text2) {
-  let n15 = normalize2(text2);
-  for (const [w, v] of Object.entries(NUM_WORDS)) n15 = n15.replace(new RegExp(`\\b${w}\\b`, "g"), String(v));
-  n15 = n15.replace(/(\d)(kg|g|l|ml|cl)\b/g, "$1 $2");
+  let n16 = normalize2(text2);
+  for (const [w, v] of Object.entries(NUM_WORDS)) n16 = n16.replace(new RegExp(`\\b${w}\\b`, "g"), String(v));
+  n16 = n16.replace(/(\d)(kg|g|l|ml|cl)\b/g, "$1 $2");
   const out = [];
   const re = /(\d+(?:\.\d+)?)\s+([^\d]+?)(?=\s+\d|$)/g;
   let m;
-  while (m = re.exec(n15)) {
+  while (m = re.exec(n16)) {
     const qty3 = Number(m[1]);
     const words = m[2].trim().split(" ").filter((w) => w && !STOP.has(w));
     if (!words.length) continue;
@@ -6156,9 +6557,9 @@ init_auth();
 init_ops();
 init_mailer();
 init_daily();
-import { Hono as Hono9 } from "hono";
+import { Hono as Hono10 } from "hono";
 import { z as z9 } from "zod";
-import { and as and17, desc as desc8, eq as eq19, ilike as ilike2, or as or2, sql as sql13 } from "drizzle-orm";
+import { and as and18, desc as desc8, eq as eq20, ilike as ilike2, or as or2, sql as sql14 } from "drizzle-orm";
 import { SignJWT as SignJWT2, jwtVerify as jwtVerify2 } from "jose";
 var inviteSecret = () => new TextEncoder().encode(`invite:${process.env.JWT_SECRET ?? "dev-secret-change-me-in-production"}`);
 async function signVendorInvite(v) {
@@ -6172,12 +6573,12 @@ async function readVendorInvite(token) {
     return null;
   }
 }
-var prospectPublicRoutes = new Hono9();
+var prospectPublicRoutes = new Hono10();
 prospectPublicRoutes.get("/public/vendor-invite/:token", async (c) => {
   const inv = await readVendorInvite(c.req.param("token"));
   if (!inv) return c.json({ error: "Invitation invalide ou expir\xE9e" }, 404);
   const db = await getDb();
-  const [p] = await db.select({ status: prospects.status }).from(prospects).where(eq19(prospects.id, inv.pid));
+  const [p] = await db.select({ status: prospects.status }).from(prospects).where(eq20(prospects.id, inv.pid));
   return c.json({ invite: { ...inv, converted: p?.status === "converti" } });
 });
 var isAdmin3 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
@@ -6194,7 +6595,7 @@ var body = z9.object({
   notes: z9.string().max(4e3).nullable().optional(),
   nextActionAt: z9.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
 });
-var prospectRoutes = new Hono9();
+var prospectRoutes = new Hono10();
 prospectRoutes.use("/admin/prospects", requireAuth);
 prospectRoutes.use("/admin/prospects/*", requireAuth);
 prospectRoutes.use("/admin/prospects", async (c, next) => {
@@ -6210,9 +6611,9 @@ prospectRoutes.get("/admin/prospects", async (c) => {
   const kind = c.req.query("kind");
   const q2 = c.req.query("q")?.trim();
   const status = c.req.query("status");
-  const where = and17(kind ? eq19(prospects.kind, kind) : void 0, status ? eq19(prospects.status, status) : void 0, q2 ? or2(ilike2(prospects.name, `%${q2}%`), ilike2(prospects.city, `%${q2}%`), ilike2(prospects.email, `%${q2}%`), ilike2(prospects.phone, `%${q2}%`), ilike2(prospects.contactName, `%${q2}%`)) : void 0);
+  const where = and18(kind ? eq20(prospects.kind, kind) : void 0, status ? eq20(prospects.status, status) : void 0, q2 ? or2(ilike2(prospects.name, `%${q2}%`), ilike2(prospects.city, `%${q2}%`), ilike2(prospects.email, `%${q2}%`), ilike2(prospects.phone, `%${q2}%`), ilike2(prospects.contactName, `%${q2}%`)) : void 0);
   const rows = await db.select().from(prospects).where(where).orderBy(desc8(prospects.updatedAt)).limit(1e3);
-  const counts = await db.select({ kind: prospects.kind, status: prospects.status, c: sql13`count(*)` }).from(prospects).groupBy(prospects.kind, prospects.status);
+  const counts = await db.select({ kind: prospects.kind, status: prospects.status, c: sql14`count(*)` }).from(prospects).groupBy(prospects.kind, prospects.status);
   return c.json({ prospects: rows, counts: counts.map((x) => ({ ...x, c: Number(x.c) })), statuses: PROSPECT_STATUS });
 });
 prospectRoutes.post("/admin/prospects", async (c) => {
@@ -6235,24 +6636,24 @@ prospectRoutes.post("/admin/prospects/import", async (c) => {
 prospectRoutes.put("/admin/prospects/:id", async (c) => {
   const d = body.partial().parse(await c.req.json());
   const db = await getDb();
-  const [row] = await db.update(prospects).set({ ...d, email: d.email === "" ? null : d.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq19(prospects.id, c.req.param("id"))).returning();
+  const [row] = await db.update(prospects).set({ ...d, email: d.email === "" ? null : d.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq20(prospects.id, c.req.param("id"))).returning();
   if (!row) return c.json({ error: "Introuvable" }, 404);
   return c.json({ prospect: row });
 });
 prospectRoutes.delete("/admin/prospects/:id", async (c) => {
   const db = await getDb();
-  await db.delete(prospects).where(eq19(prospects.id, c.req.param("id")));
+  await db.delete(prospects).where(eq20(prospects.id, c.req.param("id")));
   return c.json({ ok: true });
 });
 prospectRoutes.post("/admin/prospects/:id/invite-vendor", async (c) => {
   const db = await getDb();
-  const [p] = await db.select().from(prospects).where(eq19(prospects.id, c.req.param("id")));
+  const [p] = await db.select().from(prospects).where(eq20(prospects.id, c.req.param("id")));
   if (!p) return c.json({ error: "Introuvable" }, 404);
   if (p.kind !== "fournisseur") return c.json({ error: "R\xE9serv\xE9 aux prospects fournisseurs" }, 400);
   const body3 = z9.object({ email: z9.string().email().optional(), send: z9.boolean().default(true) }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const email = body3.data.email ?? p.email ?? null;
-  if (body3.data.email && body3.data.email !== p.email) await db.update(prospects).set({ email: body3.data.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq19(prospects.id, p.id));
+  if (body3.data.email && body3.data.email !== p.email) await db.update(prospects).set({ email: body3.data.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq20(prospects.id, p.id));
   const token = await signVendorInvite({ pid: p.id, name: p.name, city: p.city, phone: p.phone, email, contactName: p.contactName });
   const url = `${APP_URL2()}/fournisseur?invite=${token}`;
   const first = p.contactName ? `Bonjour ${p.contactName}` : "Bonjour";
@@ -6270,7 +6671,7 @@ L'\xE9quipe AFRISUPPLY`;
   const whatsapp = `${first}, c'est AFRISUPPLY, la marketplace des restaurants africains. Votre fiche \xAB ${p.name} \xBB est pr\xEAte : cliquez, cr\xE9ez un mot de passe, collez votre tarif et vous \xEAtes en ligne en 10 min \u{1F449} ${url}`;
   let mail = { ok: false, error: "Pas d'e-mail" };
   if (email && body3.data.send) mail = await sendMail({ to: email, subject: `${p.name} : votre catalogue devant 200 restaurants africains \u2014 fiche d\xE9j\xE0 pr\xEAte`, text: text2, html: `<p>${text2.replace(/\n/g, "<br/>").replace(url, `<a href="${url}">${url}</a>`)}</p>`, tags: { type: "vendor-invite" } });
-  await db.update(prospects).set({ status: p.status === "a_contacter" ? "contacte" : p.status, notes: `${p.notes ? p.notes + "\n" : ""}[${(/* @__PURE__ */ new Date()).toLocaleDateString("fr-FR")}] Invitation fournisseur ${mail.ok ? "envoy\xE9e par e-mail" : "g\xE9n\xE9r\xE9e"}${email ? ` (${email})` : ""}`, updatedAt: /* @__PURE__ */ new Date() }).where(eq19(prospects.id, p.id));
+  await db.update(prospects).set({ status: p.status === "a_contacter" ? "contacte" : p.status, notes: `${p.notes ? p.notes + "\n" : ""}[${(/* @__PURE__ */ new Date()).toLocaleDateString("fr-FR")}] Invitation fournisseur ${mail.ok ? "envoy\xE9e par e-mail" : "g\xE9n\xE9r\xE9e"}${email ? ` (${email})` : ""}`, updatedAt: /* @__PURE__ */ new Date() }).where(eq20(prospects.id, p.id));
   await audit("prospect.invite_vendor", { actorEmail: c.get("user").email, target: p.id, meta: { email, sent: mail.ok } });
   return c.json({ url, whatsapp, email, sent: mail.ok, mailError: mail.ok ? null : mail.error ?? null, message: mail.ok ? `Invitation envoy\xE9e \xE0 ${email}.` : "Lien g\xE9n\xE9r\xE9 : copiez-le ou envoyez le message WhatsApp." });
 });
@@ -6301,8 +6702,8 @@ var Pdf = class {
   rect(x, y, w, h, gray = 0.95) {
     this.ops.push(`${gray} g ${x} ${y} ${w} ${h} re f 0 g`);
   }
-  down(n15) {
-    this.y -= n15;
+  down(n16) {
+    this.y -= n16;
     if (this.y < 60) this.newPage();
   }
   get cursor() {
@@ -6445,16 +6846,16 @@ function parseCatalogLine(rawIn) {
     const p = parsePack2(cols[1]);
     if (p) return { raw, label: cols[0], packLabel: cols[1], packQty: p.qty, packUnit: p.unit, price: num2(cols[2]), inStock: true };
   }
-  let n15 = normalize2(raw.replace(/€|eur|euros|ttc|ht/gi, " "));
-  const priceM = n15.match(/(\d+(?:\.\d+)?)\s*$/);
+  let n16 = normalize2(raw.replace(/€|eur|euros|ttc|ht/gi, " "));
+  const priceM = n16.match(/(\d+(?:\.\d+)?)\s*$/);
   if (!priceM) return null;
   const price = Number(priceM[1]);
-  n15 = n15.slice(0, priceM.index).trim();
+  n16 = n16.slice(0, priceM.index).trim();
   if (!(price > 0)) return null;
   let packQty = 0;
   let packUnit = "";
   let packLabel = "";
-  const multi = n15.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?\s*x\s*(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?/);
+  const multi = n16.match(/(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?\s*x\s*(\d+(?:\.\d+)?)\s*(kg|g|l|ml|cl)?/);
   if (multi) {
     const a = Number(multi[1]), b = Number(multi[3]);
     const u = UNIT[multi[2] ?? multi[4] ?? ""] ?? "piece";
@@ -6463,22 +6864,22 @@ function parseCatalogLine(rawIn) {
     packQty = per * count;
     packUnit = u;
     packLabel = `${count} \xD7 ${per} ${u === "piece" ? "pi\xE8ce" : u}`.replace(/\.0+ /, " ");
-    n15 = n15.replace(multi[0], " ");
+    n16 = n16.replace(multi[0], " ");
   } else {
-    const q2 = n15.match(/(\d+(?:\.\d+)?)\s*(kg|kilos?|kgs|g|gr|l|lt|litres?|ml|cl|pcs?|pieces?|unites?|u|bottes?)\b/);
+    const q2 = n16.match(/(\d+(?:\.\d+)?)\s*(kg|kilos?|kgs|g|gr|l|lt|litres?|ml|cl|pcs?|pieces?|unites?|u|bottes?)\b/);
     if (q2) {
       packQty = Number(q2[1]);
       packUnit = UNIT[q2[2]] ?? "kg";
-      const pw = n15.match(PACK_WORDS);
+      const pw = n16.match(PACK_WORDS);
       packLabel = `${pw ? cap(pw[1]) + " " : ""}${q2[1]} ${packUnit}`;
-      n15 = n15.replace(q2[0], " ").replace(PACK_WORDS, " ");
+      n16 = n16.replace(q2[0], " ").replace(PACK_WORDS, " ");
     } else {
-      const pw = n15.match(PACK_WORDS);
-      const cnt = n15.match(/\bx?\s*(\d+)\s*$/);
+      const pw = n16.match(PACK_WORDS);
+      const cnt = n16.match(/\bx?\s*(\d+)\s*$/);
       packQty = cnt ? Number(cnt[1]) : 1;
       packUnit = "piece";
       packLabel = pw ? cap(pw[1]) : packQty > 1 ? `Lot de ${packQty}` : "Pi\xE8ce";
-      n15 = n15.replace(PACK_WORDS, " ").replace(/\bx?\s*\d+\s*$/, " ");
+      n16 = n16.replace(PACK_WORDS, " ").replace(/\bx?\s*\d+\s*$/, " ");
     }
   }
   if (packUnit === "g") {
@@ -6493,7 +6894,7 @@ function parseCatalogLine(rawIn) {
     packQty = packQty / 100;
     packUnit = "L";
   }
-  const label = n15.replace(/\s+/g, " ").replace(/[-–:]+$/, "").trim();
+  const label = n16.replace(/\s+/g, " ").replace(/[-–:]+$/, "").trim();
   if (!label || packQty <= 0) return null;
   return { raw, label, packLabel: packLabel.trim(), packQty: Math.round(packQty * 1e3) / 1e3, packUnit, price, inStock: true };
 }
@@ -6583,8 +6984,8 @@ async function extractCatalogFromImage(imageDataUrl) {
 }
 
 // apps/api/src/routes/vendor.ts
-var vendorRoutes = new Hono10();
-var n8 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var vendorRoutes = new Hono11();
+var n9 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var eur9 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
 var slugify2 = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 var isAdmin4 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
@@ -6592,11 +6993,11 @@ async function requireVendor(c, next) {
   const db = await getDb();
   const user = c.get("user");
   const wanted = c.req.header("x-vendor-id");
-  const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq20(vendorMembers.userId, user.id));
+  const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq21(vendorMembers.userId, user.id));
   const vid = wanted && rows.some((r) => r.vendorId === wanted) ? wanted : rows[0]?.vendorId;
   if (!vid) return c.json({ error: "Aucun espace fournisseur pour ce compte" }, 403);
   if (c.req.method !== "GET") {
-    const [v] = await db.select({ cgv: vendors.cgvVersion }).from(vendors).where(eq20(vendors.id, vid));
+    const [v] = await db.select({ cgv: vendors.cgvVersion }).from(vendors).where(eq21(vendors.id, vid));
     if (v && v.cgv !== VENDOR_CGV_VERSION) return c.json({ error: `Merci d'accepter la nouvelle version (${VENDOR_CGV_VERSION}) des conditions fournisseur pour continuer.`, code: "cgv_outdated" }, 428);
   }
   c.set("vendorId", vid);
@@ -6625,7 +7026,7 @@ vendorRoutes.post("/vendor/register", requireAuth, async (c) => {
   const { invite, acceptCgv: _a, ...d } = body3.data;
   const inv = invite ? await readVendorInvite(invite) : null;
   const [v] = await db.insert(vendors).values({ ...d, cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email, slug: `${slugify2(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z21) => z21.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
-  if (inv) await db.update(prospects).set({ status: "converti", email: user.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq20(prospects.id, inv.pid));
+  if (inv) await db.update(prospects).set({ status: "converti", email: user.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq21(prospects.id, inv.pid));
   await db.insert(vendorMembers).values({ vendorId: v.id, userId: user.id, role: "owner" });
   await audit("vendor.register", { actorEmail: user.email, target: v.id, meta: { name: v.name, invited: !!inv } });
   return c.json({ vendor: v, message: v.status === "actif" ? "Espace fournisseur activ\xE9." : "Demande enregistr\xE9e : votre espace sera activ\xE9 apr\xE8s v\xE9rification (sous 24 h ouvr\xE9es)." }, 201);
@@ -6633,14 +7034,14 @@ vendorRoutes.post("/vendor/register", requireAuth, async (c) => {
 vendorRoutes.get("/vendor/me", requireAuth, async (c) => {
   const db = await getDb();
   const user = c.get("user");
-  const rows = await db.select({ vendor: vendors, role: vendorMembers.role }).from(vendorMembers).innerJoin(vendors, eq20(vendors.id, vendorMembers.vendorId)).where(eq20(vendorMembers.userId, user.id));
+  const rows = await db.select({ vendor: vendors, role: vendorMembers.role }).from(vendorMembers).innerJoin(vendors, eq21(vendors.id, vendorMembers.vendorId)).where(eq21(vendorMembers.userId, user.id));
   return c.json({ vendors: rows.map((r) => ({ ...r.vendor, role: r.role, cgvUpToDate: r.vendor.cgvVersion === VENDOR_CGV_VERSION })), isAdmin: isAdmin4(user.email), cgvVersion: VENDOR_CGV_VERSION });
 });
 vendorRoutes.post("/vendor/accept-cgv", requireAuth, async (c) => {
   const db = await getDb();
   const user = c.get("user");
-  const rows = await db.select({ id: vendors.id }).from(vendorMembers).innerJoin(vendors, eq20(vendors.id, vendorMembers.vendorId)).where(eq20(vendorMembers.userId, user.id));
-  for (const r of rows) await db.update(vendors).set({ cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email }).where(eq20(vendors.id, r.id));
+  const rows = await db.select({ id: vendors.id }).from(vendorMembers).innerJoin(vendors, eq21(vendors.id, vendorMembers.vendorId)).where(eq21(vendorMembers.userId, user.id));
+  for (const r of rows) await db.update(vendors).set({ cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email }).where(eq21(vendors.id, r.id));
   await audit("vendor.accept_cgv", { actorEmail: user.email, meta: { version: VENDOR_CGV_VERSION, vendors: rows.length } });
   return c.json({ ok: true, version: VENDOR_CGV_VERSION });
 });
@@ -6648,32 +7049,32 @@ vendorRoutes.use("/vendor/*", requireAuth, requireVendor);
 vendorRoutes.get("/vendor/dashboard", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [v] = await db.select().from(vendors).where(eq20(vendors.id, vid));
+  const [v] = await db.select().from(vendors).where(eq21(vendors.id, vid));
   const [stats] = await db.select({
-    pending: sql14`count(*) filter (where ${orders.status} = 'envoyee')`,
-    confirmed: sql14`count(*) filter (where ${orders.status} = 'confirmee')`,
-    month: sql14`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= date_trunc('month', now())),0)`,
-    restaurants: sql14`count(distinct ${orders.restaurantId}) filter (where ${orders.status} <> 'annulee')`
-  }).from(orders).where(eq20(orders.vendorId, vid));
-  const [{ offers }] = await db.select({ offers: sql14`count(*)` }).from(vendorOffers).where(eq20(vendorOffers.vendorId, vid));
-  const [{ linked }] = await db.select({ linked: sql14`count(*)` }).from(suppliers).where(eq20(suppliers.vendorId, vid));
+    pending: sql15`count(*) filter (where ${orders.status} = 'envoyee')`,
+    confirmed: sql15`count(*) filter (where ${orders.status} = 'confirmee')`,
+    month: sql15`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= date_trunc('month', now())),0)`,
+    restaurants: sql15`count(distinct ${orders.restaurantId}) filter (where ${orders.status} <> 'annulee')`
+  }).from(orders).where(eq21(orders.vendorId, vid));
+  const [{ offers }] = await db.select({ offers: sql15`count(*)` }).from(vendorOffers).where(eq21(vendorOffers.vendorId, vid));
+  const [{ linked }] = await db.select({ linked: sql15`count(*)` }).from(suppliers).where(eq21(suppliers.vendorId, vid));
   const period = (/* @__PURE__ */ new Date()).toISOString().slice(0, 7);
-  const [{ commission }] = await db.select({ commission: sql14`coalesce(sum(${commissions.amountEur}),0)` }).from(commissions).where(and18(eq20(commissions.vendorId, vid), eq20(commissions.period, period)));
-  return c.json({ vendor: v, stats: { pendingOrders: n8(stats.pending), confirmedOrders: n8(stats.confirmed), monthRevenue: n8(stats.month), restaurantsServed: n8(stats.restaurants), offers: n8(offers), restaurantsFollowing: n8(linked), commissionThisMonth: n8(commission), commissionPct: n8(v.commissionPct) } });
+  const [{ commission }] = await db.select({ commission: sql15`coalesce(sum(${commissions.amountEur}),0)` }).from(commissions).where(and19(eq21(commissions.vendorId, vid), eq21(commissions.period, period)));
+  return c.json({ vendor: v, stats: { pendingOrders: n9(stats.pending), confirmedOrders: n9(stats.confirmed), monthRevenue: n9(stats.month), restaurantsServed: n9(stats.restaurants), offers: n9(offers), restaurantsFollowing: n9(linked), commissionThisMonth: n9(commission), commissionPct: n9(v.commissionPct) } });
 });
 vendorRoutes.put("/vendor/profile", async (c) => {
   const body3 = z10.object({ name: z10.string().min(2).optional(), description: z10.string().max(500).nullable().optional(), city: z10.string().nullable().optional(), deliveryZones: z10.array(z10.string()).max(30).optional(), leadTimeHours: z10.number().int().positive().optional(), deliveryDays: z10.array(z10.number().int().min(1).max(7)).optional(), minOrderEur: z10.number().nonnegative().optional(), deliveryFeeEur: z10.number().nonnegative().optional(), contactEmail: z10.string().email().nullable().optional(), contactPhone: z10.string().nullable().optional(), whatsapp: z10.string().nullable().optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const d = body3.data;
-  const [v] = await db.update(vendors).set({ ...d, deliveryZones: d.deliveryZones?.map((z21) => z21.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq20(vendors.id, c.get("vendorId"))).returning();
+  const [v] = await db.update(vendors).set({ ...d, deliveryZones: d.deliveryZones?.map((z21) => z21.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq21(vendors.id, c.get("vendorId"))).returning();
   return c.json({ vendor: v });
 });
 vendorRoutes.get("/vendor/offers", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const rows = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq20(products.id, vendorOffers.productId)).where(eq20(vendorOffers.vendorId, vid)).orderBy(products.category, products.name);
-  return c.json({ offers: rows.map(({ offer, product }) => ({ ...offer, productName: product.name, category: product.category, unit: product.baseUnit, unitPrice: Math.round(n8(offer.packPriceEur) / n8(offer.packQty) * 1e4) / 1e4 })) });
+  const rows = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq21(products.id, vendorOffers.productId)).where(eq21(vendorOffers.vendorId, vid)).orderBy(products.category, products.name);
+  return c.json({ offers: rows.map(({ offer, product }) => ({ ...offer, productName: product.name, category: product.category, unit: product.baseUnit, unitPrice: Math.round(n9(offer.packPriceEur) / n9(offer.packQty) * 1e4) / 1e4 })) });
 });
 vendorRoutes.post("/vendor/offers", async (c) => {
   const body3 = z10.object({ productId: z10.string().uuid(), packLabel: z10.string().min(1), packQty: z10.number().positive(), packPrice: z10.number().positive(), inStock: z10.boolean().default(true) }).safeParse(await c.req.json());
@@ -6681,10 +7082,10 @@ vendorRoutes.post("/vendor/offers", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const d = body3.data;
-  const [p] = await db.select({ id: products.id }).from(products).where(and18(eq20(products.id, d.productId), sql14`${products.restaurantId} is null`));
+  const [p] = await db.select({ id: products.id }).from(products).where(and19(eq21(products.id, d.productId), sql15`${products.restaurantId} is null`));
   if (!p) return c.json({ error: "Produit hors r\xE9f\xE9rentiel commun" }, 400);
   const [offer] = await db.insert(vendorOffers).values({ vendorId: vid, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock }).onConflictDoUpdate({ target: [vendorOffers.vendorId, vendorOffers.productId, vendorOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, updatedAt: /* @__PURE__ */ new Date() } }).returning();
-  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq20(suppliers.vendorId, vid));
+  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq21(suppliers.vendorId, vid));
   for (const s of linked) {
     await db.insert(supplierOffers).values({ restaurantId: s.restaurantId, supplierId: s.id, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, lastSeenAt: /* @__PURE__ */ new Date() } });
   }
@@ -6695,7 +7096,7 @@ vendorRoutes.post("/vendor/offers/import", async (c) => {
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
-  const ref = await db.select({ id: products.id, name: products.name, aliases: products.aliases }).from(products).where(sql14`${products.restaurantId} is null`);
+  const ref = await db.select({ id: products.id, name: products.name, aliases: products.aliases }).from(products).where(sql15`${products.restaurantId} is null`);
   const norm2 = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
   const byName = /* @__PURE__ */ new Map();
   for (const p of ref) {
@@ -6717,7 +7118,7 @@ vendorRoutes.post("/vendor/offers/import", async (c) => {
 });
 vendorRoutes.delete("/vendor/offers/:id", async (c) => {
   const db = await getDb();
-  await db.delete(vendorOffers).where(and18(eq20(vendorOffers.id, c.req.param("id")), eq20(vendorOffers.vendorId, c.get("vendorId"))));
+  await db.delete(vendorOffers).where(and19(eq21(vendorOffers.id, c.req.param("id")), eq21(vendorOffers.vendorId, c.get("vendorId"))));
   return c.json({ ok: true });
 });
 vendorRoutes.get("/vendor/orders", async (c) => {
@@ -6725,19 +7126,19 @@ vendorRoutes.get("/vendor/orders", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const status = c.req.query("status");
-  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings }).from(orders).innerJoin(restaurants, eq20(restaurants.id, orders.restaurantId)).where(status ? and18(eq20(orders.vendorId, vid), eq20(orders.status, status)) : eq20(orders.vendorId, vid)).orderBy(desc9(orders.createdAt)).limit(100);
+  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings }).from(orders).innerJoin(restaurants, eq21(restaurants.id, orders.restaurantId)).where(status ? and19(eq21(orders.vendorId, vid), eq21(orders.status, status)) : eq21(orders.vendorId, vid)).orderBy(desc9(orders.createdAt)).limit(100);
   const ids = rows.map((r) => r.order.id);
-  const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq20(products.id, orderLines.productId)).where(inArray8(orderLines.orderId, ids)) : [];
+  const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq21(products.id, orderLines.productId)).where(inArray9(orderLines.orderId, ids)) : [];
   return c.json({ orders: rows.map((r) => ({ ...r.order, proofPhoto: void 0, proofSignature: void 0, restaurantName: r.restaurantName, city: r.city, address: r.address, restaurantPhone: r.settings?.notifyPhone ?? null, whatsappLink: waLink(r.settings?.notifyPhone, `Bonjour ${r.restaurantName}, au sujet de votre commande ${r.order.reference} via AFRISUPPLY : `), lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
 });
 async function notifyRestaurant(orderId, subject, text2, kind = "order.confirmed") {
   const db = await getDb();
-  const [o] = await db.select({ restaurantId: orders.restaurantId, vendorId: orders.vendorId }).from(orders).where(eq20(orders.id, orderId));
-  const [rest] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq20(restaurants.id, o.restaurantId));
+  const [o] = await db.select({ restaurantId: orders.restaurantId, vendorId: orders.vendorId }).from(orders).where(eq21(orders.id, orderId));
+  const [rest] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq21(restaurants.id, o.restaurantId));
   if (rest?.settings?.notifyPhone) void sendMessage({ to: rest.settings.notifyPhone, body: `AFRISUPPLY \u2014 ${subject}
 ${text2}
 Suivi : ${APP_URL2()}/app/achats`, kind, orderId, vendorId: o.vendorId, restaurantId: o.restaurantId });
-  const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq20(users.id, restaurantMembers.userId)).where(and18(eq20(restaurantMembers.restaurantId, o.restaurantId), inArray8(restaurantMembers.role, ["owner", "manager"])));
+  const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq21(users.id, restaurantMembers.userId)).where(and19(eq21(restaurantMembers.restaurantId, o.restaurantId), inArray9(restaurantMembers.role, ["owner", "manager"])));
   for (const r of rcpts) void sendMail({ to: r.email, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p><p><a href="${APP_URL2()}/app/achats">Voir mes commandes</a></p>`, tags: { type: "order_status" } });
 }
 vendorRoutes.post("/vendor/orders/:id/confirm", async (c) => {
@@ -6745,15 +7146,15 @@ vendorRoutes.post("/vendor/orders/:id/confirm", async (c) => {
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [o] = await db.select().from(orders).where(and18(eq20(orders.id, c.req.param("id")), eq20(orders.vendorId, vid)));
+  const [o] = await db.select().from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.vendorId, vid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   if (o.status !== "envoyee") return c.json({ error: `Commande d\xE9j\xE0 ${o.status}` }, 400);
-  const [v] = await db.select().from(vendors).where(eq20(vendors.id, vid));
-  const [upd] = await db.update(orders).set({ status: "confirmee", expectedAt: body3.data.expectedAt ?? o.expectedAt, vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: body3.data.note, proposal: null }).where(eq20(orders.id, o.id)).returning();
-  const amount = n8(o.totalEur) * n8(v.commissionPct) / 100;
+  const [v] = await db.select().from(vendors).where(eq21(vendors.id, vid));
+  const [upd] = await db.update(orders).set({ status: "confirmee", expectedAt: body3.data.expectedAt ?? o.expectedAt, vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: body3.data.note, proposal: null }).where(eq21(orders.id, o.id)).returning();
+  const amount = n9(o.totalEur) * n9(v.commissionPct) / 100;
   await db.insert(commissions).values({ vendorId: vid, orderId: o.id, orderTotalEur: o.totalEur, pct: v.commissionPct, amountEur: amount.toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
   void logOrderEvent(o.id, "confirmed", `Confirm\xE9e par ${v.name}${upd.expectedAt ? ` \u2014 livraison pr\xE9vue le ${upd.expectedAt}` : ""}`, "vendor");
-  void notifyRestaurant(o.id, `\u2705 ${v.name} a confirm\xE9 votre commande ${o.reference}`, `${v.name} a confirm\xE9 la commande ${o.reference} (${eur9(n8(o.totalEur))}).
+  void notifyRestaurant(o.id, `\u2705 ${v.name} a confirm\xE9 votre commande ${o.reference}`, `${v.name} a confirm\xE9 la commande ${o.reference} (${eur9(n9(o.totalEur))}).
 Livraison pr\xE9vue le ${upd.expectedAt ?? "\xE0 confirmer"}.${body3.data.note ? `
 Message du fournisseur : ${body3.data.note}` : ""}`);
   return c.json({ order: upd, commission: Math.round(amount * 100) / 100 });
@@ -6767,19 +7168,19 @@ vendorRoutes.post("/vendor/orders/:id/propose", async (c) => {
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [o] = await db.select().from(orders).where(and18(eq20(orders.id, c.req.param("id")), eq20(orders.vendorId, vid)));
+  const [o] = await db.select().from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.vendorId, vid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   if (o.status !== "envoyee") return c.json({ error: `Commande d\xE9j\xE0 ${o.status}` }, 400);
-  const lines = await db.select({ l: orderLines, productName: products.name }).from(orderLines).innerJoin(products, eq20(products.id, orderLines.productId)).where(eq20(orderLines.orderId, o.id));
+  const lines = await db.select({ l: orderLines, productName: products.name }).from(orderLines).innerJoin(products, eq21(products.id, orderLines.productId)).where(eq21(orderLines.orderId, o.id));
   const offerIds = body3.data.lines.map((x) => x.replacementOfferId).filter((x) => !!x);
-  const offers = offerIds.length ? await db.select({ o: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq20(products.id, vendorOffers.productId)).where(and18(eq20(vendorOffers.vendorId, vid), inArray8(vendorOffers.id, offerIds))) : [];
+  const offers = offerIds.length ? await db.select({ o: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq21(products.id, vendorOffers.productId)).where(and19(eq21(vendorOffers.vendorId, vid), inArray9(vendorOffers.id, offerIds))) : [];
   const out = [];
   for (const l of lines) {
     const ch = body3.data.lines.find((x) => x.lineId === l.l.id);
-    const packs = n8(l.l.packs);
-    const unitPack = n8(l.l.lineTotalEur) / Math.max(1, packs);
+    const packs = n9(l.l.packs);
+    const unitPack = n9(l.l.lineTotalEur) / Math.max(1, packs);
     if (!ch) {
-      out.push({ lineId: l.l.id, productName: l.productName, packLabel: l.l.packLabel, packs, newPacks: packs, lineTotalEur: n8(l.l.lineTotalEur), newLineTotalEur: n8(l.l.lineTotalEur), replacement: null });
+      out.push({ lineId: l.l.id, productName: l.productName, packLabel: l.l.packLabel, packs, newPacks: packs, lineTotalEur: n9(l.l.lineTotalEur), newLineTotalEur: n9(l.l.lineTotalEur), replacement: null });
       continue;
     }
     if (ch.newPacks > packs) return c.json({ error: `Quantit\xE9 propos\xE9e sup\xE9rieure \xE0 la commande pour ${l.productName}` }, 400);
@@ -6788,22 +7189,22 @@ vendorRoutes.post("/vendor/orders/:id/propose", async (c) => {
       const r = offers.find((x) => x.o.id === ch.replacementOfferId);
       if (!r) return c.json({ error: "Offre de remplacement introuvable dans votre catalogue" }, 400);
       const rp = ch.replacementPacks ?? packs - ch.newPacks;
-      replacement = { vendorOfferId: r.o.id, productId: r.o.productId, productName: r.productName, packLabel: r.o.packLabel, packQty: n8(r.o.packQty), packPriceEur: n8(r.o.packPriceEur), packs: rp, lineTotalEur: Math.round(rp * n8(r.o.packPriceEur) * 100) / 100 };
+      replacement = { vendorOfferId: r.o.id, productId: r.o.productId, productName: r.productName, packLabel: r.o.packLabel, packQty: n9(r.o.packQty), packPriceEur: n9(r.o.packPriceEur), packs: rp, lineTotalEur: Math.round(rp * n9(r.o.packPriceEur) * 100) / 100 };
     }
-    out.push({ lineId: l.l.id, productName: l.productName, packLabel: l.l.packLabel, packs, newPacks: ch.newPacks, lineTotalEur: n8(l.l.lineTotalEur), newLineTotalEur: Math.round(ch.newPacks * unitPack * 100) / 100, replacement });
+    out.push({ lineId: l.l.id, productName: l.productName, packLabel: l.l.packLabel, packs, newPacks: ch.newPacks, lineTotalEur: n9(l.l.lineTotalEur), newLineTotalEur: Math.round(ch.newPacks * unitPack * 100) / 100, replacement });
   }
   const changed = out.filter((x) => x.newPacks !== x.packs || x.replacement);
   if (!changed.length) return c.json({ error: "Aucune modification : confirmez simplement la commande" }, 400);
   const newTotalEur = Math.round(out.reduce((a, x) => a + x.newLineTotalEur + (x.replacement?.lineTotalEur ?? 0), 0) * 100) / 100;
   if (newTotalEur <= 0) return c.json({ error: "Tout est en rupture : utilisez \xAB Refuser \xBB" }, 400);
   const proposal = { note: body3.data.note, expectedAt: body3.data.expectedAt, lines: out, newTotalEur };
-  const [upd] = await db.update(orders).set({ proposal, proposalAt: /* @__PURE__ */ new Date() }).where(eq20(orders.id, o.id)).returning();
-  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq20(vendors.id, vid));
+  const [upd] = await db.update(orders).set({ proposal, proposalAt: /* @__PURE__ */ new Date() }).where(eq21(orders.id, o.id)).returning();
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq21(vendors.id, vid));
   const summary = changed.map((x) => x.replacement ? `${x.productName} : ${x.newPacks}/${x.packs} + ${x.replacement.packs} \xD7 ${x.replacement.productName} (${x.replacement.packLabel ?? ""})` : `${x.productName} : ${x.newPacks}/${x.packs}${x.newPacks === 0 ? " (rupture)" : ""}`).join(" ; ");
   void logOrderEvent(o.id, "note", `${v.name} propose une modification \u2014 ${summary}`, "vendor", { newTotalEur });
   void notifyRestaurant(o.id, `\u270F\uFE0F ${v.name} propose une modification de la commande ${o.reference}`, `${v.name} ne peut pas livrer la commande ${o.reference} telle quelle.
 Proposition : ${summary}.
-Nouveau total : ${eur9(newTotalEur)} (au lieu de ${eur9(n8(o.totalEur))}).${body3.data.note ? `
+Nouveau total : ${eur9(newTotalEur)} (au lieu de ${eur9(n9(o.totalEur))}).${body3.data.note ? `
 Message : ${body3.data.note}` : ""}
 
 Acceptez ou refusez en un clic dans Achats.`);
@@ -6814,11 +7215,11 @@ vendorRoutes.post("/vendor/orders/:id/refuse", async (c) => {
   if (!body3.success) return c.json({ error: "Motif requis" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [o] = await db.select().from(orders).where(and18(eq20(orders.id, c.req.param("id")), eq20(orders.vendorId, vid)));
+  const [o] = await db.select().from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.vendorId, vid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   if (o.status !== "envoyee") return c.json({ error: `Commande d\xE9j\xE0 ${o.status}` }, 400);
-  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq20(vendors.id, vid));
-  const [upd] = await db.update(orders).set({ status: "annulee", vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: body3.data.reason }).where(eq20(orders.id, o.id)).returning();
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq21(vendors.id, vid));
+  const [upd] = await db.update(orders).set({ status: "annulee", vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: body3.data.reason }).where(eq21(orders.id, o.id)).returning();
   void logOrderEvent(o.id, "refused", `Refus\xE9e par ${v.name} : ${body3.data.reason}`, "vendor");
   void notifyRestaurant(o.id, `\u274C ${v.name} ne peut pas honorer la commande ${o.reference}`, `${v.name} a refus\xE9 la commande ${o.reference}.
 Motif : ${body3.data.reason}
@@ -6831,22 +7232,22 @@ vendorRoutes.get("/vendor/picking", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const day = c.req.query("date");
-  const conds = [eq20(orders.vendorId, vid), eq20(orders.status, "confirmee")];
-  if (day) conds.push(eq20(orders.expectedAt, day));
-  const rows = await db.select({ orderId: orders.id, reference: orders.reference, restaurant: restaurants.name, city: restaurants.city, address: restaurants.address, expectedAt: orders.expectedAt, fulfillment: orders.fulfillment, deliverySlot: orders.deliverySlot, productId: orderLines.productId, productName: products.name, packLabel: orderLines.packLabel, packs: orderLines.packs }).from(orders).innerJoin(restaurants, eq20(restaurants.id, orders.restaurantId)).innerJoin(orderLines, eq20(orderLines.orderId, orders.id)).innerJoin(products, eq20(products.id, orderLines.productId)).where(and18(...conds)).orderBy(orders.expectedAt, orders.createdAt);
+  const conds = [eq21(orders.vendorId, vid), eq21(orders.status, "confirmee")];
+  if (day) conds.push(eq21(orders.expectedAt, day));
+  const rows = await db.select({ orderId: orders.id, reference: orders.reference, restaurant: restaurants.name, city: restaurants.city, address: restaurants.address, expectedAt: orders.expectedAt, fulfillment: orders.fulfillment, deliverySlot: orders.deliverySlot, productId: orderLines.productId, productName: products.name, packLabel: orderLines.packLabel, packs: orderLines.packs }).from(orders).innerJoin(restaurants, eq21(restaurants.id, orders.restaurantId)).innerJoin(orderLines, eq21(orderLines.orderId, orders.id)).innerJoin(products, eq21(products.id, orderLines.productId)).where(and19(...conds)).orderBy(orders.expectedAt, orders.createdAt);
   const byProduct = /* @__PURE__ */ new Map();
   for (const r of rows) {
     const k = `${r.productId}|${r.packLabel ?? ""}`;
     const e = byProduct.get(k) ?? { productId: r.productId, productName: r.productName, packLabel: r.packLabel, packs: 0, orders: [] };
-    e.packs += n8(r.packs);
-    e.orders.push({ reference: r.reference, restaurant: r.restaurant, packs: n8(r.packs) });
+    e.packs += n9(r.packs);
+    e.orders.push({ reference: r.reference, restaurant: r.restaurant, packs: n9(r.packs) });
     byProduct.set(k, e);
   }
   const ordersMap = /* @__PURE__ */ new Map();
   for (const r of rows) {
     const e = ordersMap.get(r.orderId) ?? { id: r.orderId, reference: r.reference, restaurant: r.restaurant, city: r.city, address: r.address, expectedAt: r.expectedAt, fulfillment: r.fulfillment, deliverySlot: r.deliverySlot, lines: 0, packs: 0 };
     e.lines++;
-    e.packs += n8(r.packs);
+    e.packs += n9(r.packs);
     ordersMap.set(r.orderId, e);
   }
   const dates = [...new Set(rows.map((r) => r.expectedAt).filter(Boolean))].sort();
@@ -6858,7 +7259,7 @@ vendorRoutes.post("/vendor/orders/:id/fulfillment", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const d = body3.data;
-  const [o] = await db.select().from(orders).where(and18(eq20(orders.id, c.req.param("id")), eq20(orders.vendorId, vid)));
+  const [o] = await db.select().from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.vendorId, vid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   if (o.status !== "confirmee") return c.json({ error: `Commande ${o.status} : seules les commandes confirm\xE9es se pr\xE9parent/livrent` }, 400);
   const order = ["en_preparation", "en_livraison", "livree"];
@@ -6884,8 +7285,8 @@ vendorRoutes.post("/vendor/orders/:id/fulfillment", async (c) => {
     patch.proofSignature = d.signature;
     patch.proofNote = d.note;
   }
-  const [upd] = await db.update(orders).set(patch).where(eq20(orders.id, o.id)).returning();
-  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq20(vendors.id, vid));
+  const [upd] = await db.update(orders).set(patch).where(eq21(orders.id, o.id)).returning();
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq21(vendors.id, vid));
   if (d.step === "en_preparation") {
     void logOrderEvent(o.id, "preparing", `${v.name} pr\xE9pare votre commande${d.deliverySlot ? ` \u2014 livraison ${d.deliverySlot}` : ""}`, "vendor");
   }
@@ -6903,32 +7304,32 @@ vendorRoutes.post("/vendor/orders/:id/shipped", async (c) => c.redirect(`/api/ve
 vendorRoutes.get("/vendor/orders/:id/timeline", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt }).from(orders).where(and18(eq20(orders.id, c.req.param("id")), eq20(orders.vendorId, vid)));
+  const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt }).from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.vendorId, vid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   return c.json({ order: o, events: await orderTimeline(o.id) });
 });
 vendorRoutes.get("/vendor/pricing", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const tiers = await db.select({ t: vendorPriceTiers }).from(vendorPriceTiers).innerJoin(vendorOffers, eq20(vendorOffers.id, vendorPriceTiers.vendorOfferId)).where(eq20(vendorOffers.vendorId, vid)).orderBy(vendorPriceTiers.minPacks);
-  const customers = await db.select({ p: vendorCustomerPrices, restaurantName: restaurants.name, city: restaurants.city }).from(vendorCustomerPrices).innerJoin(restaurants, eq20(restaurants.id, vendorCustomerPrices.restaurantId)).where(eq20(vendorCustomerPrices.vendorId, vid)).orderBy(desc9(vendorCustomerPrices.updatedAt));
-  const clients = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql14`count(${orders.id})`, gmv: sql14`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} <> 'annulee'), 0)` }).from(orders).innerJoin(restaurants, eq20(restaurants.id, orders.restaurantId)).where(eq20(orders.vendorId, vid)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql14`count(${orders.id}) desc`);
-  return c.json({ tiers: tiers.map((x) => x.t), customers: customers.map((x) => ({ ...x.p, restaurantName: x.restaurantName, city: x.city })), clients: clients.map((x) => ({ ...x, orders: n8(x.orders), gmv: n8(x.gmv) })) });
+  const tiers = await db.select({ t: vendorPriceTiers }).from(vendorPriceTiers).innerJoin(vendorOffers, eq21(vendorOffers.id, vendorPriceTiers.vendorOfferId)).where(eq21(vendorOffers.vendorId, vid)).orderBy(vendorPriceTiers.minPacks);
+  const customers = await db.select({ p: vendorCustomerPrices, restaurantName: restaurants.name, city: restaurants.city }).from(vendorCustomerPrices).innerJoin(restaurants, eq21(restaurants.id, vendorCustomerPrices.restaurantId)).where(eq21(vendorCustomerPrices.vendorId, vid)).orderBy(desc9(vendorCustomerPrices.updatedAt));
+  const clients = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql15`count(${orders.id})`, gmv: sql15`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} <> 'annulee'), 0)` }).from(orders).innerJoin(restaurants, eq21(restaurants.id, orders.restaurantId)).where(eq21(orders.vendorId, vid)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql15`count(${orders.id}) desc`);
+  return c.json({ tiers: tiers.map((x) => x.t), customers: customers.map((x) => ({ ...x.p, restaurantName: x.restaurantName, city: x.city })), clients: clients.map((x) => ({ ...x, orders: n9(x.orders), gmv: n9(x.gmv) })) });
 });
 vendorRoutes.put("/vendor/offers/:id/tiers", async (c) => {
   const body3 = z10.object({ tiers: z10.array(z10.object({ minPacks: z10.number().int().min(2), packPriceEur: z10.number().positive() })).max(6) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [o] = await db.select().from(vendorOffers).where(and18(eq20(vendorOffers.id, c.req.param("id")), eq20(vendorOffers.vendorId, vid)));
+  const [o] = await db.select().from(vendorOffers).where(and19(eq21(vendorOffers.id, c.req.param("id")), eq21(vendorOffers.vendorId, vid)));
   if (!o) return c.json({ error: "Offre introuvable" }, 404);
   const sorted = [...body3.data.tiers].sort((a, b) => a.minPacks - b.minPacks);
   for (let i = 0; i < sorted.length; i++) {
-    if (sorted[i].packPriceEur >= n8(o.packPriceEur)) return c.json({ error: `Le palier ${sorted[i].minPacks}+ doit \xEAtre moins cher que le prix catalogue (${eur9(n8(o.packPriceEur))})` }, 400);
+    if (sorted[i].packPriceEur >= n9(o.packPriceEur)) return c.json({ error: `Le palier ${sorted[i].minPacks}+ doit \xEAtre moins cher que le prix catalogue (${eur9(n9(o.packPriceEur))})` }, 400);
     if (i > 0 && sorted[i].packPriceEur >= sorted[i - 1].packPriceEur) return c.json({ error: "Les prix doivent baisser \xE0 chaque palier" }, 400);
     if (i > 0 && sorted[i].minPacks === sorted[i - 1].minPacks) return c.json({ error: "Deux paliers identiques" }, 400);
   }
-  await db.delete(vendorPriceTiers).where(eq20(vendorPriceTiers.vendorOfferId, o.id));
+  await db.delete(vendorPriceTiers).where(eq21(vendorPriceTiers.vendorOfferId, o.id));
   if (sorted.length) await db.insert(vendorPriceTiers).values(sorted.map((t) => ({ vendorOfferId: o.id, minPacks: t.minPacks, packPriceEur: t.packPriceEur.toFixed(2) })));
   return c.json({ tiers: sorted });
 });
@@ -6941,32 +7342,32 @@ vendorRoutes.post("/vendor/customer-prices", async (c) => {
   if (!d.packPriceEur && !d.discountPct) return c.json({ error: "Indiquez un prix ferme ou une remise %" }, 400);
   if (!d.vendorOfferId && d.packPriceEur) return c.json({ error: "Un prix ferme s\u2019applique \xE0 une offre pr\xE9cise ; pour tout le catalogue, utilisez une remise %" }, 400);
   if (d.vendorOfferId) {
-    const [o] = await db.select().from(vendorOffers).where(and18(eq20(vendorOffers.id, d.vendorOfferId), eq20(vendorOffers.vendorId, vid)));
+    const [o] = await db.select().from(vendorOffers).where(and19(eq21(vendorOffers.id, d.vendorOfferId), eq21(vendorOffers.vendorId, vid)));
     if (!o) return c.json({ error: "Offre introuvable" }, 404);
-    if (d.packPriceEur && d.packPriceEur >= n8(o.packPriceEur)) return c.json({ error: `Le prix n\xE9goci\xE9 doit \xEAtre inf\xE9rieur au catalogue (${eur9(n8(o.packPriceEur))})` }, 400);
+    if (d.packPriceEur && d.packPriceEur >= n9(o.packPriceEur)) return c.json({ error: `Le prix n\xE9goci\xE9 doit \xEAtre inf\xE9rieur au catalogue (${eur9(n9(o.packPriceEur))})` }, 400);
   }
-  const [known] = await db.select({ id: orders.id }).from(orders).where(and18(eq20(orders.vendorId, vid), eq20(orders.restaurantId, d.restaurantId))).limit(1);
-  const [linked] = await db.select({ id: suppliers.id }).from(suppliers).where(and18(eq20(suppliers.vendorId, vid), eq20(suppliers.restaurantId, d.restaurantId))).limit(1);
+  const [known] = await db.select({ id: orders.id }).from(orders).where(and19(eq21(orders.vendorId, vid), eq21(orders.restaurantId, d.restaurantId))).limit(1);
+  const [linked] = await db.select({ id: suppliers.id }).from(suppliers).where(and19(eq21(suppliers.vendorId, vid), eq21(suppliers.restaurantId, d.restaurantId))).limit(1);
   if (!known && !linked) return c.json({ error: "Ce restaurant n\u2019est pas encore votre client sur AFRISUPPLY" }, 400);
-  const existing = await db.select().from(vendorCustomerPrices).where(and18(eq20(vendorCustomerPrices.vendorId, vid), eq20(vendorCustomerPrices.restaurantId, d.restaurantId), d.vendorOfferId ? eq20(vendorCustomerPrices.vendorOfferId, d.vendorOfferId) : sql14`${vendorCustomerPrices.vendorOfferId} is null`));
+  const existing = await db.select().from(vendorCustomerPrices).where(and19(eq21(vendorCustomerPrices.vendorId, vid), eq21(vendorCustomerPrices.restaurantId, d.restaurantId), d.vendorOfferId ? eq21(vendorCustomerPrices.vendorOfferId, d.vendorOfferId) : sql15`${vendorCustomerPrices.vendorOfferId} is null`));
   const vals = { packPriceEur: d.packPriceEur?.toFixed(2) ?? null, discountPct: d.packPriceEur ? null : d.discountPct?.toFixed(2) ?? null, validUntil: d.validUntil ?? null, note: d.note, updatedAt: /* @__PURE__ */ new Date() };
-  const [row] = existing[0] ? await db.update(vendorCustomerPrices).set(vals).where(eq20(vendorCustomerPrices.id, existing[0].id)).returning() : await db.insert(vendorCustomerPrices).values({ vendorId: vid, restaurantId: d.restaurantId, vendorOfferId: d.vendorOfferId ?? null, ...vals }).returning();
+  const [row] = existing[0] ? await db.update(vendorCustomerPrices).set(vals).where(eq21(vendorCustomerPrices.id, existing[0].id)).returning() : await db.insert(vendorCustomerPrices).values({ vendorId: vid, restaurantId: d.restaurantId, vendorOfferId: d.vendorOfferId ?? null, ...vals }).returning();
   await audit("vendor.customer_price", { actorEmail: c.get("user").email, target: row.id, meta: { restaurantId: d.restaurantId, offer: d.vendorOfferId, price: d.packPriceEur, pct: d.discountPct } });
   return c.json({ price: row }, existing[0] ? 200 : 201);
 });
 vendorRoutes.delete("/vendor/customer-prices/:id", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [row] = await db.delete(vendorCustomerPrices).where(and18(eq20(vendorCustomerPrices.id, c.req.param("id")), eq20(vendorCustomerPrices.vendorId, vid))).returning();
+  const [row] = await db.delete(vendorCustomerPrices).where(and19(eq21(vendorCustomerPrices.id, c.req.param("id")), eq21(vendorCustomerPrices.vendorId, vid))).returning();
   if (!row) return c.json({ error: "Introuvable" }, 404);
   return c.json({ ok: true });
 });
 vendorRoutes.get("/vendor/group-buys", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const rows = await db.select({ gb: groupBuys, productName: products.name, packLabel: vendorOffers.packLabel }).from(groupBuys).innerJoin(vendorOffers, eq20(vendorOffers.id, groupBuys.vendorOfferId)).innerJoin(products, eq20(products.id, vendorOffers.productId)).where(eq20(groupBuys.vendorId, vid)).orderBy(desc9(groupBuys.createdAt));
+  const rows = await db.select({ gb: groupBuys, productName: products.name, packLabel: vendorOffers.packLabel }).from(groupBuys).innerJoin(vendorOffers, eq21(vendorOffers.id, groupBuys.vendorOfferId)).innerJoin(products, eq21(products.id, vendorOffers.productId)).where(eq21(groupBuys.vendorId, vid)).orderBy(desc9(groupBuys.createdAt));
   const ids = rows.map((r) => r.gb.id);
-  const parts = ids.length ? await db.select({ p: groupBuyParticipations, restaurantName: restaurants.name, city: restaurants.city }).from(groupBuyParticipations).innerJoin(restaurants, eq20(restaurants.id, groupBuyParticipations.restaurantId)).where(inArray8(groupBuyParticipations.groupBuyId, ids)) : [];
+  const parts = ids.length ? await db.select({ p: groupBuyParticipations, restaurantName: restaurants.name, city: restaurants.city }).from(groupBuyParticipations).innerJoin(restaurants, eq21(restaurants.id, groupBuyParticipations.restaurantId)).where(inArray9(groupBuyParticipations.groupBuyId, ids)) : [];
   return c.json({ groupBuys: rows.map((r) => {
     const p = parts.filter((x) => x.p.groupBuyId === r.gb.id);
     return { ...r.gb, productName: r.productName, packLabel: r.packLabel, committedPacks: p.reduce((a, x) => a + x.p.packs, 0), participants: p.map((x) => ({ restaurantName: x.restaurantName, city: x.city, packs: x.p.packs })) };
@@ -6979,7 +7380,7 @@ vendorRoutes.post("/vendor/group-buys", async (c) => {
   const vid = c.get("vendorId");
   const d = body3.data;
   const user = c.get("user");
-  const [o] = await db.select({ offer: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq20(products.id, vendorOffers.productId)).where(and18(eq20(vendorOffers.id, d.vendorOfferId), eq20(vendorOffers.vendorId, vid)));
+  const [o] = await db.select({ offer: vendorOffers, productName: products.name }).from(vendorOffers).innerJoin(products, eq21(products.id, vendorOffers.productId)).where(and19(eq21(vendorOffers.id, d.vendorOfferId), eq21(vendorOffers.vendorId, vid)));
   if (!o) return c.json({ error: "Offre introuvable" }, 404);
   const title = d.title ?? `${o.productName} ${o.offer.packLabel} \u2014 ${d.targetPacks} colis = \u2212${d.discountPct} %`;
   const [gb] = await db.insert(groupBuys).values({ vendorId: vid, vendorOfferId: d.vendorOfferId, title, zone: d.zone.trim().toLowerCase() === "france" ? "France" : d.zone.trim().toLowerCase(), targetPacks: d.targetPacks, discountPct: d.discountPct.toFixed(2), closesAt: new Date(Date.now() + d.closesInDays * 864e5), deliveryDate: d.deliveryDate, createdBy: user.id }).returning();
@@ -6989,18 +7390,18 @@ vendorRoutes.post("/vendor/group-buys/:id/close", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const id = c.req.param("id");
-  const [gb] = await db.select().from(groupBuys).where(and18(eq20(groupBuys.id, id), eq20(groupBuys.vendorId, vid)));
+  const [gb] = await db.select().from(groupBuys).where(and19(eq21(groupBuys.id, id), eq21(groupBuys.vendorId, vid)));
   if (!gb) return c.json({ error: "Introuvable" }, 404);
   if (!["ouvert", "atteint"].includes(gb.status)) return c.json({ error: `D\xE9j\xE0 ${gb.status}` }, 400);
-  const parts = await db.select().from(groupBuyParticipations).where(eq20(groupBuyParticipations.groupBuyId, id));
+  const parts = await db.select().from(groupBuyParticipations).where(eq21(groupBuyParticipations.groupBuyId, id));
   const committed = parts.reduce((a, p) => a + p.packs, 0);
   if (committed < gb.targetPacks) {
-    await db.update(groupBuys).set({ status: "annule" }).where(eq20(groupBuys.id, id));
+    await db.update(groupBuys).set({ status: "annule" }).where(eq21(groupBuys.id, id));
     return c.json({ ok: true, status: "annule", committed, target: gb.targetPacks });
   }
-  const [v] = await db.select().from(vendors).where(eq20(vendors.id, vid));
-  const [offer] = await db.select().from(vendorOffers).where(eq20(vendorOffers.id, gb.vendorOfferId));
-  const packPrice = n8(offer.packPriceEur) * (1 - n8(gb.discountPct) / 100);
+  const [v] = await db.select().from(vendors).where(eq21(vendors.id, vid));
+  const [offer] = await db.select().from(vendorOffers).where(eq21(vendorOffers.id, gb.vendorOfferId));
+  const packPrice = n9(offer.packPriceEur) * (1 - n9(gb.discountPct) / 100);
   const { linkVendor: linkVendor2 } = await Promise.resolve().then(() => (init_marketplace(), marketplace_exports));
   let created = 0;
   for (const p of parts) {
@@ -7008,29 +7409,29 @@ vendorRoutes.post("/vendor/group-buys/:id/close", async (c) => {
     const link = await linkVendor2(p.restaurantId, vid);
     if (!link) continue;
     const total = p.packs * packPrice;
-    const [order] = await db.insert(orders).values({ restaurantId: p.restaurantId, supplierId: link.supplier.id, vendorId: vid, reference: await nextOrderReference(), status: "confirmee", channel: "plateforme", sentAt: /* @__PURE__ */ new Date(), vendorDecisionAt: /* @__PURE__ */ new Date(), expectedAt: gb.deliveryDate ?? new Date(Date.now() + v.leadTimeHours * 36e5).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: "0", source: "achat_groupe", notes: `Achat group\xE9 \xAB ${gb.title} \xBB : \u2212${n8(gb.discountPct)} %` }).returning();
-    await db.insert(orderLines).values({ orderId: order.id, productId: offer.productId, packLabel: offer.packLabel, packs: p.packs, quantity: (p.packs * n8(offer.packQty)).toFixed(3), unitPriceEur: (packPrice / n8(offer.packQty)).toFixed(4), lineTotalEur: total.toFixed(2) });
-    await db.insert(commissions).values({ vendorId: vid, orderId: order.id, orderTotalEur: total.toFixed(2), pct: v.commissionPct, amountEur: (total * n8(v.commissionPct) / 100).toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
-    await db.update(groupBuyParticipations).set({ orderId: order.id }).where(eq20(groupBuyParticipations.id, p.id));
-    void notifyRestaurant(order.id, `\u{1F91D} Achat group\xE9 r\xE9ussi : ${gb.title}`, `Le palier est atteint (${committed} colis). Votre commande ${order.reference} de ${p.packs} colis \xE0 ${eur9(packPrice)} le colis (\u2212${n8(gb.discountPct)} %) est confirm\xE9e chez ${v.name}.`);
+    const [order] = await db.insert(orders).values({ restaurantId: p.restaurantId, supplierId: link.supplier.id, vendorId: vid, reference: await nextOrderReference(), status: "confirmee", channel: "plateforme", sentAt: /* @__PURE__ */ new Date(), vendorDecisionAt: /* @__PURE__ */ new Date(), expectedAt: gb.deliveryDate ?? new Date(Date.now() + v.leadTimeHours * 36e5).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: "0", source: "achat_groupe", notes: `Achat group\xE9 \xAB ${gb.title} \xBB : \u2212${n9(gb.discountPct)} %` }).returning();
+    await db.insert(orderLines).values({ orderId: order.id, productId: offer.productId, packLabel: offer.packLabel, packs: p.packs, quantity: (p.packs * n9(offer.packQty)).toFixed(3), unitPriceEur: (packPrice / n9(offer.packQty)).toFixed(4), lineTotalEur: total.toFixed(2) });
+    await db.insert(commissions).values({ vendorId: vid, orderId: order.id, orderTotalEur: total.toFixed(2), pct: v.commissionPct, amountEur: (total * n9(v.commissionPct) / 100).toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
+    await db.update(groupBuyParticipations).set({ orderId: order.id }).where(eq21(groupBuyParticipations.id, p.id));
+    void notifyRestaurant(order.id, `\u{1F91D} Achat group\xE9 r\xE9ussi : ${gb.title}`, `Le palier est atteint (${committed} colis). Votre commande ${order.reference} de ${p.packs} colis \xE0 ${eur9(packPrice)} le colis (\u2212${n9(gb.discountPct)} %) est confirm\xE9e chez ${v.name}.`);
     created++;
   }
-  await db.update(groupBuys).set({ status: "cloture" }).where(eq20(groupBuys.id, id));
+  await db.update(groupBuys).set({ status: "cloture" }).where(eq21(groupBuys.id, id));
   return c.json({ ok: true, status: "cloture", committed, ordersCreated: created });
 });
 vendorRoutes.get("/vendor/commissions", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const rows = await db.select({ period: commissions.period, orders: sql14`count(*)`, base: sql14`sum(${commissions.orderTotalEur})`, amount: sql14`sum(${commissions.amountEur})`, invoiced: sql14`bool_and(${commissions.invoiced})` }).from(commissions).where(eq20(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc9(commissions.period));
-  return c.json({ periods: rows.map((r) => ({ ...r, orders: n8(r.orders), base: n8(r.base), amount: n8(r.amount) })) });
+  const rows = await db.select({ period: commissions.period, orders: sql15`count(*)`, base: sql15`sum(${commissions.orderTotalEur})`, amount: sql15`sum(${commissions.amountEur})`, invoiced: sql15`bool_and(${commissions.invoiced})` }).from(commissions).where(eq21(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc9(commissions.period));
+  return c.json({ periods: rows.map((r) => ({ ...r, orders: n9(r.orders), base: n9(r.base), amount: n9(r.amount) })) });
 });
-var vendorAdminRoutes = new Hono10();
+var vendorAdminRoutes = new Hono11();
 vendorAdminRoutes.use("/admin/vendors/*", requireAuth);
 vendorAdminRoutes.use("/admin/vendors", requireAuth);
 vendorAdminRoutes.get("/admin/vendors", async (c) => {
   if (!isAdmin4(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
   const db = await getDb();
-  const rows = await db.select({ v: vendors, offerCount: sql14`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orderCount: sql14`(select count(*) from orders o where o.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc9(vendors.createdAt));
+  const rows = await db.select({ v: vendors, offerCount: sql15`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orderCount: sql15`(select count(*) from orders o where o.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc9(vendors.createdAt));
   return c.json({ vendors: rows.map((r) => ({ ...r.v, offerCount: Number(r.offerCount), orderCount: Number(r.orderCount) })) });
 });
 vendorAdminRoutes.put("/admin/vendors/:id", async (c) => {
@@ -7038,18 +7439,18 @@ vendorAdminRoutes.put("/admin/vendors/:id", async (c) => {
   const body3 = z10.object({ status: z10.enum(["en_attente", "actif", "suspendu"]).optional(), commissionPct: z10.number().min(0).max(20).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
-  const [v] = await db.update(vendors).set({ status: body3.data.status, commissionPct: body3.data.commissionPct?.toFixed(2) }).where(eq20(vendors.id, c.req.param("id"))).returning();
+  const [v] = await db.update(vendors).set({ status: body3.data.status, commissionPct: body3.data.commissionPct?.toFixed(2) }).where(eq21(vendors.id, c.req.param("id"))).returning();
   if (v && body3.data.status === "actif" && v.contactEmail) void sendMail({ to: v.contactEmail, subject: "Votre espace fournisseur AFRISUPPLY est activ\xE9", text: `Bonjour,
 
 Votre espace ${v.name} est actif : ${APP_URL2()}/fournisseur
 Ajoutez votre catalogue, les restaurants de votre zone vous verront d\xE8s aujourd'hui.
-Commission plateforme : ${n8(v.commissionPct)} % sur les commandes confirm\xE9es, factur\xE9e mensuellement.`, html: `<p>Votre espace <b>${v.name}</b> est actif : <a href="${APP_URL2()}/fournisseur">${APP_URL2()}/fournisseur</a></p><p>Commission plateforme : ${n8(v.commissionPct)} % sur les commandes confirm\xE9es.</p>`, tags: { type: "vendor_activated" } });
+Commission plateforme : ${n9(v.commissionPct)} % sur les commandes confirm\xE9es, factur\xE9e mensuellement.`, html: `<p>Votre espace <b>${v.name}</b> est actif : <a href="${APP_URL2()}/fournisseur">${APP_URL2()}/fournisseur</a></p><p>Commission plateforme : ${n9(v.commissionPct)} % sur les commandes confirm\xE9es.</p>`, tags: { type: "vendor_activated" } });
   await audit("vendor.update", { actorEmail: c.get("user").email, target: v?.id, meta: body3.data });
   return c.json({ vendor: v });
 });
 async function refProducts() {
   const db = await getDb();
-  return (await db.select({ id: products.id, name: products.name, aliases: products.aliases, baseUnit: products.baseUnit }).from(products).where(sql14`${products.restaurantId} is null`)).map((p) => ({ ...p, baseUnit: p.baseUnit }));
+  return (await db.select({ id: products.id, name: products.name, aliases: products.aliases, baseUnit: products.baseUnit }).from(products).where(sql15`${products.restaurantId} is null`)).map((p) => ({ ...p, baseUnit: p.baseUnit }));
 }
 vendorRoutes.post("/vendor/catalog/parse", async (c) => {
   const body3 = z10.object({ text: z10.string().max(2e5).optional(), image: z10.string().startsWith("data:image/").max(8e6).optional() }).refine((b) => b.text || b.image, "text ou image requis").safeParse(await c.req.json());
@@ -7064,10 +7465,10 @@ vendorRoutes.post("/vendor/catalog/parse", async (c) => {
   } else lines = matchCatalogLines(parseCatalogText(body3.data.text), await refProducts());
   const db = await getDb();
   const vid = c.get("vendorId");
-  const existing = await db.select({ productId: vendorOffers.productId, packLabel: vendorOffers.packLabel, packPriceEur: vendorOffers.packPriceEur }).from(vendorOffers).where(eq20(vendorOffers.vendorId, vid));
+  const existing = await db.select({ productId: vendorOffers.productId, packLabel: vendorOffers.packLabel, packPriceEur: vendorOffers.packPriceEur }).from(vendorOffers).where(eq21(vendorOffers.vendorId, vid));
   const out = lines.map((l) => {
     const ex = l.match ? existing.find((e) => e.productId === l.match.id && e.packLabel.toLowerCase() === l.packLabel.toLowerCase()) : null;
-    return { ...l, currentPrice: ex ? n8(ex.packPriceEur) : null, changePct: ex && n8(ex.packPriceEur) > 0 ? Math.round((l.price - n8(ex.packPriceEur)) / n8(ex.packPriceEur) * 1e3) / 10 : null };
+    return { ...l, currentPrice: ex ? n9(ex.packPriceEur) : null, changePct: ex && n9(ex.packPriceEur) > 0 ? Math.round((l.price - n9(ex.packPriceEur)) / n9(ex.packPriceEur) * 1e3) / 10 : null };
   });
   return c.json({ source, lines: out, matched: out.filter((l) => l.match).length, total: out.length, hint: out.length ? void 0 : "Aucune ligne reconnue. Format libre : \xAB Riz bris\xE9 sac 25 kg 29,90 \xBB (une ligne par produit)." });
 });
@@ -7079,9 +7480,9 @@ vendorRoutes.post("/vendor/catalog/apply", async (c) => {
   const ref = new Set((await refProducts()).map((p) => p.id));
   const bad = body3.data.lines.filter((l) => !ref.has(l.productId));
   if (bad.length) return c.json({ error: "Produit hors r\xE9f\xE9rentiel" }, 400);
-  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq20(suppliers.vendorId, vid));
+  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq21(suppliers.vendorId, vid));
   let created = 0, updated = 0, priceChanges = 0;
-  const before = new Map((await db.select().from(vendorOffers).where(eq20(vendorOffers.vendorId, vid))).map((o) => [`${o.productId}|${o.packLabel.toLowerCase()}`, o]));
+  const before = new Map((await db.select().from(vendorOffers).where(eq21(vendorOffers.vendorId, vid))).map((o) => [`${o.productId}|${o.packLabel.toLowerCase()}`, o]));
   const seen = /* @__PURE__ */ new Set();
   for (const l of body3.data.lines) {
     const key = `${l.productId}|${l.packLabel.toLowerCase()}`;
@@ -7091,17 +7492,17 @@ vendorRoutes.post("/vendor/catalog/apply", async (c) => {
     await db.insert(vendorOffers).values({ vendorId: vid, productId: l.productId, packLabel, packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock }).onConflictDoUpdate({ target: [vendorOffers.vendorId, vendorOffers.productId, vendorOffers.packLabel], set: { packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock, updatedAt: /* @__PURE__ */ new Date() } });
     if (prev) {
       updated++;
-      if (n8(prev.packPriceEur) !== l.packPrice) priceChanges++;
+      if (n9(prev.packPriceEur) !== l.packPrice) priceChanges++;
     } else created++;
     for (const s of linked) {
       const [so] = await db.insert(supplierOffers).values({ restaurantId: s.restaurantId, supplierId: s.id, productId: l.productId, packLabel, packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: l.packQty.toFixed(3), packPriceEur: l.packPrice.toFixed(2), inStock: l.inStock, lastSeenAt: /* @__PURE__ */ new Date() } }).returning();
-      if (!prev || n8(prev.packPriceEur) !== l.packPrice) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (l.packPrice / l.packQty).toFixed(4), source: "catalogue" });
+      if (!prev || n9(prev.packPriceEur) !== l.packPrice) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (l.packPrice / l.packQty).toFixed(4), source: "catalogue" });
     }
   }
   let outOfStock = 0;
   if (body3.data.replaceMissing) {
     for (const [key, o] of before) if (!seen.has(key) && o.inStock) {
-      await db.update(vendorOffers).set({ inStock: false, updatedAt: /* @__PURE__ */ new Date() }).where(eq20(vendorOffers.id, o.id));
+      await db.update(vendorOffers).set({ inStock: false, updatedAt: /* @__PURE__ */ new Date() }).where(eq21(vendorOffers.id, o.id));
       outOfStock++;
     }
   }
@@ -7113,7 +7514,7 @@ vendorRoutes.post("/vendor/offers/quick", async (c) => {
   if (!body3.success) return c.json({ error: "Texte requis" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
-  const mine = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq20(products.id, vendorOffers.productId)).where(eq20(vendorOffers.vendorId, vid));
+  const mine = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq21(products.id, vendorOffers.productId)).where(eq21(vendorOffers.vendorId, vid));
   if (!mine.length) return c.json({ error: "Aucune offre dans votre catalogue" }, 400);
   const txt = body3.data.text.trim();
   const rupture = /\b(rupture|plus de|epuise|épuisé|indisponible)\b/i.test(txt);
@@ -7129,13 +7530,13 @@ vendorRoutes.post("/vendor/offers/quick", async (c) => {
   if (parsed) set.packPriceEur = parsed.price.toFixed(2);
   if (rupture) set.inStock = false;
   if (dispo) set.inStock = true;
-  await db.update(vendorOffers).set(set).where(eq20(vendorOffers.id, row.offer.id));
-  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq20(suppliers.vendorId, vid));
+  await db.update(vendorOffers).set(set).where(eq21(vendorOffers.id, row.offer.id));
+  const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq21(suppliers.vendorId, vid));
   for (const s of linked) {
-    const [so] = await db.update(supplierOffers).set({ ...parsed ? { packPriceEur: parsed.price.toFixed(2) } : {}, ...rupture ? { inStock: false } : {}, ...dispo ? { inStock: true } : {}, lastSeenAt: /* @__PURE__ */ new Date() }).where(and18(eq20(supplierOffers.supplierId, s.id), eq20(supplierOffers.productId, row.product.id), eq20(supplierOffers.packLabel, row.offer.packLabel))).returning();
-    if (so && parsed) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (parsed.price / n8(row.offer.packQty)).toFixed(4), source: "catalogue" });
+    const [so] = await db.update(supplierOffers).set({ ...parsed ? { packPriceEur: parsed.price.toFixed(2) } : {}, ...rupture ? { inStock: false } : {}, ...dispo ? { inStock: true } : {}, lastSeenAt: /* @__PURE__ */ new Date() }).where(and19(eq21(supplierOffers.supplierId, s.id), eq21(supplierOffers.productId, row.product.id), eq21(supplierOffers.packLabel, row.offer.packLabel))).returning();
+    if (so && parsed) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (parsed.price / n9(row.offer.packQty)).toFixed(4), source: "catalogue" });
   }
-  const what = parsed ? `${eur9(n8(row.offer.packPriceEur))} \u2192 ${eur9(parsed.price)}` : rupture ? "pass\xE9 en rupture" : "de nouveau disponible";
+  const what = parsed ? `${eur9(n9(row.offer.packPriceEur))} \u2192 ${eur9(parsed.price)}` : rupture ? "pass\xE9 en rupture" : "de nouveau disponible";
   return c.json({ offerId: row.offer.id, productName: row.product.name, packLabel: row.offer.packLabel, message: `${row.product.name} (${row.offer.packLabel}) : ${what}${linked.length ? ` \xB7 ${linked.length} restaurant(s) pr\xE9venus` : ""}.` });
 });
 function bestMatchesLocal(label, ents, qty3) {
@@ -7148,23 +7549,23 @@ function bestMatchesLocal(label, ents, qty3) {
 vendorRoutes.get("/vendor/analytics", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [v] = await db.select().from(vendors).where(eq20(vendors.id, vid));
-  const okStatus = sql14`${orders.status} in ('confirmee','livree','livree_partiel')`;
-  const since = sql14`${orders.createdAt} >= now() - interval '90 days'`;
-  const byProduct = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, packs: sql14`sum(${orderLines.packs})`, qty: sql14`sum(${orderLines.quantity})`, revenue: sql14`sum(${orderLines.lineTotalEur})`, orders: sql14`count(distinct ${orders.id})`, restaurants: sql14`count(distinct ${orders.restaurantId})` }).from(orderLines).innerJoin(orders, eq20(orders.id, orderLines.orderId)).innerJoin(products, eq20(products.id, orderLines.productId)).where(and18(eq20(orders.vendorId, vid), okStatus, since)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql14`sum(${orderLines.lineTotalEur}) desc`).limit(25);
-  const topCustomers = await db.select({ restaurantId: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql14`count(*)`, revenue: sql14`sum(${orders.totalEur})`, last: sql14`max(${orders.createdAt})` }).from(orders).innerJoin(restaurants, eq20(restaurants.id, orders.restaurantId)).where(and18(eq20(orders.vendorId, vid), okStatus)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql14`sum(${orders.totalEur}) desc`).limit(10);
-  const monthly = await db.select({ month: sql14`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`, revenue: sql14`sum(${orders.totalEur})`, orders: sql14`count(*)`, restaurants: sql14`count(distinct ${orders.restaurantId})` }).from(orders).where(and18(eq20(orders.vendorId, vid), okStatus, sql14`${orders.createdAt} >= date_trunc('month', now()) - interval '5 months'`)).groupBy(sql14`1`).orderBy(sql14`1`);
-  const [funnel] = await db.select({ total: sql14`count(*)`, refused: sql14`count(*) filter (where ${orders.status} = 'annulee')`, avgDecisionH: sql14`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)` }).from(orders).where(and18(eq20(orders.vendorId, vid), since));
+  const [v] = await db.select().from(vendors).where(eq21(vendors.id, vid));
+  const okStatus = sql15`${orders.status} in ('confirmee','livree','livree_partiel')`;
+  const since = sql15`${orders.createdAt} >= now() - interval '90 days'`;
+  const byProduct = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, packs: sql15`sum(${orderLines.packs})`, qty: sql15`sum(${orderLines.quantity})`, revenue: sql15`sum(${orderLines.lineTotalEur})`, orders: sql15`count(distinct ${orders.id})`, restaurants: sql15`count(distinct ${orders.restaurantId})` }).from(orderLines).innerJoin(orders, eq21(orders.id, orderLines.orderId)).innerJoin(products, eq21(products.id, orderLines.productId)).where(and19(eq21(orders.vendorId, vid), okStatus, since)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql15`sum(${orderLines.lineTotalEur}) desc`).limit(25);
+  const topCustomers = await db.select({ restaurantId: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql15`count(*)`, revenue: sql15`sum(${orders.totalEur})`, last: sql15`max(${orders.createdAt})` }).from(orders).innerJoin(restaurants, eq21(restaurants.id, orders.restaurantId)).where(and19(eq21(orders.vendorId, vid), okStatus)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql15`sum(${orders.totalEur}) desc`).limit(10);
+  const monthly = await db.select({ month: sql15`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`, revenue: sql15`sum(${orders.totalEur})`, orders: sql15`count(*)`, restaurants: sql15`count(distinct ${orders.restaurantId})` }).from(orders).where(and19(eq21(orders.vendorId, vid), okStatus, sql15`${orders.createdAt} >= date_trunc('month', now()) - interval '5 months'`)).groupBy(sql15`1`).orderBy(sql15`1`);
+  const [funnel] = await db.select({ total: sql15`count(*)`, refused: sql15`count(*) filter (where ${orders.status} = 'annulee')`, avgDecisionH: sql15`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)` }).from(orders).where(and19(eq21(orders.vendorId, vid), since));
   const allR = await db.select({ id: restaurants.id, city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants);
   const myZones = v.deliveryZones.map((z21) => z21.trim().toLowerCase());
   const inZone = allR.filter((r) => myZones.length === 0 || [...restaurantZones(r)].some((z21) => myZones.includes(z21.toLowerCase()))).map((r) => r.id);
   let uncovered = [];
   if (inZone.length) {
-    const mine = new Set((await db.select({ productId: vendorOffers.productId }).from(vendorOffers).where(eq20(vendorOffers.vendorId, vid))).map((x) => x.productId));
-    const demand = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, restaurants: sql14`count(distinct ${inventoryItems.restaurantId})` }).from(inventoryItems).innerJoin(products, eq20(products.id, inventoryItems.productId)).where(and18(inArray8(inventoryItems.restaurantId, inZone), sql14`${products.restaurantId} is null`)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql14`count(distinct ${inventoryItems.restaurantId}) desc`).limit(60);
-    uncovered = demand.filter((d) => !mine.has(d.productId) && (v.categories.length === 0 || v.categories.includes(d.category))).slice(0, 20).map((d) => ({ ...d, restaurants: n8(d.restaurants) }));
+    const mine = new Set((await db.select({ productId: vendorOffers.productId }).from(vendorOffers).where(eq21(vendorOffers.vendorId, vid))).map((x) => x.productId));
+    const demand = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, restaurants: sql15`count(distinct ${inventoryItems.restaurantId})` }).from(inventoryItems).innerJoin(products, eq21(products.id, inventoryItems.productId)).where(and19(inArray9(inventoryItems.restaurantId, inZone), sql15`${products.restaurantId} is null`)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql15`count(distinct ${inventoryItems.restaurantId}) desc`).limit(60);
+    uncovered = demand.filter((d) => !mine.has(d.productId) && (v.categories.length === 0 || v.categories.includes(d.category))).slice(0, 20).map((d) => ({ ...d, restaurants: n9(d.restaurants) }));
   }
-  const alerts2 = await db.select({ message: leads.message, c: sql14`count(*)` }).from(leads).where(and18(eq20(leads.source, "vitrine"), sql14`${leads.createdAt} >= now() - interval '90 days'`)).groupBy(leads.message).orderBy(sql14`count(*) desc`).limit(10);
+  const alerts2 = await db.select({ message: leads.message, c: sql15`count(*)` }).from(leads).where(and19(eq21(leads.source, "vitrine"), sql15`${leads.createdAt} >= now() - interval '90 days'`)).groupBy(leads.message).orderBy(sql15`count(*) desc`).limit(10);
   const num3 = (o) => Object.fromEntries(Object.entries(o).map(([k, val]) => [k, typeof val === "string" && /^-?\d+(\.\d+)?$/.test(val) ? Number(val) : val]));
   return c.json({
     period: "90 jours",
@@ -7174,19 +7575,19 @@ vendorRoutes.get("/vendor/analytics", async (c) => {
     funnel: num3(funnel),
     uncovered,
     restaurantsInZone: inZone.length,
-    alerts: alerts2.map((a) => ({ product: (a.message ?? "").replace(/^Alerte produit : /, ""), count: n8(a.c) }))
+    alerts: alerts2.map((a) => ({ product: (a.message ?? "").replace(/^Alerte produit : /, ""), count: n9(a.c) }))
   });
 });
 async function buildOrderDoc(orderId, kind) {
   const db = await getDb();
-  const [o] = await db.select({ order: orders, r: restaurants, v: vendors }).from(orders).innerJoin(restaurants, eq20(restaurants.id, orders.restaurantId)).leftJoin(vendors, eq20(vendors.id, orders.vendorId)).where(eq20(orders.id, orderId));
+  const [o] = await db.select({ order: orders, r: restaurants, v: vendors }).from(orders).innerJoin(restaurants, eq21(restaurants.id, orders.restaurantId)).leftJoin(vendors, eq21(vendors.id, orders.vendorId)).where(eq21(orders.id, orderId));
   if (!o) return null;
-  const lines = await db.select({ l: orderLines, name: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq20(products.id, orderLines.productId)).where(eq20(orderLines.orderId, orderId));
-  const [owner] = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq20(users.id, restaurantMembers.userId)).where(and18(eq20(restaurantMembers.restaurantId, o.r.id), eq20(restaurantMembers.role, "owner")));
+  const lines = await db.select({ l: orderLines, name: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq21(products.id, orderLines.productId)).where(eq21(orderLines.orderId, orderId));
+  const [owner] = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq21(users.id, restaurantMembers.userId)).where(and19(eq21(restaurantMembers.restaurantId, o.r.id), eq21(restaurantMembers.role, "owner")));
   const STATUS = { envoyee: "En attente de confirmation", confirmee: "Confirm\xE9e", livree: "Livr\xE9e", livree_partiel: "Livr\xE9e avec \xE9carts", annulee: "Annul\xE9e" };
   let vendor = { name: o.v?.name ?? "Fournisseur", city: o.v?.city, email: o.v?.contactEmail, phone: o.v?.contactPhone ?? o.v?.whatsapp };
   if (!o.v) {
-    const [s] = await db.select().from(suppliers).where(eq20(suppliers.id, o.order.supplierId));
+    const [s] = await db.select().from(suppliers).where(eq21(suppliers.id, o.order.supplierId));
     if (s) vendor = { name: s.name, city: s.city, email: s.email, phone: s.phone ?? s.whatsapp };
   }
   return { doc: orderPdf({
@@ -7198,9 +7599,9 @@ async function buildOrderDoc(orderId, kind) {
     notes: o.order.notes,
     vendor,
     restaurant: { name: o.r.name, address: o.r.address, city: o.r.city, email: owner?.email },
-    lines: lines.map((x) => ({ productName: x.name, packLabel: x.l.packLabel, packs: x.l.packs, quantity: n8(x.l.quantity), unit: x.unit, unitPriceEur: n8(x.l.unitPriceEur), lineTotalEur: n8(x.l.lineTotalEur) })),
-    totalEur: n8(o.order.totalEur),
-    deliveryFeeEur: n8(o.order.deliveryFeeEur)
+    lines: lines.map((x) => ({ productName: x.name, packLabel: x.l.packLabel, packs: x.l.packs, quantity: n9(x.l.quantity), unit: x.unit, unitPriceEur: n9(x.l.unitPriceEur), lineTotalEur: n9(x.l.lineTotalEur) })),
+    totalEur: n9(o.order.totalEur),
+    deliveryFeeEur: n9(o.order.deliveryFeeEur)
   }), order: o.order };
 }
 vendorRoutes.get("/vendor/orders/:id/pdf", async (c) => {
@@ -7214,7 +7615,7 @@ vendorRoutes.get("/vendor/orders/:id/pdf", async (c) => {
 init_order_events();
 init_orders();
 init_restaurant();
-var manageRoutes = new Hono11();
+var manageRoutes = new Hono12();
 manageRoutes.use("*", requireAuth, requireRestaurant);
 manageRoutes.on(["POST"], "/suppliers", requireMinRole("manager"));
 manageRoutes.on(["PUT"], "/suppliers/:id", requireMinRole("manager"));
@@ -7229,7 +7630,7 @@ manageRoutes.on(["PUT"], "/orders/:id", requireMinRole("manager"));
 manageRoutes.on(["PUT"], "/orders/:id/lines", requireMinRole("manager"));
 manageRoutes.on(["POST"], "/orders/:id/proposal", requireMinRole("manager"));
 manageRoutes.on(["POST"], "/discrepancies/:id/resolve", requireMinRole("manager"));
-var n9 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var n10 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var CHANNELS = ["email", "whatsapp", "telephone", "plateforme"];
 var MAX_PACKS_PER_LINE3 = 1e3;
 var CATEGORIES = ["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"];
@@ -7262,16 +7663,16 @@ manageRoutes.put("/suppliers/:id", async (c) => {
     minOrderEur: d.minOrderEur !== void 0 ? d.minOrderEur.toFixed(2) : void 0,
     deliveryFeeEur: d.deliveryFeeEur !== void 0 ? d.deliveryFeeEur.toFixed(2) : void 0,
     rating: d.rating === null ? null : d.rating !== void 0 ? d.rating.toFixed(1) : void 0
-  }).where(and19(eq21(suppliers.id, c.req.param("id")), eq21(suppliers.restaurantId, rid))).returning();
+  }).where(and20(eq22(suppliers.id, c.req.param("id")), eq22(suppliers.restaurantId, rid))).returning();
   if (!row) return c.json({ error: "Fournisseur introuvable" }, 404);
   return c.json(row);
 });
 manageRoutes.delete("/suppliers/:id", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const [row] = await db.update(suppliers).set({ isActive: false }).where(and19(eq21(suppliers.id, c.req.param("id")), eq21(suppliers.restaurantId, rid))).returning({ id: suppliers.id });
+  const [row] = await db.update(suppliers).set({ isActive: false }).where(and20(eq22(suppliers.id, c.req.param("id")), eq22(suppliers.restaurantId, rid))).returning({ id: suppliers.id });
   if (!row) return c.json({ error: "Fournisseur introuvable" }, 404);
-  await db.update(supplierOffers).set({ inStock: false }).where(eq21(supplierOffers.supplierId, row.id));
+  await db.update(supplierOffers).set({ inStock: false }).where(eq22(supplierOffers.supplierId, row.id));
   return c.json({ ok: true });
 });
 var offerBody = z11.object({ productId: z11.string().uuid(), packLabel: z11.string().min(1), packQty: z11.number().positive(), packPrice: z11.number().positive(), inStock: z11.boolean().default(true) });
@@ -7281,7 +7682,7 @@ manageRoutes.post("/suppliers/:id/offers", async (c) => {
   const supplierId = c.req.param("id");
   const body3 = offerBody.safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
-  const [sup] = await db.select({ id: suppliers.id }).from(suppliers).where(and19(eq21(suppliers.id, supplierId), eq21(suppliers.restaurantId, rid)));
+  const [sup] = await db.select({ id: suppliers.id }).from(suppliers).where(and20(eq22(suppliers.id, supplierId), eq22(suppliers.restaurantId, rid)));
   if (!sup) return c.json({ error: "Fournisseur introuvable" }, 404);
   const d = body3.data;
   const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid, supplierId, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, lastSeenAt: /* @__PURE__ */ new Date() } }).returning();
@@ -7295,7 +7696,7 @@ manageRoutes.put("/offers/:id", async (c) => {
   const body3 = offerBody.omit({ productId: true }).partial().safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const d = body3.data;
-  const [before] = await db.select().from(supplierOffers).where(and19(eq21(supplierOffers.id, c.req.param("id")), eq21(supplierOffers.restaurantId, rid)));
+  const [before] = await db.select().from(supplierOffers).where(and20(eq22(supplierOffers.id, c.req.param("id")), eq22(supplierOffers.restaurantId, rid)));
   if (!before) return c.json({ error: "Offre introuvable" }, 404);
   const [offer] = await db.update(supplierOffers).set({
     packLabel: d.packLabel,
@@ -7303,15 +7704,15 @@ manageRoutes.put("/offers/:id", async (c) => {
     lastSeenAt: /* @__PURE__ */ new Date(),
     packQty: d.packQty !== void 0 ? d.packQty.toFixed(3) : void 0,
     packPriceEur: d.packPrice !== void 0 ? d.packPrice.toFixed(2) : void 0
-  }).where(eq21(supplierOffers.id, before.id)).returning();
-  const unitBefore = n9(before.packPriceEur) / n9(before.packQty), unitAfter = n9(offer.packPriceEur) / n9(offer.packQty);
+  }).where(eq22(supplierOffers.id, before.id)).returning();
+  const unitBefore = n10(before.packPriceEur) / n10(before.packQty), unitAfter = n10(offer.packPriceEur) / n10(offer.packQty);
   if (Math.abs(unitAfter - unitBefore) > 1e-4) await db.insert(priceHistory).values({ restaurantId: rid, offerId: offer.id, unitPriceEur: unitAfter.toFixed(4), source: "manuel" });
   return c.json({ ...offer, priceChangedPct: unitBefore > 0 ? Math.round((unitAfter - unitBefore) / unitBefore * 1e3) / 10 : null });
 });
 manageRoutes.delete("/offers/:id", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const [row] = await db.delete(supplierOffers).where(and19(eq21(supplierOffers.id, c.req.param("id")), eq21(supplierOffers.restaurantId, rid))).returning({ id: supplierOffers.id });
+  const [row] = await db.delete(supplierOffers).where(and20(eq22(supplierOffers.id, c.req.param("id")), eq22(supplierOffers.restaurantId, rid))).returning({ id: supplierOffers.id });
   if (!row) return c.json({ error: "Offre introuvable" }, 404);
   return c.json({ ok: true });
 });
@@ -7319,11 +7720,11 @@ manageRoutes.get("/prices/:productId/history", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
   const days2 = Math.min(365, Number(c.req.query("days")) || 90);
-  const rows = await db.select({ offerId: priceHistory.offerId, supplierId: supplierOffers.supplierId, supplierName: suppliers.name, packLabel: supplierOffers.packLabel, unitPrice: priceHistory.unitPriceEur, recordedAt: priceHistory.recordedAt, source: priceHistory.source }).from(priceHistory).innerJoin(supplierOffers, eq21(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq21(suppliers.id, supplierOffers.supplierId)).where(and19(eq21(priceHistory.restaurantId, rid), eq21(supplierOffers.productId, c.req.param("productId")), gte8(priceHistory.recordedAt, new Date(Date.now() - days2 * 864e5)))).orderBy(priceHistory.recordedAt);
+  const rows = await db.select({ offerId: priceHistory.offerId, supplierId: supplierOffers.supplierId, supplierName: suppliers.name, packLabel: supplierOffers.packLabel, unitPrice: priceHistory.unitPriceEur, recordedAt: priceHistory.recordedAt, source: priceHistory.source }).from(priceHistory).innerJoin(supplierOffers, eq22(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq22(suppliers.id, supplierOffers.supplierId)).where(and20(eq22(priceHistory.restaurantId, rid), eq22(supplierOffers.productId, c.req.param("productId")), gte9(priceHistory.recordedAt, new Date(Date.now() - days2 * 864e5)))).orderBy(priceHistory.recordedAt);
   const series = /* @__PURE__ */ new Map();
   for (const r of rows) {
     if (!series.has(r.offerId)) series.set(r.offerId, { offerId: r.offerId, supplierId: r.supplierId, supplierName: r.supplierName, packLabel: r.packLabel, points: [] });
-    series.get(r.offerId).points.push({ at: r.recordedAt.toISOString(), price: n9(r.unitPrice), source: r.source });
+    series.get(r.offerId).points.push({ at: r.recordedAt.toISOString(), price: n10(r.unitPrice), source: r.source });
   }
   const out = [...series.values()].map((s) => {
     const first = s.points[0].price, last = s.points[s.points.length - 1].price;
@@ -7360,10 +7761,10 @@ manageRoutes.put("/recipes/:id", async (c) => {
     isActive: d.isActive,
     sellingPriceEur: d.sellingPriceEur === null ? null : d.sellingPriceEur !== void 0 ? d.sellingPriceEur.toFixed(2) : void 0,
     targetMarginPct: d.targetMarginPct !== void 0 ? d.targetMarginPct.toFixed(2) : void 0
-  }).where(and19(eq21(recipes.id, c.req.param("id")), eq21(recipes.restaurantId, rid))).returning();
+  }).where(and20(eq22(recipes.id, c.req.param("id")), eq22(recipes.restaurantId, rid))).returning();
   if (!r) return c.json({ error: "Recette introuvable" }, 404);
   if (d.ingredients) {
-    await db.delete(recipeIngredients).where(eq21(recipeIngredients.recipeId, r.id));
+    await db.delete(recipeIngredients).where(eq22(recipeIngredients.recipeId, r.id));
     await db.insert(recipeIngredients).values(d.ingredients.map((i) => ({ recipeId: r.id, productId: i.productId, quantity: i.quantity.toFixed(4) })));
     await db.insert(inventoryItems).values(d.ingredients.map((i) => ({ restaurantId: rid, productId: i.productId, quantity: "0", criticalLevel: "0" }))).onConflictDoNothing();
   }
@@ -7372,7 +7773,7 @@ manageRoutes.put("/recipes/:id", async (c) => {
 manageRoutes.delete("/recipes/:id", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const [r] = await db.delete(recipes).where(and19(eq21(recipes.id, c.req.param("id")), eq21(recipes.restaurantId, rid))).returning({ id: recipes.id });
+  const [r] = await db.delete(recipes).where(and20(eq22(recipes.id, c.req.param("id")), eq22(recipes.restaurantId, rid))).returning({ id: recipes.id });
   if (!r) return c.json({ error: "Recette introuvable" }, 404);
   return c.json({ ok: true });
 });
@@ -7387,14 +7788,14 @@ manageRoutes.put("/stock/:itemId", async (c) => {
     targetLevel: d.targetLevel === null ? null : d.targetLevel !== void 0 ? d.targetLevel.toFixed(3) : void 0,
     preferredSupplierId: d.preferredSupplierId,
     updatedAt: /* @__PURE__ */ new Date()
-  }).where(and19(eq21(inventoryItems.id, c.req.param("itemId")), eq21(inventoryItems.restaurantId, rid))).returning();
+  }).where(and20(eq22(inventoryItems.id, c.req.param("itemId")), eq22(inventoryItems.restaurantId, rid))).returning();
   if (!row) return c.json({ error: "Article introuvable" }, 404);
   return c.json(row);
 });
 manageRoutes.delete("/stock/:itemId", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const [row] = await db.delete(inventoryItems).where(and19(eq21(inventoryItems.id, c.req.param("itemId")), eq21(inventoryItems.restaurantId, rid))).returning({ id: inventoryItems.id });
+  const [row] = await db.delete(inventoryItems).where(and20(eq22(inventoryItems.id, c.req.param("itemId")), eq22(inventoryItems.restaurantId, rid))).returning({ id: inventoryItems.id });
   if (!row) return c.json({ error: "Article introuvable" }, 404);
   return c.json({ ok: true });
 });
@@ -7405,20 +7806,20 @@ manageRoutes.post("/stock/inventory", async (c) => {
   const body3 = z11.object({ counts: z11.array(z11.object({ itemId: z11.string().uuid(), quantity: z11.number().nonnegative() })).min(1), note: z11.string().optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const ids = body3.data.counts.map((x) => x.itemId);
-  const items = await db.select().from(inventoryItems).where(and19(eq21(inventoryItems.restaurantId, rid), inArray9(inventoryItems.id, ids)));
+  const items = await db.select().from(inventoryItems).where(and20(eq22(inventoryItems.restaurantId, rid), inArray10(inventoryItems.id, ids)));
   const now = /* @__PURE__ */ new Date();
   let adjusted = 0;
   let totalDelta = 0;
   for (const cnt of body3.data.counts) {
     const it = items.find((i) => i.id === cnt.itemId);
     if (!it) continue;
-    const delta = cnt.quantity - n9(it.quantity);
+    const delta = cnt.quantity - n10(it.quantity);
     if (Math.abs(delta) > 5e-4) {
       await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: it.id, type: "ajustement", quantity: delta.toFixed(3), note: body3.data.note ?? "Inventaire", createdBy: user.id });
       adjusted++;
       totalDelta += delta;
     }
-    await db.update(inventoryItems).set({ quantity: cnt.quantity.toFixed(3), lastCountedAt: now, updatedAt: now }).where(eq21(inventoryItems.id, it.id));
+    await db.update(inventoryItems).set({ quantity: cnt.quantity.toFixed(3), lastCountedAt: now, updatedAt: now }).where(eq22(inventoryItems.id, it.id));
   }
   return c.json({ counted: body3.data.counts.length, adjusted, totalDelta: Math.round(totalDelta * 1e3) / 1e3 });
 });
@@ -7431,10 +7832,10 @@ manageRoutes.get("/orders/:id/message", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
   const user = c.get("user");
-  const [row] = await db.select({ order: orders, supplier: suppliers }).from(orders).innerJoin(suppliers, eq21(suppliers.id, orders.supplierId)).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.restaurantId, rid)));
+  const [row] = await db.select({ order: orders, supplier: suppliers }).from(orders).innerJoin(suppliers, eq22(suppliers.id, orders.supplierId)).where(and20(eq22(orders.id, c.req.param("id")), eq22(orders.restaurantId, rid)));
   if (!row) return c.json({ error: "Commande introuvable" }, 404);
-  const [restaurant] = await db.select().from(restaurants).where(eq21(restaurants.id, rid));
-  const lines = await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq21(products.id, orderLines.productId)).where(eq21(orderLines.orderId, row.order.id));
+  const [restaurant] = await db.select().from(restaurants).where(eq22(restaurants.id, rid));
+  const lines = await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq22(products.id, orderLines.productId)).where(eq22(orderLines.orderId, row.order.id));
   const msg = buildOrderMessage({
     reference: row.order.reference,
     restaurantName: restaurant.name,
@@ -7443,9 +7844,9 @@ manageRoutes.get("/orders/:id/message", async (c) => {
     supplier: { name: row.supplier.name, contactName: row.supplier.contactName, email: row.supplier.email, whatsapp: row.supplier.whatsapp ?? row.supplier.phone },
     expectedAt: row.order.expectedAt,
     notes: row.order.notes,
-    total: n9(row.order.totalEur),
-    deliveryFee: n9(row.order.deliveryFeeEur),
-    lines: lines.map(({ line, productName, unit: unit2 }) => ({ productName, packLabel: line.packLabel, packs: line.packs, quantity: n9(line.quantity), unit: unit2, lineTotal: n9(line.lineTotalEur) }))
+    total: n10(row.order.totalEur),
+    deliveryFee: n10(row.order.deliveryFeeEur),
+    lines: lines.map(({ line, productName, unit: unit2 }) => ({ productName, packLabel: line.packLabel, packs: line.packs, quantity: n10(line.quantity), unit: unit2, lineTotal: n10(line.lineTotalEur) }))
   });
   return c.json(msg);
 });
@@ -7454,7 +7855,7 @@ manageRoutes.put("/orders/:id", async (c) => {
   const db = await getDb();
   const body3 = z11.object({ status: z11.enum(["preparee", "envoyee", "confirmee", "annulee"]).optional(), expectedAt: z11.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), notes: z11.string().max(2e3).nullable().optional(), channel: z11.enum(CHANNELS).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
-  const [cur] = await db.select().from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.restaurantId, rid)));
+  const [cur] = await db.select().from(orders).where(and20(eq22(orders.id, c.req.param("id")), eq22(orders.restaurantId, rid)));
   if (!cur) return c.json({ error: "Commande introuvable" }, 404);
   if (body3.data.status) {
     const refusal = checkStatusChange(cur.status, body3.data.status);
@@ -7463,7 +7864,7 @@ manageRoutes.put("/orders/:id", async (c) => {
     return c.json({ error: "Commande d\xE9j\xE0 r\xE9ceptionn\xE9e : elle n'est plus modifiable.", code: "order_already_received" }, 409);
   }
   const d = body3.data;
-  const [o] = await db.update(orders).set({ status: d.status, expectedAt: d.expectedAt, notes: d.notes, channel: d.channel, sentAt: d.status === "envoyee" && !cur.sentAt ? /* @__PURE__ */ new Date() : void 0 }).where(eq21(orders.id, cur.id)).returning();
+  const [o] = await db.update(orders).set({ status: d.status, expectedAt: d.expectedAt, notes: d.notes, channel: d.channel, sentAt: d.status === "envoyee" && !cur.sentAt ? /* @__PURE__ */ new Date() : void 0 }).where(eq22(orders.id, cur.id)).returning();
   if (d.status && d.status !== cur.status) void logOrderEvent(cur.id, d.status === "annulee" ? "cancelled" : d.status === "confirmee" ? "confirmed" : "note", `Statut modifi\xE9 par le restaurant : ${cur.status} \u2192 ${d.status}`, "restaurant");
   return c.json({ order: o });
 });
@@ -7472,16 +7873,16 @@ manageRoutes.put("/orders/:id/lines", async (c) => {
   const db = await getDb();
   const body3 = z11.object({ lines: z11.array(z11.object({ lineId: z11.string().uuid(), packs: z11.number().int().nonnegative().max(MAX_PACKS_PER_LINE3) })).min(1) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
-  const [cur] = await db.select().from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.restaurantId, rid)));
+  const [cur] = await db.select().from(orders).where(and20(eq22(orders.id, c.req.param("id")), eq22(orders.restaurantId, rid)));
   if (!cur) return c.json({ error: "Commande introuvable" }, 404);
   const refusal = checkLineEdit(cur);
   if (refusal) return c.json({ error: refusal.error, code: refusal.code }, refusal.status);
   if (cur.status !== "preparee") return c.json({ error: "Seule une commande \xAB pr\xE9par\xE9e \xBB peut \xEAtre modifi\xE9e" }, 409);
-  const lines = await db.select().from(orderLines).where(eq21(orderLines.orderId, cur.id));
-  const asked = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq21(products.id, orderLines.productId)).where(eq21(orderLines.orderId, cur.id));
+  const lines = await db.select().from(orderLines).where(eq22(orderLines.orderId, cur.id));
+  const asked = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq22(products.id, orderLines.productId)).where(eq22(orderLines.orderId, cur.id));
   const outOfRange = await assertPlausibleQuantity(rid, asked.filter(({ line }) => body3.data.lines.some((x) => x.lineId === line.id)).map(({ line, product }) => {
     const packs = body3.data.lines.find((x) => x.lineId === line.id).packs;
-    const packQty = n9(line.quantity) / Math.max(1, line.packs) || 1;
+    const packQty = n10(line.quantity) / Math.max(1, line.packs) || 1;
     return { productId: product.id, productName: product.name, unit: product.baseUnit, category: product.category, packQty, packs, quantity: packs * packQty };
   }));
   if (outOfRange) return c.json(outOfRange, 400);
@@ -7489,29 +7890,29 @@ manageRoutes.put("/orders/:id/lines", async (c) => {
     const upd = body3.data.lines.find((x) => x.lineId === l.id);
     if (!upd) continue;
     if (upd.packs === 0) {
-      await db.delete(orderLines).where(eq21(orderLines.id, l.id));
+      await db.delete(orderLines).where(eq22(orderLines.id, l.id));
       continue;
     }
-    const packQty = n9(l.quantity) / l.packs;
-    const packPrice = n9(l.lineTotalEur) / l.packs;
-    await db.update(orderLines).set({ packs: upd.packs, quantity: (upd.packs * packQty).toFixed(3), lineTotalEur: (upd.packs * packPrice).toFixed(2) }).where(eq21(orderLines.id, l.id));
+    const packQty = n10(l.quantity) / l.packs;
+    const packPrice = n10(l.lineTotalEur) / l.packs;
+    await db.update(orderLines).set({ packs: upd.packs, quantity: (upd.packs * packQty).toFixed(3), lineTotalEur: (upd.packs * packPrice).toFixed(2) }).where(eq22(orderLines.id, l.id));
   }
-  const [{ total, count }] = await db.select({ total: sql15`coalesce(sum(${orderLines.lineTotalEur}),0)`, count: sql15`count(*)` }).from(orderLines).where(eq21(orderLines.orderId, cur.id));
-  if (n9(count) === 0) {
-    await db.update(orders).set({ status: "annulee", totalEur: "0" }).where(eq21(orders.id, cur.id));
+  const [{ total, count }] = await db.select({ total: sql16`coalesce(sum(${orderLines.lineTotalEur}),0)`, count: sql16`count(*)` }).from(orderLines).where(eq22(orderLines.orderId, cur.id));
+  if (n10(count) === 0) {
+    await db.update(orders).set({ status: "annulee", totalEur: "0" }).where(eq22(orders.id, cur.id));
     return c.json({ ok: true, cancelled: true });
   }
-  const [o] = await db.update(orders).set({ totalEur: n9(total).toFixed(2) }).where(eq21(orders.id, cur.id)).returning();
+  const [o] = await db.update(orders).set({ totalEur: n10(total).toFixed(2) }).where(eq22(orders.id, cur.id)).returning();
   return c.json({ order: o });
 });
 manageRoutes.get("/discrepancies", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
   const onlyOpen = c.req.query("all") !== "1";
-  const rows = await db.select({ d: deliveryDiscrepancies, delivery: deliveries, order: orders, supplierName: suppliers.name, productName: products.name, unit: products.baseUnit, unitPrice: orderLines.unitPriceEur }).from(deliveryDiscrepancies).innerJoin(deliveries, eq21(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orders, eq21(orders.id, deliveries.orderId)).innerJoin(suppliers, eq21(suppliers.id, orders.supplierId)).innerJoin(orderLines, eq21(orderLines.id, deliveryDiscrepancies.orderLineId)).innerJoin(products, eq21(products.id, orderLines.productId)).where(onlyOpen ? and19(eq21(deliveries.restaurantId, rid), eq21(deliveryDiscrepancies.resolved, false)) : eq21(deliveries.restaurantId, rid)).orderBy(desc10(deliveries.receivedAt)).limit(200);
+  const rows = await db.select({ d: deliveryDiscrepancies, delivery: deliveries, order: orders, supplierName: suppliers.name, productName: products.name, unit: products.baseUnit, unitPrice: orderLines.unitPriceEur }).from(deliveryDiscrepancies).innerJoin(deliveries, eq22(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orders, eq22(orders.id, deliveries.orderId)).innerJoin(suppliers, eq22(suppliers.id, orders.supplierId)).innerJoin(orderLines, eq22(orderLines.id, deliveryDiscrepancies.orderLineId)).innerJoin(products, eq22(products.id, orderLines.productId)).where(onlyOpen ? and20(eq22(deliveries.restaurantId, rid), eq22(deliveryDiscrepancies.resolved, false)) : eq22(deliveries.restaurantId, rid)).orderBy(desc10(deliveries.receivedAt)).limit(200);
   const items = rows.map((r) => {
-    const missing = n9(r.d.orderedQty) - n9(r.d.receivedQty);
-    return { id: r.d.id, deliveryId: r.delivery.id, orderId: r.order.id, vendorId: r.order.vendorId, reference: r.order.reference, supplierName: r.supplierName, productName: r.productName, unit: r.unit, ordered: n9(r.d.orderedQty), received: n9(r.d.receivedQty), missing, valueEur: Math.round(missing * n9(r.unitPrice) * 100) / 100, reason: r.d.reason, resolved: r.d.resolved, receivedAt: r.delivery.receivedAt, isLate: r.delivery.isLate, claimMessage: r.d.claimMessage };
+    const missing = n10(r.d.orderedQty) - n10(r.d.receivedQty);
+    return { id: r.d.id, deliveryId: r.delivery.id, orderId: r.order.id, vendorId: r.order.vendorId, reference: r.order.reference, supplierName: r.supplierName, productName: r.productName, unit: r.unit, ordered: n10(r.d.orderedQty), received: n10(r.d.receivedQty), missing, valueEur: Math.round(missing * n10(r.unitPrice) * 100) / 100, reason: r.d.reason, resolved: r.d.resolved, receivedAt: r.delivery.receivedAt, isLate: r.delivery.isLate, claimMessage: r.d.claimMessage };
   });
   const openValue = items.filter((i) => !i.resolved && i.missing > 0).reduce((a, i) => a + i.valueEur, 0);
   return c.json({ items, openValue: Math.round(openValue * 100) / 100 });
@@ -7521,16 +7922,16 @@ manageRoutes.post("/discrepancies/:id/resolve", async (c) => {
   const db = await getDb();
   const body3 = z11.object({ resolution: z11.enum(["avoir", "relivraison", "abandon"]).default("avoir"), note: z11.string().optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
-  const [row] = await db.select({ d: deliveryDiscrepancies, rid: deliveries.restaurantId }).from(deliveryDiscrepancies).innerJoin(deliveries, eq21(deliveries.id, deliveryDiscrepancies.deliveryId)).where(eq21(deliveryDiscrepancies.id, c.req.param("id")));
+  const [row] = await db.select({ d: deliveryDiscrepancies, rid: deliveries.restaurantId }).from(deliveryDiscrepancies).innerJoin(deliveries, eq22(deliveries.id, deliveryDiscrepancies.deliveryId)).where(eq22(deliveryDiscrepancies.id, c.req.param("id")));
   if (!row || row.rid !== rid) return c.json({ error: "\xC9cart introuvable" }, 404);
-  await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `${row.d.reason ?? "ecart"} \u2192 ${body3.data.resolution}${body3.data.note ? ` (${body3.data.note})` : ""}` }).where(eq21(deliveryDiscrepancies.id, row.d.id));
-  await db.update(alerts).set({ isRead: true }).where(and19(eq21(alerts.restaurantId, rid), eq21(alerts.dedupeKey, `ecart:${row.d.deliveryId}`)));
+  await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `${row.d.reason ?? "ecart"} \u2192 ${body3.data.resolution}${body3.data.note ? ` (${body3.data.note})` : ""}` }).where(eq22(deliveryDiscrepancies.id, row.d.id));
+  await db.update(alerts).set({ isRead: true }).where(and20(eq22(alerts.restaurantId, rid), eq22(alerts.dedupeKey, `ecart:${row.d.deliveryId}`)));
   return c.json({ ok: true });
 });
 manageRoutes.get("/orders/:id/timeline", async (c) => {
   const db = await getDb();
   const rid = c.get("restaurantId");
-  const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, deliverySlot: orders.deliverySlot, driverName: orders.driverName, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt, shippedAt: orders.shippedAt, preparedAt: orders.preparedAt, expectedAt: orders.expectedAt, status: orders.status }).from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.restaurantId, rid)));
+  const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, deliverySlot: orders.deliverySlot, driverName: orders.driverName, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt, shippedAt: orders.shippedAt, preparedAt: orders.preparedAt, expectedAt: orders.expectedAt, status: orders.status }).from(orders).where(and20(eq22(orders.id, c.req.param("id")), eq22(orders.restaurantId, rid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   return c.json({ order: o, events: await orderTimeline(o.id) });
 });
@@ -7540,12 +7941,12 @@ manageRoutes.post("/orders/:id/proposal", async (c) => {
   const db = await getDb();
   const rid = c.get("restaurantId");
   const user = c.get("user");
-  const [o] = await db.select().from(orders).where(and19(eq21(orders.id, c.req.param("id")), eq21(orders.restaurantId, rid)));
+  const [o] = await db.select().from(orders).where(and20(eq22(orders.id, c.req.param("id")), eq22(orders.restaurantId, rid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   if (!o.proposal || o.status !== "envoyee") return c.json({ error: "Aucune proposition en attente" }, 400);
-  const [v] = o.vendorId ? await db.select().from(vendors).where(eq21(vendors.id, o.vendorId)) : [];
+  const [v] = o.vendorId ? await db.select().from(vendors).where(eq22(vendors.id, o.vendorId)) : [];
   if (body3.data.action === "decline") {
-    const [upd2] = await db.update(orders).set({ status: "annulee", vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: "Proposition de modification refus\xE9e par le restaurant", proposal: null }).where(eq21(orders.id, o.id)).returning();
+    const [upd2] = await db.update(orders).set({ status: "annulee", vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: "Proposition de modification refus\xE9e par le restaurant", proposal: null }).where(eq22(orders.id, o.id)).returning();
     void logOrderEvent(o.id, "cancelled", "Proposition refus\xE9e par le restaurant \u2014 commande annul\xE9e", "restaurant");
     if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `\u274C ${o.reference} : proposition refus\xE9e, commande annul\xE9e`, text: `Le restaurant a refus\xE9 votre proposition de modification pour la commande ${o.reference}. La commande est annul\xE9e.`, html: `<p>Le restaurant a refus\xE9 votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annul\xE9e.</p>`, tags: { type: "order_proposal" } });
     return c.json({ order: upd2 });
@@ -7553,10 +7954,10 @@ manageRoutes.post("/orders/:id/proposal", async (c) => {
   const p = o.proposal;
   for (const l of p.lines) {
     if (l.newPacks !== l.packs) {
-      if (l.newPacks === 0) await db.delete(orderLines).where(eq21(orderLines.id, l.lineId));
+      if (l.newPacks === 0) await db.delete(orderLines).where(eq22(orderLines.id, l.lineId));
       else {
-        const [cur] = await db.select().from(orderLines).where(eq21(orderLines.id, l.lineId));
-        if (cur) await db.update(orderLines).set({ packs: l.newPacks, quantity: (Number(cur.quantity) / Number(cur.packs) * l.newPacks).toFixed(3), lineTotalEur: l.newLineTotalEur.toFixed(2) }).where(eq21(orderLines.id, l.lineId));
+        const [cur] = await db.select().from(orderLines).where(eq22(orderLines.id, l.lineId));
+        if (cur) await db.update(orderLines).set({ packs: l.newPacks, quantity: (Number(cur.quantity) / Number(cur.packs) * l.newPacks).toFixed(3), lineTotalEur: l.newLineTotalEur.toFixed(2) }).where(eq22(orderLines.id, l.lineId));
       }
     }
     if (l.replacement) {
@@ -7564,7 +7965,7 @@ manageRoutes.post("/orders/:id/proposal", async (c) => {
       await db.insert(orderLines).values({ orderId: o.id, productId: r.productId, packLabel: r.packLabel, packs: r.packs, quantity: (r.packs * r.packQty).toFixed(3), unitPriceEur: (r.packPriceEur / Math.max(1e-3, r.packQty)).toFixed(4), lineTotalEur: r.lineTotalEur.toFixed(2) });
     }
   }
-  const [upd] = await db.update(orders).set({ status: "confirmee", totalEur: p.newTotalEur.toFixed(2), expectedAt: p.expectedAt ?? o.expectedAt, vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: p.note ?? "Modification accept\xE9e par le restaurant", proposal: null }).where(eq21(orders.id, o.id)).returning();
+  const [upd] = await db.update(orders).set({ status: "confirmee", totalEur: p.newTotalEur.toFixed(2), expectedAt: p.expectedAt ?? o.expectedAt, vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: p.note ?? "Modification accept\xE9e par le restaurant", proposal: null }).where(eq22(orders.id, o.id)).returning();
   if (v) {
     const amount = p.newTotalEur * Number(v.commissionPct) / 100;
     await db.insert(commissions).values({ vendorId: v.id, orderId: o.id, orderTotalEur: p.newTotalEur.toFixed(2), pct: v.commissionPct, amountEur: amount.toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
@@ -7580,11 +7981,11 @@ init_public();
 // apps/api/src/routes/storefront.ts
 init_reliability();
 init_src();
-import { Hono as Hono12 } from "hono";
+import { Hono as Hono13 } from "hono";
 import { z as z12 } from "zod";
-import { and as and20, eq as eq22, isNull as isNull8, sql as sql16 } from "drizzle-orm";
-var storefrontRoutes = new Hono12();
-var n10 = (v) => Number(v ?? 0);
+import { and as and21, eq as eq23, isNull as isNull8, sql as sql17 } from "drizzle-orm";
+var storefrontRoutes = new Hono13();
+var n11 = (v) => Number(v ?? 0);
 var slugify3 = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 storefrontRoutes.get("/public/catalog", async (c) => {
   const db = await getDb();
@@ -7592,11 +7993,11 @@ storefrontRoutes.get("/public/catalog", async (c) => {
   const cat = c.req.query("category") ?? "";
   const origin = c.req.query("origin") ?? "";
   const rows = await db.select({ id: products.id, name: products.name, aliases: products.aliases, category: products.category, baseUnit: products.baseUnit, origin: products.origin, imageUrl: products.imageUrl }).from(products).where(isNull8(products.restaurantId)).orderBy(products.category, products.name);
-  const best = await db.select({ productId: vendorOffers.productId, unit: sql16`min(${vendorOffers.packPriceEur} / nullif(${vendorOffers.packQty}, 0))`, offers: sql16`count(*)`, vendors: sql16`count(distinct ${vendorOffers.vendorId})` }).from(vendorOffers).innerJoin(vendors, eq22(vendors.id, vendorOffers.vendorId)).where(and20(eq22(vendorOffers.inStock, true), eq22(vendors.status, "actif"))).groupBy(vendorOffers.productId);
+  const best = await db.select({ productId: vendorOffers.productId, unit: sql17`min(${vendorOffers.packPriceEur} / nullif(${vendorOffers.packQty}, 0))`, offers: sql17`count(*)`, vendors: sql17`count(distinct ${vendorOffers.vendorId})` }).from(vendorOffers).innerJoin(vendors, eq23(vendors.id, vendorOffers.vendorId)).where(and21(eq23(vendorOffers.inStock, true), eq23(vendors.status, "actif"))).groupBy(vendorOffers.productId);
   const bm = new Map(best.map((b) => [b.productId, b]));
   let items = rows.map((p) => {
     const b = bm.get(p.id);
-    return { ...p, slug: slugify3(p.name), fromUnitPrice: b ? Number(Number(b.unit).toFixed(2)) : null, offerCount: b ? n10(b.offers) : 0, vendorCount: b ? n10(b.vendors) : 0 };
+    return { ...p, slug: slugify3(p.name), fromUnitPrice: b ? Number(Number(b.unit).toFixed(2)) : null, offerCount: b ? n11(b.offers) : 0, vendorCount: b ? n11(b.vendors) : 0 };
   });
   if (cat) items = items.filter((p) => p.category === cat);
   if (origin) items = items.filter((p) => (p.origin ?? "").toLowerCase().includes(origin.toLowerCase()));
@@ -7612,35 +8013,35 @@ storefrontRoutes.get("/public/catalog", async (c) => {
 storefrontRoutes.get("/public/products/:id", async (c) => {
   const db = await getDb();
   const id = c.req.param("id");
-  const [p] = await db.select().from(products).where(and20(eq22(products.id, id), isNull8(products.restaurantId)));
+  const [p] = await db.select().from(products).where(and21(eq23(products.id, id), isNull8(products.restaurantId)));
   if (!p) return c.json({ error: "Produit introuvable" }, 404);
-  const rows = await db.select({ o: vendorOffers, v: vendors }).from(vendorOffers).innerJoin(vendors, eq22(vendors.id, vendorOffers.vendorId)).where(and20(eq22(vendorOffers.productId, id), eq22(vendors.status, "actif")));
+  const rows = await db.select({ o: vendorOffers, v: vendors }).from(vendorOffers).innerJoin(vendors, eq23(vendors.id, vendorOffers.vendorId)).where(and21(eq23(vendorOffers.productId, id), eq23(vendors.status, "actif")));
   const offers = rows.map(({ o, v }) => ({
     id: o.id,
     packLabel: o.packLabel,
-    packQty: n10(o.packQty),
-    packPriceEur: n10(o.packPriceEur),
-    unitPrice: Number((n10(o.packPriceEur) / n10(o.packQty)).toFixed(2)),
+    packQty: n11(o.packQty),
+    packPriceEur: n11(o.packPriceEur),
+    unitPrice: Number((n11(o.packPriceEur) / n11(o.packQty)).toFixed(2)),
     inStock: o.inStock,
     updatedAt: o.updatedAt,
-    vendor: { id: v.id, name: v.name, slug: v.slug, city: v.city, deliveryZones: v.deliveryZones, leadTimeHours: v.leadTimeHours, minOrderEur: n10(v.minOrderEur), deliveryFeeEur: n10(v.deliveryFeeEur) }
+    vendor: { id: v.id, name: v.name, slug: v.slug, city: v.city, deliveryZones: v.deliveryZones, leadTimeHours: v.leadTimeHours, minOrderEur: n11(v.minOrderEur), deliveryFeeEur: n11(v.deliveryFeeEur) }
   })).sort((a, b) => Number(b.inStock) - Number(a.inStock) || a.unitPrice - b.unitPrice);
-  const similar = await db.select({ id: products.id, name: products.name, category: products.category, baseUnit: products.baseUnit, origin: products.origin }).from(products).where(and20(isNull8(products.restaurantId), eq22(products.category, p.category), sql16`${products.id} <> ${id}`)).limit(8);
+  const similar = await db.select({ id: products.id, name: products.name, category: products.category, baseUnit: products.baseUnit, origin: products.origin }).from(products).where(and21(isNull8(products.restaurantId), eq23(products.category, p.category), sql17`${products.id} <> ${id}`)).limit(8);
   return c.json({ product: { ...p, slug: slugify3(p.name) }, offers, similar: similar.map((s) => ({ ...s, slug: slugify3(s.name) })) });
 });
 storefrontRoutes.get("/public/vendors", async (c) => {
   const db = await getDb();
-  const vs = await db.select().from(vendors).where(eq22(vendors.status, "actif"));
-  const counts = await db.select({ vendorId: vendorOffers.vendorId, offers: sql16`count(*)` }).from(vendorOffers).where(eq22(vendorOffers.inStock, true)).groupBy(vendorOffers.vendorId);
-  const cm = new Map(counts.map((x) => [x.vendorId, n10(x.offers)]));
+  const vs = await db.select().from(vendors).where(eq23(vendors.status, "actif"));
+  const counts = await db.select({ vendorId: vendorOffers.vendorId, offers: sql17`count(*)` }).from(vendorOffers).where(eq23(vendorOffers.inStock, true)).groupBy(vendorOffers.vendorId);
+  const cm = new Map(counts.map((x) => [x.vendorId, n11(x.offers)]));
   const rel = await reliabilityFor(vs.map((v) => v.id));
-  return c.json({ vendors: vs.map((v) => ({ reliability: rel.get(v.id) ?? emptyReliability, id: v.id, name: v.name, slug: v.slug, description: v.description, city: v.city, deliveryZones: v.deliveryZones, categories: v.categories, leadTimeHours: v.leadTimeHours, minOrderEur: n10(v.minOrderEur), deliveryFeeEur: n10(v.deliveryFeeEur), offerCount: cm.get(v.id) ?? 0 })) });
+  return c.json({ vendors: vs.map((v) => ({ reliability: rel.get(v.id) ?? emptyReliability, id: v.id, name: v.name, slug: v.slug, description: v.description, city: v.city, deliveryZones: v.deliveryZones, categories: v.categories, leadTimeHours: v.leadTimeHours, minOrderEur: n11(v.minOrderEur), deliveryFeeEur: n11(v.deliveryFeeEur), offerCount: cm.get(v.id) ?? 0 })) });
 });
 storefrontRoutes.post("/public/product-alert", async (c) => {
   const body3 = z12.object({ productId: z12.string().uuid(), email: z12.string().email(), restaurantName: z12.string().min(2).max(120).optional(), city: z12.string().max(80).optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
-  const [p] = await db.select({ name: products.name }).from(products).where(eq22(products.id, body3.data.productId));
+  const [p] = await db.select({ name: products.name }).from(products).where(eq23(products.id, body3.data.productId));
   if (!p) return c.json({ error: "Produit introuvable" }, 404);
   await db.insert(leads).values({ restaurantName: body3.data.restaurantName ?? "Vitrine", contactName: body3.data.email.split("@")[0], email: body3.data.email, city: body3.data.city ?? null, message: `Alerte produit : ${p.name}`, planInterest: "vitrine", source: "vitrine" });
   return c.json({ ok: true, message: `C'est not\xE9 : vous serez pr\xE9venu d\xE8s qu'un grossiste propose \xAB ${p.name} \xBB.` }, 201);
@@ -7650,14 +8051,14 @@ storefrontRoutes.post("/public/product-alert", async (c) => {
 init_src();
 init_auth();
 init_ops();
-import { Hono as Hono13 } from "hono";
+import { Hono as Hono14 } from "hono";
 import { z as z13 } from "zod";
-import { and as and21, desc as desc11, eq as eq23, ilike as ilike3, isNull as isNull9, or as or3, sql as sql17 } from "drizzle-orm";
+import { and as and22, desc as desc11, eq as eq24, ilike as ilike3, isNull as isNull9, or as or3, sql as sql18 } from "drizzle-orm";
 var isAdmin5 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 var CATS = ["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"];
 var UNITS2 = ["kg", "g", "L", "mL", "piece", "botte", "sac", "carton"];
 var body2 = z13.object({ name: z13.string().min(2).max(120), aliases: z13.array(z13.string().min(1).max(60)).max(30).default([]), category: z13.enum(CATS), baseUnit: z13.enum(UNITS2), origin: z13.string().max(120).nullable().optional(), shelfLifeDays: z13.number().int().positive().nullable().optional(), imageUrl: z13.string().url().nullable().optional().or(z13.literal("")) });
-var referenceAdminRoutes = new Hono13();
+var referenceAdminRoutes = new Hono14();
 referenceAdminRoutes.use("/admin/reference", requireAuth);
 referenceAdminRoutes.use("/admin/reference/*", requireAuth);
 referenceAdminRoutes.use("/admin/reference", async (c, next) => {
@@ -7672,9 +8073,9 @@ referenceAdminRoutes.get("/admin/reference", async (c) => {
   const db = await getDb();
   const q2 = (c.req.query("q") ?? "").trim();
   const cat = c.req.query("category");
-  const where = and21(isNull9(products.restaurantId), cat ? eq23(products.category, cat) : void 0, q2 ? or3(ilike3(products.name, `%${q2}%`), sql17`exists (select 1 from unnest(${products.aliases}) a where a ilike ${"%" + q2 + "%"})`) : void 0);
-  const rows = await db.select({ p: products, offers: sql17`(select count(*) from vendor_offers o where o.product_id = ${products.id})`, tracked: sql17`(select count(*) from inventory_items i where i.product_id = ${products.id})` }).from(products).where(where).orderBy(products.category, products.name).limit(400);
-  const requests = await db.select().from(leads).where(and21(eq23(leads.source, "referentiel"), eq23(leads.status, "nouveau"))).orderBy(desc11(leads.createdAt)).limit(50);
+  const where = and22(isNull9(products.restaurantId), cat ? eq24(products.category, cat) : void 0, q2 ? or3(ilike3(products.name, `%${q2}%`), sql18`exists (select 1 from unnest(${products.aliases}) a where a ilike ${"%" + q2 + "%"})`) : void 0);
+  const rows = await db.select({ p: products, offers: sql18`(select count(*) from vendor_offers o where o.product_id = ${products.id})`, tracked: sql18`(select count(*) from inventory_items i where i.product_id = ${products.id})` }).from(products).where(where).orderBy(products.category, products.name).limit(400);
+  const requests = await db.select().from(leads).where(and22(eq24(leads.source, "referentiel"), eq24(leads.status, "nouveau"))).orderBy(desc11(leads.createdAt)).limit(50);
   return c.json({ products: rows.map((r) => ({ ...r.p, offers: Number(r.offers), tracked: Number(r.tracked) })), requests: requests.map((r) => ({ id: r.id, product: (r.message ?? "").replace(/^Produit manquant : /, ""), from: r.restaurantName, email: r.email, notes: r.notes, createdAt: r.createdAt })), categories: CATS, units: UNITS2 });
 });
 referenceAdminRoutes.post("/admin/reference", async (c) => {
@@ -7682,11 +8083,11 @@ referenceAdminRoutes.post("/admin/reference", async (c) => {
   if (!b.success) return c.json({ error: "Donn\xE9es invalides", details: b.error.flatten() }, 400);
   const db = await getDb();
   const d = b.data;
-  const [dup] = await db.select({ id: products.id, name: products.name }).from(products).where(and21(isNull9(products.restaurantId), ilike3(products.name, d.name)));
+  const [dup] = await db.select({ id: products.id, name: products.name }).from(products).where(and22(isNull9(products.restaurantId), ilike3(products.name, d.name)));
   if (dup) return c.json({ error: `\xAB ${dup.name} \xBB existe d\xE9j\xE0` }, 409);
   const [p] = await db.insert(products).values({ name: d.name, aliases: d.aliases, category: d.category, baseUnit: d.baseUnit, origin: d.origin ?? null, shelfLifeDays: d.shelfLifeDays ?? null, imageUrl: d.imageUrl || null, restaurantId: null }).returning();
   const reqId = c.req.query("request");
-  if (reqId) await db.update(leads).set({ status: "client", notes: `Cr\xE9\xE9 : ${p.name}` }).where(eq23(leads.id, reqId));
+  if (reqId) await db.update(leads).set({ status: "client", notes: `Cr\xE9\xE9 : ${p.name}` }).where(eq24(leads.id, reqId));
   await audit("reference.create", { actorEmail: c.get("user").email, target: p.id, meta: { name: p.name } });
   return c.json({ product: p, message: `\xAB ${p.name} \xBB ajout\xE9 au r\xE9f\xE9rentiel : les grossistes peuvent le proposer et les restaurants le suivre.` }, 201);
 });
@@ -7695,7 +8096,7 @@ referenceAdminRoutes.put("/admin/reference/:id", async (c) => {
   if (!b.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const d = b.data;
-  const [p] = await db.update(products).set({ ...d, imageUrl: d.imageUrl === "" ? null : d.imageUrl }).where(and21(eq23(products.id, c.req.param("id")), isNull9(products.restaurantId))).returning();
+  const [p] = await db.update(products).set({ ...d, imageUrl: d.imageUrl === "" ? null : d.imageUrl }).where(and22(eq24(products.id, c.req.param("id")), isNull9(products.restaurantId))).returning();
   if (!p) return c.json({ error: "Produit introuvable" }, 404);
   await audit("reference.update", { actorEmail: c.get("user").email, target: p.id, meta: d });
   return c.json({ product: p });
@@ -7707,36 +8108,36 @@ referenceAdminRoutes.post("/admin/reference/:id/merge", async (c) => {
   const from = c.req.param("id");
   const into = b.data.into;
   if (from === into) return c.json({ error: "M\xEAme produit" }, 400);
-  const [a] = await db.select().from(products).where(eq23(products.id, from));
-  const [t] = await db.select().from(products).where(eq23(products.id, into));
+  const [a] = await db.select().from(products).where(eq24(products.id, from));
+  const [t] = await db.select().from(products).where(eq24(products.id, into));
   if (!a || !t) return c.json({ error: "Produit introuvable" }, 404);
-  await db.execute(sql17`update vendor_offers set product_id = ${into} where product_id = ${from} and not exists (select 1 from vendor_offers x where x.vendor_id = vendor_offers.vendor_id and x.product_id = ${into} and x.pack_label = vendor_offers.pack_label)`);
-  await db.execute(sql17`delete from vendor_offers where product_id = ${from}`);
-  await db.execute(sql17`update inventory_items set product_id = ${into} where product_id = ${from} and not exists (select 1 from inventory_items x where x.restaurant_id = inventory_items.restaurant_id and x.product_id = ${into})`);
-  await db.execute(sql17`delete from inventory_items where product_id = ${from}`);
+  await db.execute(sql18`update vendor_offers set product_id = ${into} where product_id = ${from} and not exists (select 1 from vendor_offers x where x.vendor_id = vendor_offers.vendor_id and x.product_id = ${into} and x.pack_label = vendor_offers.pack_label)`);
+  await db.execute(sql18`delete from vendor_offers where product_id = ${from}`);
+  await db.execute(sql18`update inventory_items set product_id = ${into} where product_id = ${from} and not exists (select 1 from inventory_items x where x.restaurant_id = inventory_items.restaurant_id and x.product_id = ${into})`);
+  await db.execute(sql18`delete from inventory_items where product_id = ${from}`);
   for (const tbl of ["supplier_offers", "order_lines", "stock_movements", "recipe_ingredients", "price_alerts", "sales_lines"]) {
     try {
-      await db.execute(sql17.raw(`update ${tbl} set product_id = '${into}' where product_id = '${from}'`));
+      await db.execute(sql18.raw(`update ${tbl} set product_id = '${into}' where product_id = '${from}'`));
     } catch {
     }
   }
-  await db.update(products).set({ aliases: [.../* @__PURE__ */ new Set([...t.aliases, a.name, ...a.aliases])] }).where(eq23(products.id, into));
-  await db.delete(products).where(eq23(products.id, from));
+  await db.update(products).set({ aliases: [.../* @__PURE__ */ new Set([...t.aliases, a.name, ...a.aliases])] }).where(eq24(products.id, into));
+  await db.delete(products).where(eq24(products.id, from));
   await audit("reference.merge", { actorEmail: c.get("user").email, target: into, meta: { from: a.name, into: t.name } });
   return c.json({ ok: true, message: `\xAB ${a.name} \xBB fusionn\xE9 dans \xAB ${t.name} \xBB.` });
 });
 referenceAdminRoutes.post("/admin/reference/requests/:id/dismiss", async (c) => {
   const db = await getDb();
-  await db.update(leads).set({ status: "perdu" }).where(eq23(leads.id, c.req.param("id")));
+  await db.update(leads).set({ status: "perdu" }).where(eq24(leads.id, c.req.param("id")));
   return c.json({ ok: true });
 });
-var referenceRequestRoutes = new Hono13();
+var referenceRequestRoutes = new Hono14();
 referenceRequestRoutes.post("/reference/request", requireAuth, async (c) => {
   const b = z13.object({ product: z13.string().min(2).max(120), details: z13.string().max(500).optional(), from: z13.string().max(120).optional() }).safeParse(await c.req.json());
   if (!b.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const u = c.get("user");
-  const [existing] = await db.select({ id: products.id, name: products.name }).from(products).where(and21(isNull9(products.restaurantId), or3(ilike3(products.name, b.data.product), sql17`exists (select 1 from unnest(${products.aliases}) a where lower(a) = lower(${b.data.product}))`)));
+  const [existing] = await db.select({ id: products.id, name: products.name }).from(products).where(and22(isNull9(products.restaurantId), or3(ilike3(products.name, b.data.product), sql18`exists (select 1 from unnest(${products.aliases}) a where lower(a) = lower(${b.data.product}))`)));
   if (existing) return c.json({ ok: false, existing, message: `Ce produit existe d\xE9j\xE0 sous le nom \xAB ${existing.name} \xBB.` });
   await db.insert(leads).values({ restaurantName: b.data.from ?? u.fullName ?? "Fournisseur", contactName: u.fullName ?? u.email, email: u.email, message: `Produit manquant : ${b.data.product}`, notes: b.data.details ?? null, source: "referentiel", planInterest: "referentiel" });
   return c.json({ ok: true, message: `Demande envoy\xE9e : \xAB ${b.data.product} \xBB sera ajout\xE9 au r\xE9f\xE9rentiel sous 24 h ouvr\xE9es, vous serez pr\xE9venu.` }, 201);
@@ -7745,55 +8146,55 @@ referenceRequestRoutes.post("/reference/request", requireAuth, async (c) => {
 // apps/api/src/routes/admin-dashboard.ts
 init_src();
 init_auth();
-import { Hono as Hono14 } from "hono";
-import { desc as desc12, eq as eq24, gte as gte9, isNull as isNull10, sql as sql18 } from "drizzle-orm";
+import { Hono as Hono15 } from "hono";
+import { desc as desc12, eq as eq25, gte as gte10, isNull as isNull10, sql as sql19 } from "drizzle-orm";
 var isAdmin6 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
-var n11 = (v) => Number(v ?? 0);
-var adminDashboardRoutes = new Hono14();
+var n12 = (v) => Number(v ?? 0);
+var adminDashboardRoutes = new Hono15();
 adminDashboardRoutes.use("/admin/dashboard", requireAuth, async (c, next) => {
   if (!isAdmin6(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
   await next();
 });
 adminDashboardRoutes.get("/admin/dashboard", async (c) => {
   const db = await getDb();
-  const d30 = sql18`now() - interval '30 days'`;
-  const d7 = sql18`now() - interval '7 days'`;
-  const [u] = await db.select({ total: sql18`count(*)`, w: sql18`count(*) filter (where ${users.createdAt} >= ${d7})`, m: sql18`count(*) filter (where ${users.createdAt} >= ${d30})` }).from(users);
-  const [r] = await db.select({ total: sql18`count(*)`, m: sql18`count(*) filter (where ${restaurants.createdAt} >= ${d30})`, trial: sql18`count(*) filter (where ${restaurants.plan} = 'trial')`, paying: sql18`count(*) filter (where ${restaurants.plan} in ('starter','pro','business'))` }).from(restaurants);
-  const activeR = await db.select({ c: sql18`count(distinct ${orders.restaurantId})` }).from(orders).where(gte9(orders.createdAt, sql18`now() - interval '30 days'`));
-  const [v] = await db.select({ total: sql18`count(*)`, actif: sql18`count(*) filter (where ${vendors.status} = 'actif')`, attente: sql18`count(*) filter (where ${vendors.status} = 'en_attente')` }).from(vendors);
-  const [vo] = await db.select({ offers: sql18`count(*)`, inStock: sql18`count(*) filter (where ${vendorOffers.inStock})`, productsCovered: sql18`count(distinct ${vendorOffers.productId})` }).from(vendorOffers);
-  const [pr] = await db.select({ ref: sql18`count(*) filter (where ${products.restaurantId} is null)`, priv: sql18`count(*) filter (where ${products.restaurantId} is not null)` }).from(products);
-  const [tracked] = await db.select({ c: sql18`count(distinct ${inventoryItems.productId})` }).from(inventoryItems);
+  const d30 = sql19`now() - interval '30 days'`;
+  const d7 = sql19`now() - interval '7 days'`;
+  const [u] = await db.select({ total: sql19`count(*)`, w: sql19`count(*) filter (where ${users.createdAt} >= ${d7})`, m: sql19`count(*) filter (where ${users.createdAt} >= ${d30})` }).from(users);
+  const [r] = await db.select({ total: sql19`count(*)`, m: sql19`count(*) filter (where ${restaurants.createdAt} >= ${d30})`, trial: sql19`count(*) filter (where ${restaurants.plan} = 'trial')`, paying: sql19`count(*) filter (where ${restaurants.plan} in ('starter','pro','business'))` }).from(restaurants);
+  const activeR = await db.select({ c: sql19`count(distinct ${orders.restaurantId})` }).from(orders).where(gte10(orders.createdAt, sql19`now() - interval '30 days'`));
+  const [v] = await db.select({ total: sql19`count(*)`, actif: sql19`count(*) filter (where ${vendors.status} = 'actif')`, attente: sql19`count(*) filter (where ${vendors.status} = 'en_attente')` }).from(vendors);
+  const [vo] = await db.select({ offers: sql19`count(*)`, inStock: sql19`count(*) filter (where ${vendorOffers.inStock})`, productsCovered: sql19`count(distinct ${vendorOffers.productId})` }).from(vendorOffers);
+  const [pr] = await db.select({ ref: sql19`count(*) filter (where ${products.restaurantId} is null)`, priv: sql19`count(*) filter (where ${products.restaurantId} is not null)` }).from(products);
+  const [tracked] = await db.select({ c: sql19`count(distinct ${inventoryItems.productId})` }).from(inventoryItems);
   const [o] = await db.select({
-    total: sql18`count(*)`,
-    m: sql18`count(*) filter (where ${orders.createdAt} >= ${d30})`,
-    mkt: sql18`count(*) filter (where ${orders.vendorId} is not null)`,
-    mktM: sql18`count(*) filter (where ${orders.vendorId} is not null and ${orders.createdAt} >= ${d30})`,
-    gmvM: sql18`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= ${d30}),0)`,
-    gmvAll: sql18`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} in ('confirmee','livree','livree_partiel')),0)`,
-    pending: sql18`count(*) filter (where ${orders.vendorId} is not null and ${orders.status} = 'envoyee')`,
-    refused: sql18`count(*) filter (where ${orders.vendorId} is not null and ${orders.status} = 'annulee')`,
-    avgDecisionH: sql18`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)`
+    total: sql19`count(*)`,
+    m: sql19`count(*) filter (where ${orders.createdAt} >= ${d30})`,
+    mkt: sql19`count(*) filter (where ${orders.vendorId} is not null)`,
+    mktM: sql19`count(*) filter (where ${orders.vendorId} is not null and ${orders.createdAt} >= ${d30})`,
+    gmvM: sql19`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= ${d30}),0)`,
+    gmvAll: sql19`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} in ('confirmee','livree','livree_partiel')),0)`,
+    pending: sql19`count(*) filter (where ${orders.vendorId} is not null and ${orders.status} = 'envoyee')`,
+    refused: sql19`count(*) filter (where ${orders.vendorId} is not null and ${orders.status} = 'annulee')`,
+    avgDecisionH: sql19`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)`
   }).from(orders);
-  const weekly = await db.select({ week: sql18`to_char(date_trunc('week', ${orders.createdAt}), 'YYYY-MM-DD')`, all: sql18`count(*)`, mkt: sql18`count(*) filter (where ${orders.vendorId} is not null)`, gmv: sql18`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} <> 'annulee'),0)` }).from(orders).where(gte9(orders.createdAt, sql18`date_trunc('week', now()) - interval '11 weeks'`)).groupBy(sql18`1`).orderBy(sql18`1`);
-  const signups = await db.select({ week: sql18`to_char(date_trunc('week', ${restaurants.createdAt}), 'YYYY-MM-DD')`, c: sql18`count(*)` }).from(restaurants).where(gte9(restaurants.createdAt, sql18`date_trunc('week', now()) - interval '11 weeks'`)).groupBy(sql18`1`).orderBy(sql18`1`);
-  const [com] = await db.select({ month: sql18`coalesce(sum(${commissions.amountEur}) filter (where ${commissions.period} = to_char(now(),'YYYY-MM')),0)`, all: sql18`coalesce(sum(${commissions.amountEur}),0)`, uninvoiced: sql18`coalesce(sum(${commissions.amountEur}) filter (where not ${commissions.invoiced}),0)` }).from(commissions);
-  const prospectsAgg = await db.select({ kind: prospects.kind, status: prospects.status, c: sql18`count(*)` }).from(prospects).groupBy(prospects.kind, prospects.status);
-  const [ld] = await db.select({ total: sql18`count(*)`, m: sql18`count(*) filter (where ${leads.createdAt} >= ${d30})`, vitrine: sql18`count(*) filter (where ${leads.source} = 'vitrine')`, referentiel: sql18`count(*) filter (where ${leads.source} = 'referentiel' and ${leads.status} = 'nouveau')` }).from(leads);
-  const demandTop = await db.select({ name: products.name, restaurants: sql18`count(distinct ${inventoryItems.restaurantId})`, covered: sql18`exists (select 1 from vendor_offers o where o.product_id = ${products.id} and o.in_stock)` }).from(inventoryItems).innerJoin(products, eq24(products.id, inventoryItems.productId)).where(isNull10(products.restaurantId)).groupBy(products.id, products.name).orderBy(sql18`count(distinct ${inventoryItems.restaurantId}) desc`).limit(15);
-  const topVendors = await db.select({ name: vendors.name, city: vendors.city, status: vendors.status, offers: sql18`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orders: sql18`(select count(*) from orders x where x.vendor_id = ${vendors.id})`, gmv: sql18`(select coalesce(sum(total_eur),0) from orders x where x.vendor_id = ${vendors.id} and x.status <> 'annulee')`, linked: sql18`(select count(*) from suppliers s where s.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc12(vendors.createdAt)).limit(10);
-  const topRestaurants = await db.select({ name: restaurants.name, city: restaurants.city, plan: restaurants.plan, createdAt: restaurants.createdAt, orders: sql18`(select count(*) from orders x where x.restaurant_id = ${restaurants.id})`, items: sql18`(select count(*) from inventory_items i where i.restaurant_id = ${restaurants.id})`, suppliers: sql18`(select count(*) from suppliers s where s.restaurant_id = ${restaurants.id})`, lastOrder: sql18`(select max(created_at) from orders x where x.restaurant_id = ${restaurants.id})` }).from(restaurants).orderBy(desc12(restaurants.createdAt)).limit(15);
+  const weekly = await db.select({ week: sql19`to_char(date_trunc('week', ${orders.createdAt}), 'YYYY-MM-DD')`, all: sql19`count(*)`, mkt: sql19`count(*) filter (where ${orders.vendorId} is not null)`, gmv: sql19`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} <> 'annulee'),0)` }).from(orders).where(gte10(orders.createdAt, sql19`date_trunc('week', now()) - interval '11 weeks'`)).groupBy(sql19`1`).orderBy(sql19`1`);
+  const signups = await db.select({ week: sql19`to_char(date_trunc('week', ${restaurants.createdAt}), 'YYYY-MM-DD')`, c: sql19`count(*)` }).from(restaurants).where(gte10(restaurants.createdAt, sql19`date_trunc('week', now()) - interval '11 weeks'`)).groupBy(sql19`1`).orderBy(sql19`1`);
+  const [com] = await db.select({ month: sql19`coalesce(sum(${commissions.amountEur}) filter (where ${commissions.period} = to_char(now(),'YYYY-MM')),0)`, all: sql19`coalesce(sum(${commissions.amountEur}),0)`, uninvoiced: sql19`coalesce(sum(${commissions.amountEur}) filter (where not ${commissions.invoiced}),0)` }).from(commissions);
+  const prospectsAgg = await db.select({ kind: prospects.kind, status: prospects.status, c: sql19`count(*)` }).from(prospects).groupBy(prospects.kind, prospects.status);
+  const [ld] = await db.select({ total: sql19`count(*)`, m: sql19`count(*) filter (where ${leads.createdAt} >= ${d30})`, vitrine: sql19`count(*) filter (where ${leads.source} = 'vitrine')`, referentiel: sql19`count(*) filter (where ${leads.source} = 'referentiel' and ${leads.status} = 'nouveau')` }).from(leads);
+  const demandTop = await db.select({ name: products.name, restaurants: sql19`count(distinct ${inventoryItems.restaurantId})`, covered: sql19`exists (select 1 from vendor_offers o where o.product_id = ${products.id} and o.in_stock)` }).from(inventoryItems).innerJoin(products, eq25(products.id, inventoryItems.productId)).where(isNull10(products.restaurantId)).groupBy(products.id, products.name).orderBy(sql19`count(distinct ${inventoryItems.restaurantId}) desc`).limit(15);
+  const topVendors = await db.select({ name: vendors.name, city: vendors.city, status: vendors.status, offers: sql19`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orders: sql19`(select count(*) from orders x where x.vendor_id = ${vendors.id})`, gmv: sql19`(select coalesce(sum(total_eur),0) from orders x where x.vendor_id = ${vendors.id} and x.status <> 'annulee')`, linked: sql19`(select count(*) from suppliers s where s.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc12(vendors.createdAt)).limit(10);
+  const topRestaurants = await db.select({ name: restaurants.name, city: restaurants.city, plan: restaurants.plan, createdAt: restaurants.createdAt, orders: sql19`(select count(*) from orders x where x.restaurant_id = ${restaurants.id})`, items: sql19`(select count(*) from inventory_items i where i.restaurant_id = ${restaurants.id})`, suppliers: sql19`(select count(*) from suppliers s where s.restaurant_id = ${restaurants.id})`, lastOrder: sql19`(select max(created_at) from orders x where x.restaurant_id = ${restaurants.id})` }).from(restaurants).orderBy(desc12(restaurants.createdAt)).limit(15);
   const recent = await db.select().from(auditLog).orderBy(desc12(auditLog.at)).limit(30);
-  const recentOrders = await db.select({ id: orders.id, reference: orders.reference, status: orders.status, total: orders.totalEur, createdAt: orders.createdAt, restaurant: restaurants.name, vendor: vendors.name }).from(orders).innerJoin(restaurants, eq24(restaurants.id, orders.restaurantId)).leftJoin(vendors, eq24(vendors.id, orders.vendorId)).orderBy(desc12(orders.createdAt)).limit(12);
+  const recentOrders = await db.select({ id: orders.id, reference: orders.reference, status: orders.status, total: orders.totalEur, createdAt: orders.createdAt, restaurant: restaurants.name, vendor: vendors.name }).from(orders).innerJoin(restaurants, eq25(restaurants.id, orders.restaurantId)).leftJoin(vendors, eq25(vendors.id, orders.vendorId)).orderBy(desc12(orders.createdAt)).limit(12);
   const env = { adminEmails: !!process.env.ADMIN_EMAILS, llm: !!process.env.LLM_API_KEY, stripe: !!process.env.STRIPE_SECRET_KEY, resend: !!process.env.RESEND_API_KEY, appUrl: process.env.APP_URL ?? null, vendorAutoApprove: process.env.VENDOR_AUTO_APPROVE === "true" };
   const num3 = (o2) => Object.fromEntries(Object.entries(o2).map(([k, val]) => [k, typeof val === "string" && /^-?\d+(\.\d+)?$/.test(val) ? Number(val) : val]));
   return c.json({
     users: num3(u),
-    restaurants: { ...num3(r), active30: n11(activeR[0]?.c) },
+    restaurants: { ...num3(r), active30: n12(activeR[0]?.c) },
     vendors: num3(v),
     offers: num3(vo),
-    products: { ...num3(pr), tracked: n11(tracked.c) },
+    products: { ...num3(pr), tracked: n12(tracked.c) },
     orders: num3(o),
     commissions: num3(com),
     leads: num3(ld),
@@ -7807,10 +8208,10 @@ adminDashboardRoutes.get("/admin/dashboard", async (c) => {
     recentOrders: recentOrders.map(num3),
     env,
     todo: [
-      ...n11(v.attente) ? [{ level: "action", text: `${n11(v.attente)} grossiste(s) en attente de validation`, to: "/app/admin/fournisseurs" }] : [],
-      ...n11(ld.referentiel) ? [{ level: "action", text: `${n11(ld.referentiel)} demande(s) de produit manquant`, to: "/app/admin/referentiel" }] : [],
-      ...n11(o.pending) ? [{ level: "watch", text: `${n11(o.pending)} commande(s) marketplace en attente de confirmation grossiste`, to: "/app/admin/fournisseurs" }] : [],
-      ...!n11(v.actif) ? [{ level: "critical", text: "Aucun grossiste actif : la vitrine affiche \xAB Prix sur demande \xBB partout. Invitez vos 3 premiers grossistes.", to: "/app/admin/prospection" }] : [],
+      ...n12(v.attente) ? [{ level: "action", text: `${n12(v.attente)} grossiste(s) en attente de validation`, to: "/app/admin/fournisseurs" }] : [],
+      ...n12(ld.referentiel) ? [{ level: "action", text: `${n12(ld.referentiel)} demande(s) de produit manquant`, to: "/app/admin/referentiel" }] : [],
+      ...n12(o.pending) ? [{ level: "watch", text: `${n12(o.pending)} commande(s) marketplace en attente de confirmation grossiste`, to: "/app/admin/fournisseurs" }] : [],
+      ...!n12(v.actif) ? [{ level: "critical", text: "Aucun grossiste actif : la vitrine affiche \xAB Prix sur demande \xBB partout. Invitez vos 3 premiers grossistes.", to: "/app/admin/prospection" }] : [],
       ...!env.llm ? [{ level: "info", text: "LLM_API_KEY absente : import de tarif par photo et assistant IA d\xE9sactiv\xE9s.", to: null }] : [],
       ...!env.stripe ? [{ level: "info", text: "Stripe non configur\xE9 : abonnements et facturation des commissions inactifs.", to: null }] : []
     ]
@@ -7824,24 +8225,24 @@ init_mailer();
 init_sms();
 init_order_events();
 init_ops();
-import { Hono as Hono15 } from "hono";
+import { Hono as Hono16 } from "hono";
 import { z as z14 } from "zod";
-import { and as and23, desc as desc13, eq as eq25, sql as sql19 } from "drizzle-orm";
+import { and as and24, desc as desc13, eq as eq26, sql as sql20 } from "drizzle-orm";
 var APP_URL3 = () => process.env.APP_URL ?? "http://localhost:5173";
-var n12 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var n13 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var eur10 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
 var KIND = { manquant: "Manquant", abime: "Ab\xEEm\xE9 / casse", erreur_produit: "Erreur de produit", qualite: "Qualit\xE9 / DLC", autre: "Autre" };
 var isAdmin7 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 async function nextClaimRef() {
   const db = await getDb();
-  await db.execute(sql19`create sequence if not exists claim_ref_seq`);
-  const res = await db.execute(sql19`select nextval('claim_ref_seq') as v`);
+  await db.execute(sql20`create sequence if not exists claim_ref_seq`);
+  const res = await db.execute(sql20`select nextval('claim_ref_seq') as v`);
   const rows = res.rows ?? res;
   return `LIT-${(/* @__PURE__ */ new Date()).getFullYear()}-${String(Number((Array.isArray(rows) ? rows[0] : rows).v)).padStart(4, "0")}`;
 }
 async function notifyVendor(vendorId, subject, text2, kind = "order.confirmed") {
   const db = await getDb();
-  const [v] = await db.select().from(vendors).where(eq25(vendors.id, vendorId));
+  const [v] = await db.select().from(vendors).where(eq26(vendors.id, vendorId));
   if (!v) return;
   if (v.contactEmail) void sendMail({ to: v.contactEmail, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p><p><a href="${APP_URL3()}/fournisseur">Ouvrir mon espace</a></p>`, tags: { type: "claim" } });
   const phone = v.whatsapp || v.contactPhone;
@@ -7851,28 +8252,28 @@ ${APP_URL3()}/fournisseur` });
 }
 async function notifyRestaurant2(restaurantId, subject, text2) {
   const db = await getDb();
-  const [r] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq25(restaurants.id, restaurantId));
-  const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq25(users.id, restaurantMembers.userId)).where(eq25(restaurantMembers.restaurantId, restaurantId));
+  const [r] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq26(restaurants.id, restaurantId));
+  const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq26(users.id, restaurantMembers.userId)).where(eq26(restaurantMembers.restaurantId, restaurantId));
   for (const x of rcpts) void sendMail({ to: x.email, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p><p><a href="${APP_URL3()}/app/achats/ecarts">Voir mes litiges</a></p>`, tags: { type: "claim" } });
   if (r?.settings?.notifyPhone) void sendMessage({ to: r.settings.notifyPhone, kind: "order.confirmed", restaurantId, body: `AFRISUPPLY \u2014 ${subject}
 ${text2}` });
 }
 var publicClaim = (c) => ({ ...c, photo: void 0, hasPhoto: !!c.photo, kindLabel: KIND[c.kind] ?? c.kind });
-var claimRoutes = new Hono15();
+var claimRoutes = new Hono16();
 claimRoutes.use("/claims", requireAuth, requireRestaurant);
 claimRoutes.use("/claims/*", requireAuth, requireRestaurant);
 claimRoutes.get("/claims", async (c) => {
   const db = await getDb();
   const rid = c.get("restaurantId");
-  const rows = await db.select({ cl: claims, vendorName: vendors.name, reference: orders.reference }).from(claims).innerJoin(vendors, eq25(vendors.id, claims.vendorId)).innerJoin(orders, eq25(orders.id, claims.orderId)).where(eq25(claims.restaurantId, rid)).orderBy(desc13(claims.createdAt)).limit(200);
+  const rows = await db.select({ cl: claims, vendorName: vendors.name, reference: orders.reference }).from(claims).innerJoin(vendors, eq26(vendors.id, claims.vendorId)).innerJoin(orders, eq26(orders.id, claims.orderId)).where(eq26(claims.restaurantId, rid)).orderBy(desc13(claims.createdAt)).limit(200);
   const items = rows.map((r) => ({ ...publicClaim(r.cl), vendorName: r.vendorName, orderReference: r.reference }));
-  const credits = items.filter((i) => i.status === "accepte" || i.status === "clos").reduce((a, i) => a + n12(i.creditEur), 0);
+  const credits = items.filter((i) => i.status === "accepte" || i.status === "clos").reduce((a, i) => a + n13(i.creditEur), 0);
   return c.json({ items, openCount: items.filter((i) => ["ouvert", "propose", "escalade"].includes(i.status)).length, creditsEur: Math.round(credits * 100) / 100 });
 });
 claimRoutes.get("/claims/:id/photo", async (c) => {
   const db = await getDb();
   const rid = c.get("restaurantId");
-  const [cl] = await db.select({ photo: claims.photo }).from(claims).where(and23(eq25(claims.id, c.req.param("id")), eq25(claims.restaurantId, rid)));
+  const [cl] = await db.select({ photo: claims.photo }).from(claims).where(and24(eq26(claims.id, c.req.param("id")), eq26(claims.restaurantId, rid)));
   if (!cl?.photo) return c.json({ error: "Pas de photo" }, 404);
   return c.json({ photo: cl.photo });
 });
@@ -7886,24 +8287,24 @@ claimRoutes.post("/claims", async (c) => {
   if (d.photo && !/^data:image\/(jpeg|png|webp);base64,/.test(d.photo)) return c.json({ error: "Photo invalide" }, 400);
   let orderId = d.orderId, productName = d.productName, claimedEur = d.claimedEur, orderedQty = null, receivedQty = null;
   if (d.discrepancyId) {
-    const [row] = await db.select({ dd: deliveryDiscrepancies, orderId: deliveries.orderId, rid: deliveries.restaurantId, unitPrice: orderLines.unitPriceEur, productName: products.name }).from(deliveryDiscrepancies).innerJoin(deliveries, eq25(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orderLines, eq25(orderLines.id, deliveryDiscrepancies.orderLineId)).innerJoin(products, eq25(products.id, orderLines.productId)).where(eq25(deliveryDiscrepancies.id, d.discrepancyId));
+    const [row] = await db.select({ dd: deliveryDiscrepancies, orderId: deliveries.orderId, rid: deliveries.restaurantId, unitPrice: orderLines.unitPriceEur, productName: products.name }).from(deliveryDiscrepancies).innerJoin(deliveries, eq26(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orderLines, eq26(orderLines.id, deliveryDiscrepancies.orderLineId)).innerJoin(products, eq26(products.id, orderLines.productId)).where(eq26(deliveryDiscrepancies.id, d.discrepancyId));
     if (!row || row.rid !== rid) return c.json({ error: "\xC9cart introuvable" }, 404);
-    const [dup] = await db.select({ id: claims.id }).from(claims).where(eq25(claims.discrepancyId, d.discrepancyId));
+    const [dup] = await db.select({ id: claims.id }).from(claims).where(eq26(claims.discrepancyId, d.discrepancyId));
     if (dup) return c.json({ error: "Un litige existe d\xE9j\xE0 pour cet \xE9cart" }, 409);
     orderId = row.orderId;
     productName = productName ?? row.productName;
-    orderedQty = n12(row.dd.orderedQty);
-    receivedQty = n12(row.dd.receivedQty);
-    if (claimedEur === void 0) claimedEur = Math.round(Math.max(0, orderedQty - receivedQty) * n12(row.unitPrice) * 100) / 100;
+    orderedQty = n13(row.dd.orderedQty);
+    receivedQty = n13(row.dd.receivedQty);
+    if (claimedEur === void 0) claimedEur = Math.round(Math.max(0, orderedQty - receivedQty) * n13(row.unitPrice) * 100) / 100;
   }
   if (!orderId || !productName) return c.json({ error: "Commande et produit requis" }, 400);
-  const [o] = await db.select().from(orders).where(and23(eq25(orders.id, orderId), eq25(orders.restaurantId, rid)));
+  const [o] = await db.select().from(orders).where(and24(eq26(orders.id, orderId), eq26(orders.restaurantId, rid)));
   if (!o) return c.json({ error: "Commande introuvable" }, 404);
   if (!o.vendorId) return c.json({ error: "Les litiges plateforme ne concernent que les commandes pass\xE9es via un grossiste AFRISUPPLY. Pour un fournisseur priv\xE9, utilisez la r\xE9clamation pr\xE9-r\xE9dig\xE9e." }, 400);
   if (claimedEur === void 0) return c.json({ error: "Montant r\xE9clam\xE9 requis" }, 400);
   const reference = await nextClaimRef();
   const [cl] = await db.insert(claims).values({ restaurantId: rid, vendorId: o.vendorId, orderId: o.id, discrepancyId: d.discrepancyId, reference, productName, kind: d.kind, orderedQty: orderedQty?.toFixed(3), receivedQty: receivedQty?.toFixed(3), claimedEur: claimedEur.toFixed(2), message: d.message, photo: d.photo, createdBy: user.id }).returning();
-  const [r] = await db.select({ name: restaurants.name }).from(restaurants).where(eq25(restaurants.id, rid));
+  const [r] = await db.select({ name: restaurants.name }).from(restaurants).where(eq26(restaurants.id, rid));
   void logOrderEvent(o.id, "note", `Litige ${reference} ouvert \u2014 ${productName} (${KIND[d.kind]}), ${eur10(claimedEur)} r\xE9clam\xE9s`, "restaurant");
   void notifyVendor(o.vendorId, `\u26A0\uFE0F Litige ${reference} \u2014 ${r.name} \u2014 commande ${o.reference}`, `${r.name} signale un probl\xE8me sur la commande ${o.reference} :
 \u2022 ${productName} \u2014 ${KIND[d.kind]}${orderedQty !== null ? ` (command\xE9 ${orderedQty}, re\xE7u ${receivedQty})` : ""}
@@ -7918,31 +8319,31 @@ claimRoutes.post("/claims/:id/close", async (c) => {
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const rid = c.get("restaurantId");
-  const [cl] = await db.select().from(claims).where(and23(eq25(claims.id, c.req.param("id")), eq25(claims.restaurantId, rid)));
+  const [cl] = await db.select().from(claims).where(and24(eq26(claims.id, c.req.param("id")), eq26(claims.restaurantId, rid)));
   if (!cl) return c.json({ error: "Litige introuvable" }, 404);
   if (!["propose", "refuse", "accepte"].includes(cl.status)) return c.json({ error: "En attente de la r\xE9ponse du fournisseur" }, 400);
   if (body3.data.action === "accept") {
-    const [upd2] = await db.update(claims).set({ status: "clos", closedAt: /* @__PURE__ */ new Date() }).where(eq25(claims.id, cl.id)).returning();
+    const [upd2] = await db.update(claims).set({ status: "clos", closedAt: /* @__PURE__ */ new Date() }).where(eq26(claims.id, cl.id)).returning();
     if (cl.discrepancyId) {
-      await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `litige \u2192 ${cl.resolution ?? "clos"}` }).where(eq25(deliveryDiscrepancies.id, cl.discrepancyId));
+      await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `litige \u2192 ${cl.resolution ?? "clos"}` }).where(eq26(deliveryDiscrepancies.id, cl.discrepancyId));
     }
-    void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} clos \u2014 ${cl.resolution === "avoir" ? `avoir ${eur10(n12(cl.creditEur))}` : cl.resolution ?? ""}`, "restaurant");
+    void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} clos \u2014 ${cl.resolution === "avoir" ? `avoir ${eur10(n13(cl.creditEur))}` : cl.resolution ?? ""}`, "restaurant");
     return c.json({ claim: publicClaim(upd2) });
   }
   const [upd] = await db.update(claims).set({ status: "escalade", message: body3.data.message ? `${cl.message ?? ""}
-[Escalade] ${body3.data.message}`.trim() : cl.message }).where(eq25(claims.id, cl.id)).returning();
+[Escalade] ${body3.data.message}`.trim() : cl.message }).where(eq26(claims.id, cl.id)).returning();
   void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} escalad\xE9 \xE0 AFRISUPPLY`, "restaurant");
   const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  for (const to of admins) void sendMail({ to, subject: `\u{1F6A8} Litige escalad\xE9 ${cl.reference} (${eur10(n12(cl.claimedEur))})`, text: `Le restaurant conteste la r\xE9ponse du grossiste.
-Litige : ${cl.reference} \u2014 ${cl.productName} \u2014 r\xE9clam\xE9 ${eur10(n12(cl.claimedEur))}, propos\xE9 ${cl.resolution ?? "\u2014"} ${cl.creditEur ? eur10(n12(cl.creditEur)) : ""}.
+  for (const to of admins) void sendMail({ to, subject: `\u{1F6A8} Litige escalad\xE9 ${cl.reference} (${eur10(n13(cl.claimedEur))})`, text: `Le restaurant conteste la r\xE9ponse du grossiste.
+Litige : ${cl.reference} \u2014 ${cl.productName} \u2014 r\xE9clam\xE9 ${eur10(n13(cl.claimedEur))}, propos\xE9 ${cl.resolution ?? "\u2014"} ${cl.creditEur ? eur10(n13(cl.creditEur)) : ""}.
 Message : ${body3.data.message ?? "\u2014"}
-${APP_URL3()}/app/admin/litiges`, html: `<p>Litige <b>${cl.reference}</b> escalad\xE9 \u2014 ${cl.productName}, r\xE9clam\xE9 ${eur10(n12(cl.claimedEur))}.</p><p><a href="${APP_URL3()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: "claim" } });
+${APP_URL3()}/app/admin/litiges`, html: `<p>Litige <b>${cl.reference}</b> escalad\xE9 \u2014 ${cl.productName}, r\xE9clam\xE9 ${eur10(n13(cl.claimedEur))}.</p><p><a href="${APP_URL3()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: "claim" } });
   return c.json({ claim: publicClaim(upd), message: "AFRISUPPLY a \xE9t\xE9 pr\xE9venu et arbitrera sous 3 jours ouvr\xE9s." });
 });
-var vendorClaimRoutes = new Hono15();
+var vendorClaimRoutes = new Hono16();
 var vendorGuard = async (c, next) => {
   const db = await getDb();
-  const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq25(vendorMembers.userId, c.get("user").id));
+  const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq26(vendorMembers.userId, c.get("user").id));
   const w = c.req.header("x-vendor-id");
   const vid = w && rows.some((r) => r.vendorId === w) ? w : rows[0]?.vendorId;
   if (!vid) return c.json({ error: "Aucun espace fournisseur" }, 403);
@@ -7954,9 +8355,9 @@ vendorClaimRoutes.use("/vendor/claims/*", requireAuth, vendorGuard);
 vendorClaimRoutes.get("/vendor/claims", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const rows = await db.select({ cl: claims, restaurantName: restaurants.name, reference: orders.reference }).from(claims).innerJoin(restaurants, eq25(restaurants.id, claims.restaurantId)).innerJoin(orders, eq25(orders.id, claims.orderId)).where(eq25(claims.vendorId, vid)).orderBy(desc13(claims.createdAt)).limit(200);
+  const rows = await db.select({ cl: claims, restaurantName: restaurants.name, reference: orders.reference }).from(claims).innerJoin(restaurants, eq26(restaurants.id, claims.restaurantId)).innerJoin(orders, eq26(orders.id, claims.orderId)).where(eq26(claims.vendorId, vid)).orderBy(desc13(claims.createdAt)).limit(200);
   const items = rows.map((r) => ({ ...publicClaim(r.cl), photo: r.cl.photo, restaurantName: r.restaurantName, orderReference: r.reference }));
-  return c.json({ items, openCount: items.filter((i) => i.status === "ouvert" || i.status === "escalade").length, creditsEur: Math.round(items.reduce((a, i) => a + n12(i.creditEur), 0) * 100) / 100 });
+  return c.json({ items, openCount: items.filter((i) => i.status === "ouvert" || i.status === "escalade").length, creditsEur: Math.round(items.reduce((a, i) => a + n13(i.creditEur), 0) * 100) / 100 });
 });
 vendorClaimRoutes.post("/vendor/claims/:id/respond", async (c) => {
   const body3 = z14.object({ resolution: z14.enum(["avoir", "relivraison", "refus"]), creditEur: z14.number().nonnegative().optional(), message: z14.string().max(600).optional() }).safeParse(await c.req.json());
@@ -7964,17 +8365,17 @@ vendorClaimRoutes.post("/vendor/claims/:id/respond", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const d = body3.data;
-  const [cl] = await db.select().from(claims).where(and23(eq25(claims.id, c.req.param("id")), eq25(claims.vendorId, vid)));
+  const [cl] = await db.select().from(claims).where(and24(eq26(claims.id, c.req.param("id")), eq26(claims.vendorId, vid)));
   if (!cl) return c.json({ error: "Litige introuvable" }, 404);
   if (!["ouvert", "propose"].includes(cl.status)) return c.json({ error: `Litige ${cl.status}` }, 400);
   if (d.resolution === "refus" && !d.message) return c.json({ error: "Un refus doit \xEAtre motiv\xE9" }, 400);
-  const credit = d.resolution === "avoir" ? d.creditEur ?? n12(cl.claimedEur) : 0;
+  const credit = d.resolution === "avoir" ? d.creditEur ?? n13(cl.claimedEur) : 0;
   if (d.resolution === "avoir" && credit <= 0) return c.json({ error: "Montant de l\u2019avoir requis" }, 400);
-  const full = d.resolution === "avoir" && credit >= n12(cl.claimedEur) - 5e-3;
+  const full = d.resolution === "avoir" && credit >= n13(cl.claimedEur) - 5e-3;
   const status = d.resolution === "refus" ? "refuse" : full ? "accepte" : "propose";
-  const [upd] = await db.update(claims).set({ status, resolution: d.resolution, creditEur: d.resolution === "avoir" ? credit.toFixed(2) : null, vendorMessage: d.message, vendorRespondedAt: /* @__PURE__ */ new Date() }).where(eq25(claims.id, cl.id)).returning();
-  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq25(vendors.id, vid));
-  const label = d.resolution === "avoir" ? `avoir de ${eur10(credit)}${full ? "" : ` (sur ${eur10(n12(cl.claimedEur))} r\xE9clam\xE9s)`}` : d.resolution === "relivraison" ? "relivraison du manquant" : `refus : ${d.message}`;
+  const [upd] = await db.update(claims).set({ status, resolution: d.resolution, creditEur: d.resolution === "avoir" ? credit.toFixed(2) : null, vendorMessage: d.message, vendorRespondedAt: /* @__PURE__ */ new Date() }).where(eq26(claims.id, cl.id)).returning();
+  const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq26(vendors.id, vid));
+  const label = d.resolution === "avoir" ? `avoir de ${eur10(credit)}${full ? "" : ` (sur ${eur10(n13(cl.claimedEur))} r\xE9clam\xE9s)`}` : d.resolution === "relivraison" ? "relivraison du manquant" : `refus : ${d.message}`;
   void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} \u2014 r\xE9ponse de ${v.name} : ${label}`, "vendor");
   void notifyRestaurant2(cl.restaurantId, `${d.resolution === "refus" ? "\u274C" : "\u2705"} Litige ${cl.reference} \u2014 r\xE9ponse de ${v.name}`, `${v.name} r\xE9pond au litige ${cl.reference} (${cl.productName}) : ${label}.${d.message && d.resolution !== "refus" ? `
 Message : ${d.message}` : ""}
@@ -7982,7 +8383,7 @@ ${full ? "L\u2019avoir est \xE0 d\xE9duire de votre prochaine facture chez ce fo
   await audit("claim.respond", { actorEmail: c.get("user").email, target: cl.id, meta: { resolution: d.resolution, credit } });
   return c.json({ claim: publicClaim(upd) });
 });
-var adminClaimRoutes = new Hono15();
+var adminClaimRoutes = new Hono16();
 adminClaimRoutes.use("/admin/claims/*", requireAuth, async (c, next) => {
   if (!isAdmin7(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
   await next();
@@ -7993,7 +8394,7 @@ adminClaimRoutes.use("/admin/claims", requireAuth, async (c, next) => {
 });
 adminClaimRoutes.get("/admin/claims", async (c) => {
   const db = await getDb();
-  const rows = await db.select({ cl: claims, restaurantName: restaurants.name, vendorName: vendors.name, reference: orders.reference }).from(claims).innerJoin(restaurants, eq25(restaurants.id, claims.restaurantId)).innerJoin(vendors, eq25(vendors.id, claims.vendorId)).innerJoin(orders, eq25(orders.id, claims.orderId)).orderBy(desc13(claims.createdAt)).limit(300);
+  const rows = await db.select({ cl: claims, restaurantName: restaurants.name, vendorName: vendors.name, reference: orders.reference }).from(claims).innerJoin(restaurants, eq26(restaurants.id, claims.restaurantId)).innerJoin(vendors, eq26(vendors.id, claims.vendorId)).innerJoin(orders, eq26(orders.id, claims.orderId)).orderBy(desc13(claims.createdAt)).limit(300);
   return c.json({ items: rows.map((r) => ({ ...publicClaim(r.cl), photo: r.cl.photo, restaurantName: r.restaurantName, vendorName: r.vendorName, orderReference: r.reference })) });
 });
 adminClaimRoutes.post("/admin/claims/:id/arbitrate", async (c) => {
@@ -8001,11 +8402,11 @@ adminClaimRoutes.post("/admin/claims/:id/arbitrate", async (c) => {
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const d = body3.data;
-  const [cl] = await db.select().from(claims).where(eq25(claims.id, c.req.param("id")));
+  const [cl] = await db.select().from(claims).where(eq26(claims.id, c.req.param("id")));
   if (!cl) return c.json({ error: "Introuvable" }, 404);
-  const credit = d.resolution === "avoir" ? d.creditEur ?? n12(cl.claimedEur) : 0;
-  const [upd] = await db.update(claims).set({ status: "clos", resolution: d.resolution, creditEur: d.resolution === "avoir" ? credit.toFixed(2) : null, vendorMessage: `[Arbitrage AFRISUPPLY] ${d.message}`, closedAt: /* @__PURE__ */ new Date() }).where(eq25(claims.id, cl.id)).returning();
-  if (cl.discrepancyId) await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `arbitrage \u2192 ${d.resolution}` }).where(eq25(deliveryDiscrepancies.id, cl.discrepancyId));
+  const credit = d.resolution === "avoir" ? d.creditEur ?? n13(cl.claimedEur) : 0;
+  const [upd] = await db.update(claims).set({ status: "clos", resolution: d.resolution, creditEur: d.resolution === "avoir" ? credit.toFixed(2) : null, vendorMessage: `[Arbitrage AFRISUPPLY] ${d.message}`, closedAt: /* @__PURE__ */ new Date() }).where(eq26(claims.id, cl.id)).returning();
+  if (cl.discrepancyId) await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `arbitrage \u2192 ${d.resolution}` }).where(eq26(deliveryDiscrepancies.id, cl.discrepancyId));
   const txt = `D\xE9cision AFRISUPPLY sur le litige ${cl.reference} (${cl.productName}) : ${d.resolution === "avoir" ? `avoir de ${eur10(credit)}` : d.resolution}. ${d.message}`;
   void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} arbitr\xE9 par AFRISUPPLY : ${d.resolution}${credit ? ` ${eur10(credit)}` : ""}`, "system");
   void notifyRestaurant2(cl.restaurantId, `\u2696\uFE0F Litige ${cl.reference} \u2014 d\xE9cision AFRISUPPLY`, txt);
@@ -8019,25 +8420,25 @@ init_src();
 init_auth();
 init_order_events();
 init_reliability();
-import { Hono as Hono16 } from "hono";
+import { Hono as Hono17 } from "hono";
 import { z as z15 } from "zod";
-import { and as and24, desc as desc14, eq as eq26, sql as sql20 } from "drizzle-orm";
+import { and as and25, desc as desc14, eq as eq27, sql as sql21 } from "drizzle-orm";
 var pub = (r, restaurantName) => ({ id: r.id, rating: r.rating, onTime: r.onTime, conform: r.conform, comment: r.comment, vendorReply: r.vendorReply, createdAt: r.createdAt, restaurantName: restaurantName.length > 2 ? `${restaurantName.slice(0, 1)}${"*".repeat(Math.min(6, restaurantName.length - 2))}${restaurantName.slice(-1)}` : restaurantName, city: null });
-var publicReviewRoutes = new Hono16();
+var publicReviewRoutes = new Hono17();
 publicReviewRoutes.get("/public/vendors/:id/reviews", async (c) => {
   const db = await getDb();
   const vid = c.req.param("id");
-  const rows = await db.select({ r: vendorReviews, name: restaurants.name, city: restaurants.city }).from(vendorReviews).innerJoin(restaurants, eq26(restaurants.id, vendorReviews.restaurantId)).where(eq26(vendorReviews.vendorId, vid)).orderBy(desc14(vendorReviews.createdAt)).limit(50);
+  const rows = await db.select({ r: vendorReviews, name: restaurants.name, city: restaurants.city }).from(vendorReviews).innerJoin(restaurants, eq27(restaurants.id, vendorReviews.restaurantId)).where(eq27(vendorReviews.vendorId, vid)).orderBy(desc14(vendorReviews.createdAt)).limit(50);
   return c.json({ reliability: (await reliabilityFor([vid])).get(vid) ?? emptyReliability, reviews: rows.map((x) => ({ ...pub(x.r, x.name), city: x.city })) });
 });
-var reviewRoutes = new Hono16();
+var reviewRoutes = new Hono17();
 reviewRoutes.use("/reviews", requireAuth, requireRestaurant);
 reviewRoutes.use("/reviews/*", requireAuth, requireRestaurant);
 reviewRoutes.use("/orders/:id/review", requireAuth, requireRestaurant);
 reviewRoutes.get("/reviews/pending", async (c) => {
   const db = await getDb();
   const rid = c.get("restaurantId");
-  const rows = await db.select({ id: orders.id, reference: orders.reference, deliveredAt: sql20`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})`, status: orders.status, vendorName: vendors.name, vendorId: vendors.id, reviewed: vendorReviews.id }).from(orders).innerJoin(vendors, eq26(vendors.id, orders.vendorId)).leftJoin(vendorReviews, eq26(vendorReviews.orderId, orders.id)).where(and24(eq26(orders.restaurantId, rid))).orderBy(desc14(sql20`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt}, ${orders.createdAt})`)).limit(100);
+  const rows = await db.select({ id: orders.id, reference: orders.reference, deliveredAt: sql21`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})`, status: orders.status, vendorName: vendors.name, vendorId: vendors.id, reviewed: vendorReviews.id }).from(orders).innerJoin(vendors, eq27(vendors.id, orders.vendorId)).leftJoin(vendorReviews, eq27(vendorReviews.orderId, orders.id)).where(and25(eq27(orders.restaurantId, rid))).orderBy(desc14(sql21`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt}, ${orders.createdAt})`)).limit(100);
   return c.json({ pending: rows.filter((r) => !r.reviewed && (["livree", "livree_partiel"].includes(r.status) || r.deliveredAt)).slice(0, 10), reviewedOrderIds: rows.filter((r) => r.reviewed).map((r) => r.id) });
 });
 reviewRoutes.post("/orders/:id/review", async (c) => {
@@ -8046,19 +8447,19 @@ reviewRoutes.post("/orders/:id/review", async (c) => {
   const db = await getDb();
   const rid = c.get("restaurantId");
   const user = c.get("user");
-  const [o] = await db.select().from(orders).where(and24(eq26(orders.id, c.req.param("id")), eq26(orders.restaurantId, rid)));
+  const [o] = await db.select().from(orders).where(and25(eq27(orders.id, c.req.param("id")), eq27(orders.restaurantId, rid)));
   if (!o?.vendorId) return c.json({ error: "Commande plateforme introuvable" }, 404);
   if (!["livree", "livree_partiel"].includes(o.status) && !o.vendorDeliveredAt) return c.json({ error: "Vous pourrez noter apr\xE8s la r\xE9ception de la commande" }, 400);
-  const [dup] = await db.select({ id: vendorReviews.id }).from(vendorReviews).where(eq26(vendorReviews.orderId, o.id));
+  const [dup] = await db.select({ id: vendorReviews.id }).from(vendorReviews).where(eq27(vendorReviews.orderId, o.id));
   if (dup) return c.json({ error: "Commande d\xE9j\xE0 not\xE9e" }, 409);
   const [r] = await db.insert(vendorReviews).values({ vendorId: o.vendorId, restaurantId: rid, orderId: o.id, rating: body3.data.rating, onTime: body3.data.onTime, conform: body3.data.conform, comment: body3.data.comment, createdBy: user.id }).returning();
   void logOrderEvent(o.id, "note", `Avis du restaurant : ${"\u2605".repeat(body3.data.rating)}${"\u2606".repeat(5 - body3.data.rating)}${body3.data.comment ? ` \u2014 ${body3.data.comment.slice(0, 80)}` : ""}`, "restaurant");
   return c.json({ review: r, message: "Merci ! Votre avis aide les autres restaurants et le fournisseur \xE0 progresser." }, 201);
 });
-var vendorReviewRoutes = new Hono16();
+var vendorReviewRoutes = new Hono17();
 var guard = async (c, next) => {
   const db = await getDb();
-  const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq26(vendorMembers.userId, c.get("user").id));
+  const rows = await db.select({ vendorId: vendorMembers.vendorId }).from(vendorMembers).where(eq27(vendorMembers.userId, c.get("user").id));
   const w = c.req.header("x-vendor-id");
   const vid = w && rows.some((r) => r.vendorId === w) ? w : rows[0]?.vendorId;
   if (!vid) return c.json({ error: "Aucun espace fournisseur" }, 403);
@@ -8070,7 +8471,7 @@ vendorReviewRoutes.use("/vendor/reviews/*", requireAuth, guard);
 vendorReviewRoutes.get("/vendor/reviews", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const rows = await db.select({ r: vendorReviews, name: restaurants.name, reference: orders.reference }).from(vendorReviews).innerJoin(restaurants, eq26(restaurants.id, vendorReviews.restaurantId)).innerJoin(orders, eq26(orders.id, vendorReviews.orderId)).where(eq26(vendorReviews.vendorId, vid)).orderBy(desc14(vendorReviews.createdAt)).limit(100);
+  const rows = await db.select({ r: vendorReviews, name: restaurants.name, reference: orders.reference }).from(vendorReviews).innerJoin(restaurants, eq27(restaurants.id, vendorReviews.restaurantId)).innerJoin(orders, eq27(orders.id, vendorReviews.orderId)).where(eq27(vendorReviews.vendorId, vid)).orderBy(desc14(vendorReviews.createdAt)).limit(100);
   return c.json({ reliability: (await reliabilityFor([vid])).get(vid) ?? emptyReliability, reviews: rows.map((x) => ({ ...x.r, restaurantName: x.name, orderReference: x.reference })) });
 });
 vendorReviewRoutes.post("/vendor/reviews/:id/reply", async (c) => {
@@ -8078,7 +8479,7 @@ vendorReviewRoutes.post("/vendor/reviews/:id/reply", async (c) => {
   if (!body3.success) return c.json({ error: "R\xE9ponse requise" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
-  const [r] = await db.update(vendorReviews).set({ vendorReply: body3.data.reply, vendorRepliedAt: /* @__PURE__ */ new Date() }).where(and24(eq26(vendorReviews.id, c.req.param("id")), eq26(vendorReviews.vendorId, vid))).returning();
+  const [r] = await db.update(vendorReviews).set({ vendorReply: body3.data.reply, vendorRepliedAt: /* @__PURE__ */ new Date() }).where(and25(eq27(vendorReviews.id, c.req.param("id")), eq27(vendorReviews.vendorId, vid))).returning();
   if (!r) return c.json({ error: "Avis introuvable" }, 404);
   return c.json({ review: r });
 });
@@ -8091,10 +8492,10 @@ init_digest();
 init_mailer();
 init_reminders();
 init_sms();
-import { Hono as Hono17 } from "hono";
+import { Hono as Hono18 } from "hono";
 import { z as z16 } from "zod";
-import { eq as eq27 } from "drizzle-orm";
-var jobsRoutes = new Hono17();
+import { eq as eq28 } from "drizzle-orm";
+var jobsRoutes = new Hono18();
 var runDaily = async (c) => {
   const secret2 = process.env.CRON_SECRET;
   const auth = c.req.header("authorization");
@@ -8115,14 +8516,14 @@ var runReminders = async (c) => {
 jobsRoutes.get("/jobs/reminders", runReminders);
 jobsRoutes.post("/jobs/reminders", runReminders);
 jobsRoutes.get("/jobs/daily", runDaily);
-var settingsRoutes = new Hono17();
+var settingsRoutes = new Hono18();
 settingsRoutes.use("*", requireAuth, requireRestaurant);
 settingsRoutes.on(["PUT"], "/settings", requireMinRole("manager"));
 settingsRoutes.on(["POST"], "/digest/send-test", requireMinRole("manager"));
 settingsRoutes.on(["POST"], "/settings/test-sms", requireMinRole("manager"));
 settingsRoutes.get("/settings", async (c) => {
   const db = await getDb();
-  const [r] = await db.select().from(restaurants).where(eq27(restaurants.id, c.get("restaurantId")));
+  const [r] = await db.select().from(restaurants).where(eq28(restaurants.id, c.get("restaurantId")));
   const s = r.settings ?? {};
   return c.json({ restaurant: { id: r.id, name: r.name, city: r.city, coversPerDay: r.coversPerDay, plan: r.plan, trialEndsAt: r.trialEndsAt }, settings: { priceIncreaseAlertPct: s.priceIncreaseAlertPct ?? 8, forecastHorizonDays: s.forecastHorizonDays ?? 7, autoReorderEnabled: s.autoReorderEnabled ?? true, dailyDigestEnabled: s.dailyDigestEnabled ?? true, notifyPhone: s.notifyPhone ?? "", digestRecipients: s.digestRecipients ?? [], closedWeekdays: s.closedWeekdays ?? [] }, mail: { transport: mailerConfig().transport, from: mailerConfig().from }, sms: { configured: smsConfig().enabled, whatsapp: smsConfig().whatsapp } });
 });
@@ -8142,14 +8543,14 @@ settingsRoutes.put("/settings", async (c) => {
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
   const rid = c.get("restaurantId");
-  const [r] = await db.select().from(restaurants).where(eq27(restaurants.id, rid));
+  const [r] = await db.select().from(restaurants).where(eq28(restaurants.id, rid));
   const { name, city, coversPerDay, ...settingsPatch } = body3.data;
   if (settingsPatch.notifyPhone !== void 0) {
     const p = normalizePhone(settingsPatch.notifyPhone);
     if (settingsPatch.notifyPhone && !p) return c.json({ error: "Num\xE9ro de t\xE9l\xE9phone invalide (ex. 06 12 34 56 78 ou +33612345678)" }, 400);
     settingsPatch.notifyPhone = p ?? "";
   }
-  const [row] = await db.update(restaurants).set({ name, city, coversPerDay, settings: { ...r.settings ?? {}, ...settingsPatch } }).where(eq27(restaurants.id, rid)).returning();
+  const [row] = await db.update(restaurants).set({ name, city, coversPerDay, settings: { ...r.settings ?? {}, ...settingsPatch } }).where(eq28(restaurants.id, rid)).returning();
   return c.json({ ok: true, settings: row.settings });
 });
 settingsRoutes.get("/digest/preview", async (c) => {
@@ -8165,7 +8566,7 @@ settingsRoutes.post("/digest/send-test", async (c) => {
 });
 settingsRoutes.post("/settings/test-sms", async (c) => {
   const db = await getDb();
-  const [r] = await db.select().from(restaurants).where(eq27(restaurants.id, c.get("restaurantId")));
+  const [r] = await db.select().from(restaurants).where(eq28(restaurants.id, c.get("restaurantId")));
   const to = r.settings?.notifyPhone;
   if (!to) return c.json({ error: "Renseignez d\u2019abord un num\xE9ro" }, 400);
   const res = await sendMessage({ to, kind: "test", restaurantId: r.id, body: `AFRISUPPLY \u2014 test : vous recevrez ici le suivi de vos commandes (${r.name}).` });
@@ -8179,40 +8580,40 @@ init_src();
 init_src();
 init_auth();
 init_ops();
-import { Hono as Hono18 } from "hono";
+import { Hono as Hono19 } from "hono";
 import { z as z17 } from "zod";
-import { and as and25, eq as eq28, inArray as inArray10 } from "drizzle-orm";
+import { and as and26, eq as eq29, inArray as inArray11 } from "drizzle-orm";
 import { deleteCookie as deleteCookie2 } from "hono/cookie";
-var accountRoutes = new Hono18();
+var accountRoutes = new Hono19();
 accountRoutes.use("/account/*", requireAuth);
 accountRoutes.on(["GET"], "/account/export", requireMinRole("manager"));
 accountRoutes.on(["DELETE"], "/account", requireMinRole("owner"));
 accountRoutes.get("/account/export", async (c) => {
   const db = await getDb();
   const u = c.get("user");
-  const [me] = await db.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt }).from(users).where(eq28(users.id, u.id));
-  const memberships = await db.select({ restaurant: restaurants, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(restaurants, eq28(restaurants.id, restaurantMembers.restaurantId)).where(eq28(restaurantMembers.userId, u.id));
+  const [me] = await db.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt }).from(users).where(eq29(users.id, u.id));
+  const memberships = await db.select({ restaurant: restaurants, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(restaurants, eq29(restaurants.id, restaurantMembers.restaurantId)).where(eq29(restaurantMembers.userId, u.id));
   const out = [];
   for (const m of memberships) {
     const rid = m.restaurant.id;
     const [sup, prod, inv, ord, sal, rec, al, rules, del, mov] = await Promise.all([
-      db.select().from(suppliers).where(eq28(suppliers.restaurantId, rid)),
-      db.select().from(products).where(eq28(products.restaurantId, rid)),
-      db.select().from(inventoryItems).where(eq28(inventoryItems.restaurantId, rid)),
-      db.select().from(orders).where(eq28(orders.restaurantId, rid)),
-      db.select().from(sales).where(eq28(sales.restaurantId, rid)),
-      db.select().from(recipes).where(eq28(recipes.restaurantId, rid)),
-      db.select().from(alerts).where(eq28(alerts.restaurantId, rid)),
-      db.select().from(reorderRules).where(eq28(reorderRules.restaurantId, rid)),
-      db.select().from(deliveries).where(eq28(deliveries.restaurantId, rid)),
-      db.select().from(stockMovements).where(eq28(stockMovements.restaurantId, rid))
+      db.select().from(suppliers).where(eq29(suppliers.restaurantId, rid)),
+      db.select().from(products).where(eq29(products.restaurantId, rid)),
+      db.select().from(inventoryItems).where(eq29(inventoryItems.restaurantId, rid)),
+      db.select().from(orders).where(eq29(orders.restaurantId, rid)),
+      db.select().from(sales).where(eq29(sales.restaurantId, rid)),
+      db.select().from(recipes).where(eq29(recipes.restaurantId, rid)),
+      db.select().from(alerts).where(eq29(alerts.restaurantId, rid)),
+      db.select().from(reorderRules).where(eq29(reorderRules.restaurantId, rid)),
+      db.select().from(deliveries).where(eq29(deliveries.restaurantId, rid)),
+      db.select().from(stockMovements).where(eq29(stockMovements.restaurantId, rid))
     ]);
     const orderIds = ord.map((o) => o.id);
     const supIds = sup.map((s) => s.id);
     const [lines, offers, prices] = await Promise.all([
-      orderIds.length ? db.select().from(orderLines).where(inArray10(orderLines.orderId, orderIds)) : [],
-      supIds.length ? db.select().from(supplierOffers).where(inArray10(supplierOffers.supplierId, supIds)) : [],
-      db.select().from(priceHistory).where(eq28(priceHistory.restaurantId, rid))
+      orderIds.length ? db.select().from(orderLines).where(inArray11(orderLines.orderId, orderIds)) : [],
+      supIds.length ? db.select().from(supplierOffers).where(inArray11(supplierOffers.supplierId, supIds)) : [],
+      db.select().from(priceHistory).where(eq29(priceHistory.restaurantId, rid))
     ]);
     out.push({ restaurant: m.restaurant, role: m.role, suppliers: sup, supplierOffers: offers, priceHistory: prices, products: prod, inventory: inv, stockMovements: mov, orders: ord, orderLines: lines, deliveries: del, sales: sal, recipes: rec, alerts: al, reorderRules: rules });
   }
@@ -8225,20 +8626,20 @@ accountRoutes.delete("/account", async (c) => {
   if (!body3.success) return c.json({ error: "Mot de passe et confirmation \xAB SUPPRIMER \xBB requis" }, 400);
   const db = await getDb();
   const u = c.get("user");
-  const [me] = await db.select().from(users).where(eq28(users.id, u.id));
+  const [me] = await db.select().from(users).where(eq29(users.id, u.id));
   if (!me || !await verifyPassword(body3.data.password, me.passwordHash)) return c.json({ error: "Mot de passe incorrect" }, 401);
-  const mine = await db.select({ rid: restaurantMembers.restaurantId, role: restaurantMembers.role }).from(restaurantMembers).where(eq28(restaurantMembers.userId, u.id));
+  const mine = await db.select({ rid: restaurantMembers.restaurantId, role: restaurantMembers.role }).from(restaurantMembers).where(eq29(restaurantMembers.userId, u.id));
   const deleted = [];
   const left = [];
   for (const m of mine) {
-    const others = await db.select({ id: restaurantMembers.userId }).from(restaurantMembers).where(and25(eq28(restaurantMembers.restaurantId, m.rid), eq28(restaurantMembers.role, "owner")));
+    const others = await db.select({ id: restaurantMembers.userId }).from(restaurantMembers).where(and26(eq29(restaurantMembers.restaurantId, m.rid), eq29(restaurantMembers.role, "owner")));
     const soleOwner = m.role === "owner" && others.every((o) => o.id === u.id);
     if (soleOwner) {
-      await db.delete(restaurants).where(eq28(restaurants.id, m.rid));
+      await db.delete(restaurants).where(eq29(restaurants.id, m.rid));
       deleted.push(m.rid);
     } else left.push(m.rid);
   }
-  await db.delete(users).where(eq28(users.id, u.id));
+  await db.delete(users).where(eq29(users.id, u.id));
   await audit("account.delete", { actorEmail: u.email, target: u.id, meta: { restaurantsDeleted: deleted.length, restaurantsLeft: left.length } });
   deleteCookie2(c, "afs_token", { path: "/" });
   return c.json({ ok: true, restaurantsDeleted: deleted.length, restaurantsLeft: left.length });
@@ -8247,13 +8648,13 @@ accountRoutes.delete("/account", async (c) => {
 // apps/api/src/routes/members.ts
 init_src();
 init_auth();
-import { Hono as Hono19 } from "hono";
+import { Hono as Hono20 } from "hono";
 import { z as z18 } from "zod";
-import { and as and26, eq as eq29, ne, sql as sql21 } from "drizzle-orm";
+import { and as and27, eq as eq30, ne as ne2, sql as sql22 } from "drizzle-orm";
 import { randomBytes as randomBytes3 } from "node:crypto";
 init_mailer();
 init_ops();
-var memberRoutes = new Hono19();
+var memberRoutes = new Hono20();
 memberRoutes.use("*", requireAuth, requireRestaurant);
 var ROLES = ["owner", "manager", "staff"];
 var membersOf = async (rid) => await getDb().then((db) => db.select({
@@ -8263,10 +8664,10 @@ var membersOf = async (rid) => await getDb().then((db) => db.select({
   email: users.email,
   fullName: users.fullName,
   lastLoginAt: users.lastLoginAt
-}).from(restaurantMembers).innerJoin(users, eq29(users.id, restaurantMembers.userId)).where(eq29(restaurantMembers.restaurantId, rid)));
+}).from(restaurantMembers).innerJoin(users, eq30(users.id, restaurantMembers.userId)).where(eq30(restaurantMembers.restaurantId, rid)));
 var countOwners = async (rid) => {
   const db = await getDb();
-  const [row] = await db.select({ n: sql21`count(*)` }).from(restaurantMembers).where(and26(eq29(restaurantMembers.restaurantId, rid), eq29(restaurantMembers.role, "owner")));
+  const [row] = await db.select({ n: sql22`count(*)` }).from(restaurantMembers).where(and27(eq30(restaurantMembers.restaurantId, rid), eq30(restaurantMembers.role, "owner")));
   return Number(row?.n ?? 0);
 };
 memberRoutes.get("/members", async (c) => {
@@ -8293,8 +8694,8 @@ memberRoutes.post("/members", requireMinRole("owner"), async (c) => {
   const rid = c.get("restaurantId");
   const me = c.get("user");
   const email = body3.data.email.toLowerCase();
-  const [r] = await db.select({ name: restaurants.name }).from(restaurants).where(eq29(restaurants.id, rid));
-  let [user] = await db.select().from(users).where(eq29(users.email, email));
+  const [r] = await db.select({ name: restaurants.name }).from(restaurants).where(eq30(restaurants.id, rid));
+  let [user] = await db.select().from(users).where(eq30(users.email, email));
   let invited = false;
   if (!user) {
     const [created] = await db.insert(users).values({
@@ -8305,7 +8706,7 @@ memberRoutes.post("/members", requireMinRole("owner"), async (c) => {
     user = created;
     invited = true;
   }
-  const existing = await db.select({ role: restaurantMembers.role }).from(restaurantMembers).where(and26(eq29(restaurantMembers.restaurantId, rid), eq29(restaurantMembers.userId, user.id)));
+  const existing = await db.select({ role: restaurantMembers.role }).from(restaurantMembers).where(and27(eq30(restaurantMembers.restaurantId, rid), eq30(restaurantMembers.userId, user.id)));
   if (existing.length) return c.json({ error: `${user.fullName} fait d\xE9j\xE0 partie de l'\xE9quipe (${existing[0].role === "owner" ? "propri\xE9taire" : existing[0].role === "manager" ? "responsable" : "\xE9quipe"}).` }, 409);
   await db.insert(restaurantMembers).values({ restaurantId: rid, userId: user.id, role: body3.data.role });
   let devLink;
@@ -8343,12 +8744,12 @@ memberRoutes.patch("/members/:userId", requireMinRole("owner"), async (c) => {
   const db = await getDb();
   const rid = c.get("restaurantId");
   const target = c.req.param("userId");
-  const [row] = await db.select().from(restaurantMembers).where(and26(eq29(restaurantMembers.restaurantId, rid), eq29(restaurantMembers.userId, target)));
+  const [row] = await db.select().from(restaurantMembers).where(and27(eq30(restaurantMembers.restaurantId, rid), eq30(restaurantMembers.userId, target)));
   if (!row) return c.json({ error: "Membre introuvable" }, 404);
   if (row.role === "owner" && body3.data.role !== "owner" && await countOwners(rid) <= 1) {
     return c.json({ error: "Impossible : il doit rester au moins un propri\xE9taire. Nommez d\u2019abord quelqu\u2019un d\u2019autre propri\xE9taire." }, 409);
   }
-  await db.update(restaurantMembers).set({ role: body3.data.role }).where(and26(eq29(restaurantMembers.restaurantId, rid), eq29(restaurantMembers.userId, target)));
+  await db.update(restaurantMembers).set({ role: body3.data.role }).where(and27(eq30(restaurantMembers.restaurantId, rid), eq30(restaurantMembers.userId, target)));
   void audit("member.role", { actorEmail: c.get("user").email, target, meta: { from: row.role, to: body3.data.role } });
   return c.json({ ok: true, role: body3.data.role });
 });
@@ -8357,12 +8758,12 @@ memberRoutes.delete("/members/:userId", requireMinRole("owner"), async (c) => {
   const rid = c.get("restaurantId");
   const target = c.req.param("userId");
   if (target === c.get("user").id) return c.json({ error: "Vous ne pouvez pas vous retirer vous-m\xEAme : transf\xE9rez d\u2019abord la propri\xE9t\xE9 du compte." }, 409);
-  const [row] = await db.select().from(restaurantMembers).where(and26(eq29(restaurantMembers.restaurantId, rid), eq29(restaurantMembers.userId, target)));
+  const [row] = await db.select().from(restaurantMembers).where(and27(eq30(restaurantMembers.restaurantId, rid), eq30(restaurantMembers.userId, target)));
   if (!row) return c.json({ error: "Membre introuvable" }, 404);
   if (row.role === "owner" && await countOwners(rid) <= 1) return c.json({ error: "Impossible : il doit rester au moins un propri\xE9taire." }, 409);
-  await db.delete(restaurantMembers).where(and26(eq29(restaurantMembers.restaurantId, rid), eq29(restaurantMembers.userId, target)));
-  const [other] = await db.select({ n: sql21`count(*)` }).from(restaurantMembers).where(and26(eq29(restaurantMembers.userId, target), ne(restaurantMembers.restaurantId, rid)));
-  if (Number(other?.n ?? 0) === 0) await db.delete(users).where(eq29(users.id, target));
+  await db.delete(restaurantMembers).where(and27(eq30(restaurantMembers.restaurantId, rid), eq30(restaurantMembers.userId, target)));
+  const [other] = await db.select({ n: sql22`count(*)` }).from(restaurantMembers).where(and27(eq30(restaurantMembers.userId, target), ne2(restaurantMembers.restaurantId, rid)));
+  if (Number(other?.n ?? 0) === 0) await db.delete(users).where(eq30(users.id, target));
   void audit("member.remove", { actorEmail: c.get("user").email, target, meta: { role: row.role, accountDeleted: Number(other?.n ?? 0) === 0 } });
   return c.json({ ok: true });
 });
@@ -8370,17 +8771,17 @@ memberRoutes.delete("/members/:userId", requireMinRole("owner"), async (c) => {
 // apps/api/src/routes/quick.ts
 init_src();
 init_auth();
-import { Hono as Hono20 } from "hono";
+import { Hono as Hono21 } from "hono";
 import { z as z19 } from "zod";
-import { and as and27, eq as eq30, inArray as inArray11, sql as sql22 } from "drizzle-orm";
-var quickRoutes = new Hono20();
+import { and as and28, eq as eq31, inArray as inArray12, sql as sql23 } from "drizzle-orm";
+var quickRoutes = new Hono21();
 quickRoutes.use("*", requireAuth, requireRestaurant);
-var n13 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var n14 = (v) => v === null || v === void 0 ? 0 : Number(v);
 async function entities(rid) {
   const db = await getDb();
   const [recs, items] = await Promise.all([
-    db.select({ id: recipes.id, name: recipes.name }).from(recipes).where(and27(eq30(recipes.restaurantId, rid), eq30(recipes.isActive, true))),
-    db.select({ id: inventoryItems.id, name: products.name, aliases: products.aliases, unit: products.baseUnit }).from(inventoryItems).innerJoin(products, eq30(products.id, inventoryItems.productId)).where(eq30(inventoryItems.restaurantId, rid))
+    db.select({ id: recipes.id, name: recipes.name }).from(recipes).where(and28(eq31(recipes.restaurantId, rid), eq31(recipes.isActive, true))),
+    db.select({ id: inventoryItems.id, name: products.name, aliases: products.aliases, unit: products.baseUnit }).from(inventoryItems).innerJoin(products, eq31(products.id, inventoryItems.productId)).where(eq31(inventoryItems.restaurantId, rid))
   ]);
   return { recipes: recs, products: items.map((i) => ({ id: i.id, name: i.name, aliases: i.aliases, unit: i.unit })) };
 }
@@ -8405,8 +8806,8 @@ quickRoutes.post("/quick/apply", async (c) => {
   const day = d.day ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   if (d.kind === "vente") {
     const ids2 = d.lines.map((l) => l.id);
-    const valid = new Set((await db.select({ id: recipes.id }).from(recipes).where(and27(eq30(recipes.restaurantId, rid), inArray11(recipes.id, ids2)))).map((r) => r.id));
-    const prev = new Map((await db.select().from(sales).where(and27(eq30(sales.restaurantId, rid), eq30(sales.day, day)))).map((p) => [p.recipeId, p.portions]));
+    const valid = new Set((await db.select({ id: recipes.id }).from(recipes).where(and28(eq31(recipes.restaurantId, rid), inArray12(recipes.id, ids2)))).map((r) => r.id));
+    const prev = new Map((await db.select().from(sales).where(and28(eq31(sales.restaurantId, rid), eq31(sales.day, day)))).map((p) => [p.recipeId, p.portions]));
     let applied2 = 0;
     let consumed = 0;
     for (const l of d.lines) {
@@ -8416,31 +8817,31 @@ quickRoutes.post("/quick/apply", async (c) => {
       await db.insert(sales).values({ restaurantId: rid, recipeId: l.id, day, portions }).onConflictDoUpdate({ target: [sales.restaurantId, sales.recipeId, sales.day], set: { portions } });
       applied2++;
       if (delta === 0) continue;
-      const ings = await db.select().from(recipeIngredients).where(eq30(recipeIngredients.recipeId, l.id));
+      const ings = await db.select().from(recipeIngredients).where(eq31(recipeIngredients.recipeId, l.id));
       for (const ing of ings) {
-        const [item] = await db.select().from(inventoryItems).where(and27(eq30(inventoryItems.restaurantId, rid), eq30(inventoryItems.productId, ing.productId)));
+        const [item] = await db.select().from(inventoryItems).where(and28(eq31(inventoryItems.restaurantId, rid), eq31(inventoryItems.productId, ing.productId)));
         if (!item) continue;
-        const q2 = n13(ing.quantity) * delta;
+        const q2 = n14(ing.quantity) * delta;
         if (!q2) continue;
         await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type: "consommation", quantity: (-q2).toFixed(3), note: `Saisie express ventes ${day}`, createdBy: user.id });
-        await db.update(inventoryItems).set({ quantity: Math.max(0, n13(item.quantity) - q2).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq30(inventoryItems.id, item.id));
+        await db.update(inventoryItems).set({ quantity: Math.max(0, n14(item.quantity) - q2).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq31(inventoryItems.id, item.id));
         consumed++;
       }
     }
     return c.json({ ok: true, kind: d.kind, day, applied: applied2, stockLinesUpdated: consumed });
   }
   const ids = d.lines.map((l) => l.id);
-  const items = await db.select().from(inventoryItems).where(and27(eq30(inventoryItems.restaurantId, rid), inArray11(inventoryItems.id, ids)));
+  const items = await db.select().from(inventoryItems).where(and28(eq31(inventoryItems.restaurantId, rid), inArray12(inventoryItems.id, ids)));
   const byId = new Map(items.map((i) => [i.id, i]));
   let applied = 0;
   for (const l of d.lines) {
     const item = byId.get(l.id);
     if (!item) continue;
     const type = d.kind === "comptage" ? "ajustement" : d.kind === "reception" ? "reception" : "perte";
-    const delta = type === "ajustement" ? l.qty - n13(item.quantity) : type === "reception" ? l.qty : -l.qty;
+    const delta = type === "ajustement" ? l.qty - n14(item.quantity) : type === "reception" ? l.qty : -l.qty;
     if (type !== "ajustement" && delta === 0) continue;
     await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type, quantity: delta.toFixed(3), note: d.note ?? "Saisie express", createdBy: user.id });
-    await db.update(inventoryItems).set({ quantity: Math.max(0, n13(item.quantity) + delta).toFixed(3), updatedAt: /* @__PURE__ */ new Date(), ...type === "ajustement" ? { lastCountedAt: /* @__PURE__ */ new Date() } : {} }).where(eq30(inventoryItems.id, item.id));
+    await db.update(inventoryItems).set({ quantity: Math.max(0, n14(item.quantity) + delta).toFixed(3), updatedAt: /* @__PURE__ */ new Date(), ...type === "ajustement" ? { lastCountedAt: /* @__PURE__ */ new Date() } : {} }).where(eq31(inventoryItems.id, item.id));
     applied++;
   }
   return c.json({ ok: true, kind: d.kind, applied });
@@ -8448,10 +8849,10 @@ quickRoutes.post("/quick/apply", async (c) => {
 quickRoutes.get("/quick/inventory", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const rows = await db.select({ id: inventoryItems.id, name: products.name, unit: products.baseUnit, category: products.category, quantity: inventoryItems.quantity, criticalLevel: inventoryItems.criticalLevel, lastCountedAt: inventoryItems.lastCountedAt }).from(inventoryItems).innerJoin(products, eq30(products.id, inventoryItems.productId)).where(eq30(inventoryItems.restaurantId, rid));
-  const items = rows.map((r) => ({ ...r, quantity: n13(r.quantity), criticalLevel: n13(r.criticalLevel), daysSinceCount: r.lastCountedAt ? Math.floor((Date.now() - new Date(r.lastCountedAt).getTime()) / 864e5) : null })).sort((a, b) => (a.daysSinceCount ?? 999) === (b.daysSinceCount ?? 999) ? a.name.localeCompare(b.name) : (b.daysSinceCount ?? 999) - (a.daysSinceCount ?? 999));
-  const [{ counted7 }] = await db.select({ counted7: sql22`count(*) filter (where ${inventoryItems.lastCountedAt} > now() - interval '7 days')` }).from(inventoryItems).where(eq30(inventoryItems.restaurantId, rid));
-  return c.json({ items, total: items.length, countedLast7Days: n13(counted7) });
+  const rows = await db.select({ id: inventoryItems.id, name: products.name, unit: products.baseUnit, category: products.category, quantity: inventoryItems.quantity, criticalLevel: inventoryItems.criticalLevel, lastCountedAt: inventoryItems.lastCountedAt }).from(inventoryItems).innerJoin(products, eq31(products.id, inventoryItems.productId)).where(eq31(inventoryItems.restaurantId, rid));
+  const items = rows.map((r) => ({ ...r, quantity: n14(r.quantity), criticalLevel: n14(r.criticalLevel), daysSinceCount: r.lastCountedAt ? Math.floor((Date.now() - new Date(r.lastCountedAt).getTime()) / 864e5) : null })).sort((a, b) => (a.daysSinceCount ?? 999) === (b.daysSinceCount ?? 999) ? a.name.localeCompare(b.name) : (b.daysSinceCount ?? 999) - (a.daysSinceCount ?? 999));
+  const [{ counted7 }] = await db.select({ counted7: sql23`count(*) filter (where ${inventoryItems.lastCountedAt} > now() - interval '7 days')` }).from(inventoryItems).where(eq31(inventoryItems.restaurantId, rid));
+  return c.json({ items, total: items.length, countedLast7Days: n14(counted7) });
 });
 quickRoutes.post("/quick/invoice", async (c) => {
   const body3 = z19.object({ image: z19.string().startsWith("data:image/").max(8e6) }).safeParse(await c.req.json());
@@ -8461,7 +8862,7 @@ quickRoutes.post("/quick/invoice", async (c) => {
   const res = await extractInvoiceFromImage(body3.data.image);
   if (!res.ok) return c.json({ error: res.error }, 503);
   const ctx = await entities(rid);
-  const sups = await db.select({ id: suppliers.id, name: suppliers.name }).from(suppliers).where(eq30(suppliers.restaurantId, rid));
+  const sups = await db.select({ id: suppliers.id, name: suppliers.name }).from(suppliers).where(eq31(suppliers.restaurantId, rid));
   const supplier = res.data.supplierName ? bestMatches(res.data.supplierName, sups, 1)[0] ?? null : null;
   const lines = res.data.lines.map((l) => {
     const cands = bestMatches(l.label, ctx.products);
@@ -8481,19 +8882,19 @@ quickRoutes.post("/quick/invoice/apply", async (c) => {
   const db = await getDb();
   const user = c.get("user");
   const d = body3.data;
-  const items = await db.select().from(inventoryItems).where(and27(eq30(inventoryItems.restaurantId, rid), inArray11(inventoryItems.id, d.lines.map((l) => l.inventoryItemId))));
+  const items = await db.select().from(inventoryItems).where(and28(eq31(inventoryItems.restaurantId, rid), inArray12(inventoryItems.id, d.lines.map((l) => l.inventoryItemId))));
   const byId = new Map(items.map((i) => [i.id, i]));
   let received = 0;
   let pricesUpdated = 0;
   if (d.supplierId) {
-    const [s] = await db.select({ id: suppliers.id }).from(suppliers).where(and27(eq30(suppliers.id, d.supplierId), eq30(suppliers.restaurantId, rid)));
+    const [s] = await db.select({ id: suppliers.id }).from(suppliers).where(and28(eq31(suppliers.id, d.supplierId), eq31(suppliers.restaurantId, rid)));
     if (!s) return c.json({ error: "Fournisseur introuvable" }, 404);
   }
   for (const l of d.lines) {
     const item = byId.get(l.inventoryItemId);
     if (!item) continue;
     await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type: "reception", quantity: l.qty.toFixed(3), note: d.note ?? `Facture ${d.date ?? ""}`.trim(), createdBy: user.id });
-    await db.update(inventoryItems).set({ quantity: (n13(item.quantity) + l.qty).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq30(inventoryItems.id, item.id));
+    await db.update(inventoryItems).set({ quantity: (n14(item.quantity) + l.qty).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq31(inventoryItems.id, item.id));
     received++;
     if (d.supplierId && l.unitPrice) {
       const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid, supplierId: d.supplierId, productId: item.productId, packLabel: "facture", packQty: "1.000", packPriceEur: l.unitPrice.toFixed(2), inStock: true }).onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packPriceEur: l.unitPrice.toFixed(2), lastSeenAt: /* @__PURE__ */ new Date() } }).returning();
@@ -8512,13 +8913,13 @@ init_marketplace();
 // apps/api/src/routes/shopping.ts
 init_src();
 init_auth();
-import { Hono as Hono21 } from "hono";
+import { Hono as Hono22 } from "hono";
 import { z as z20 } from "zod";
-import { and as and28, desc as desc15, eq as eq31, inArray as inArray12, isNull as isNull11, or as or4, sql as sql23 } from "drizzle-orm";
+import { and as and29, desc as desc15, eq as eq32, inArray as inArray13, isNull as isNull11, or as or4, sql as sql24 } from "drizzle-orm";
 init_marketplace();
-var shoppingRoutes = new Hono21();
+var shoppingRoutes = new Hono22();
 shoppingRoutes.use("*", requireAuth, requireRestaurant);
-var n14 = (v) => v === null || v === void 0 ? 0 : Number(v);
+var n15 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var servesZone2 = (v, zones) => v.deliveryZones.length === 0 || v.deliveryZones.some((d) => zones.has(d.trim().toLowerCase()) || zones.has(d));
 function toBase(qty3, unit2, baseUnit) {
   if (!unit2 || unit2 === baseUnit) return { qty: qty3 };
@@ -8547,19 +8948,19 @@ shoppingRoutes.post("/shopping/parse", async (c) => {
   const db = await getDb();
   const body3 = z20.object({ text: z20.string().min(1).max(2e3) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Texte requis" }, 400);
-  const [r] = await db.select().from(restaurants).where(eq31(restaurants.id, rid));
+  const [r] = await db.select().from(restaurants).where(eq32(restaurants.id, rid));
   const zones = restaurantZones(r);
-  const prods = await db.select().from(products).where(or4(isNull11(products.restaurantId), eq31(products.restaurantId, rid)));
-  const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq31(inventoryItems.restaurantId, rid))).map((x) => x.productId));
+  const prods = await db.select().from(products).where(or4(isNull11(products.restaurantId), eq32(products.restaurantId, rid)));
+  const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq32(inventoryItems.restaurantId, rid))).map((x) => x.productId));
   const tokens = tokenize(body3.data.text);
   if (!tokens.length) return c.json({ lines: [], unmatched: [], hint: "\xC9crivez une quantit\xE9 puis un produit : \xAB 10 kg piment, 5 kg riz, 2 cartons poisson fum\xE9 \xBB." });
-  const activeVendors = (await db.select().from(vendors).where(eq31(vendors.status, "actif"))).filter((v) => servesZone2(v, zones));
+  const activeVendors = (await db.select().from(vendors).where(eq32(vendors.status, "actif"))).filter((v) => servesZone2(v, zones));
   const vById = new Map(activeVendors.map((v) => [v.id, v]));
-  const vo = activeVendors.length ? await db.select().from(vendorOffers).where(and28(inArray12(vendorOffers.vendorId, activeVendors.map((v) => v.id)), eq31(vendorOffers.inStock, true))) : [];
-  const mySups = await db.select().from(suppliers).where(and28(eq31(suppliers.restaurantId, rid), eq31(suppliers.isActive, true)));
+  const vo = activeVendors.length ? await db.select().from(vendorOffers).where(and29(inArray13(vendorOffers.vendorId, activeVendors.map((v) => v.id)), eq32(vendorOffers.inStock, true))) : [];
+  const mySups = await db.select().from(suppliers).where(and29(eq32(suppliers.restaurantId, rid), eq32(suppliers.isActive, true)));
   const sById = new Map(mySups.map((s) => [s.id, s]));
   const linkedVendorIds = new Set(mySups.map((s) => s.vendorId).filter(Boolean));
-  const so = mySups.length ? await db.select().from(supplierOffers).where(and28(eq31(supplierOffers.restaurantId, rid), eq31(supplierOffers.inStock, true), inArray12(supplierOffers.supplierId, mySups.map((s) => s.id)))) : [];
+  const so = mySups.length ? await db.select().from(supplierOffers).where(and29(eq32(supplierOffers.restaurantId, rid), eq32(supplierOffers.inStock, true), inArray13(supplierOffers.supplierId, mySups.map((s) => s.id)))) : [];
   const lines = tokens.map((t) => {
     const cands = rankProducts(t.label, prods, mine, /* @__PURE__ */ new Set([...vo.map((o) => o.productId), ...so.map((o) => o.productId)]));
     const top = cands[0];
@@ -8572,13 +8973,13 @@ shoppingRoutes.post("/shopping/parse", async (c) => {
     for (const o of vo.filter((x) => x.productId === p.id)) {
       const v = vById.get(o.vendorId);
       if (linkedVendorIds.has(v.id)) continue;
-      const packs = asPacks ? Math.max(1, Math.round(needed)) : Math.max(1, Math.ceil(needed / n14(o.packQty)));
-      offers.push({ key: `v:${o.id}`, kind: "vendor", offerId: o.id, sellerId: v.id, sellerName: v.name, packLabel: o.packLabel, packQty: n14(o.packQty), packPrice: n14(o.packPriceEur), unitPrice: n14(o.packPriceEur) / n14(o.packQty), leadTimeHours: v.leadTimeHours, minOrderEur: n14(v.minOrderEur), deliveryFeeEur: n14(v.deliveryFeeEur), packs, lineTotal: packs * n14(o.packPriceEur), linked: false });
+      const packs = asPacks ? Math.max(1, Math.round(needed)) : Math.max(1, Math.ceil(needed / n15(o.packQty)));
+      offers.push({ key: `v:${o.id}`, kind: "vendor", offerId: o.id, sellerId: v.id, sellerName: v.name, packLabel: o.packLabel, packQty: n15(o.packQty), packPrice: n15(o.packPriceEur), unitPrice: n15(o.packPriceEur) / n15(o.packQty), leadTimeHours: v.leadTimeHours, minOrderEur: n15(v.minOrderEur), deliveryFeeEur: n15(v.deliveryFeeEur), packs, lineTotal: packs * n15(o.packPriceEur), linked: false });
     }
     for (const o of so.filter((x) => x.productId === p.id)) {
       const s = sById.get(o.supplierId);
-      const packs = asPacks ? Math.max(1, Math.round(needed)) : Math.max(1, Math.ceil(needed / n14(o.packQty)));
-      offers.push({ key: `s:${o.id}`, kind: "supplier", offerId: o.id, sellerId: s.id, sellerName: s.name, packLabel: o.packLabel, packQty: n14(o.packQty), packPrice: n14(o.packPriceEur), unitPrice: n14(o.packPriceEur) / n14(o.packQty), leadTimeHours: s.leadTimeHours, minOrderEur: n14(s.minOrderEur), deliveryFeeEur: n14(s.deliveryFeeEur), packs, lineTotal: packs * n14(o.packPriceEur), linked: true });
+      const packs = asPacks ? Math.max(1, Math.round(needed)) : Math.max(1, Math.ceil(needed / n15(o.packQty)));
+      offers.push({ key: `s:${o.id}`, kind: "supplier", offerId: o.id, sellerId: s.id, sellerName: s.name, packLabel: o.packLabel, packQty: n15(o.packQty), packPrice: n15(o.packPriceEur), unitPrice: n15(o.packPriceEur) / n15(o.packQty), leadTimeHours: s.leadTimeHours, minOrderEur: n15(s.minOrderEur), deliveryFeeEur: n15(s.deliveryFeeEur), packs, lineTotal: packs * n15(o.packPriceEur), linked: true });
     }
     offers.sort((a, b) => a.unitPrice - b.unitPrice);
     const best = offers[0];
@@ -8602,7 +9003,7 @@ var fmtQ = (q2) => Number.isInteger(q2) ? String(q2) : q2.toFixed(1).replace("."
 shoppingRoutes.get("/shopping/lists", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const lists = await db.select().from(shoppingLists).where(eq31(shoppingLists.restaurantId, rid)).orderBy(desc15(shoppingLists.lastUsedAt), desc15(shoppingLists.createdAt));
+  const lists = await db.select().from(shoppingLists).where(eq32(shoppingLists.restaurantId, rid)).orderBy(desc15(shoppingLists.lastUsedAt), desc15(shoppingLists.createdAt));
   return c.json({ lists });
 });
 shoppingRoutes.post("/shopping/lists", async (c) => {
@@ -8623,33 +9024,33 @@ shoppingRoutes.put("/shopping/lists/:id", async (c) => {
   if (body3.data.text) set.text = body3.data.text;
   if (body3.data.used) {
     set.lastUsedAt = /* @__PURE__ */ new Date();
-    set.useCount = sql23`${shoppingLists.useCount} + 1`;
+    set.useCount = sql24`${shoppingLists.useCount} + 1`;
   }
-  const [list] = await db.update(shoppingLists).set(set).where(and28(eq31(shoppingLists.id, c.req.param("id")), eq31(shoppingLists.restaurantId, rid))).returning();
+  const [list] = await db.update(shoppingLists).set(set).where(and29(eq32(shoppingLists.id, c.req.param("id")), eq32(shoppingLists.restaurantId, rid))).returning();
   if (!list) return c.json({ error: "Liste introuvable" }, 404);
   return c.json({ list });
 });
 shoppingRoutes.delete("/shopping/lists/:id", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const del = await db.delete(shoppingLists).where(and28(eq31(shoppingLists.id, c.req.param("id")), eq31(shoppingLists.restaurantId, rid))).returning({ id: shoppingLists.id });
+  const del = await db.delete(shoppingLists).where(and29(eq32(shoppingLists.id, c.req.param("id")), eq32(shoppingLists.restaurantId, rid))).returning({ id: shoppingLists.id });
   return del.length ? c.json({ ok: true }) : c.json({ error: "Liste introuvable" }, 404);
 });
 shoppingRoutes.get("/shopping/suggestions", async (c) => {
   const rid = c.get("restaurantId");
   const db = await getDb();
-  const inv = await db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq31(products.id, inventoryItems.productId)).where(eq31(inventoryItems.restaurantId, rid));
-  const low = inv.filter(({ item }) => n14(item.quantity) <= n14(item.criticalLevel) || item.targetLevel !== null && n14(item.quantity) < n14(item.targetLevel) * 0.5).map(({ item, product }) => {
-    const target = item.targetLevel !== null ? n14(item.targetLevel) : Math.max(n14(item.criticalLevel) * 2, n14(item.avgDailyUse) * 7);
-    const need = Math.max(0, target - n14(item.quantity));
+  const inv = await db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq32(products.id, inventoryItems.productId)).where(eq32(inventoryItems.restaurantId, rid));
+  const low = inv.filter(({ item }) => n15(item.quantity) <= n15(item.criticalLevel) || item.targetLevel !== null && n15(item.quantity) < n15(item.targetLevel) * 0.5).map(({ item, product }) => {
+    const target = item.targetLevel !== null ? n15(item.targetLevel) : Math.max(n15(item.criticalLevel) * 2, n15(item.avgDailyUse) * 7);
+    const need = Math.max(0, target - n15(item.quantity));
     return { name: product.name, unit: product.baseUnit, need: Math.ceil(need * 10) / 10 };
   }).filter((x) => x.need > 0);
-  const lastOrders = await db.select().from(orders).where(and28(eq31(orders.restaurantId, rid), inArray12(orders.status, ["envoyee", "confirmee", "livree", "livree_partiel"]))).orderBy(desc15(orders.createdAt)).limit(5);
+  const lastOrders = await db.select().from(orders).where(and29(eq32(orders.restaurantId, rid), inArray13(orders.status, ["envoyee", "confirmee", "livree", "livree_partiel"]))).orderBy(desc15(orders.createdAt)).limit(5);
   let last = null;
   if (lastOrders.length) {
     const o = lastOrders[0];
-    const ls = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq31(products.id, orderLines.productId)).where(eq31(orderLines.orderId, o.id));
-    last = { reference: o.reference, date: o.createdAt.toISOString().slice(0, 10), text: ls.map(({ line, product }) => `${fmtQ(n14(line.quantity))} ${product.baseUnit} ${product.name}`).join(", ") };
+    const ls = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq32(products.id, orderLines.productId)).where(eq32(orderLines.orderId, o.id));
+    last = { reference: o.reference, date: o.createdAt.toISOString().slice(0, 10), text: ls.map(({ line, product }) => `${fmtQ(n15(line.quantity))} ${product.baseUnit} ${product.name}`).join(", ") };
   }
   return c.json({ restock: { count: low.length, text: low.map((x) => `${fmtQ(x.need)} ${x.unit} ${x.name}`).join(", ") }, last });
 });
@@ -8658,9 +9059,9 @@ shoppingRoutes.get("/shopping/suggestions", async (c) => {
 init_src();
 init_ops();
 init_mailer();
-import { Hono as Hono22 } from "hono";
-import { desc as desc16, eq as eq32, sql as sql24 } from "drizzle-orm";
-var statusRoutes = new Hono22();
+import { Hono as Hono23 } from "hono";
+import { desc as desc16, eq as eq33, sql as sql25 } from "drizzle-orm";
+var statusRoutes = new Hono23();
 statusRoutes.get("/status", async (c) => {
   const t0 = Date.now();
   let dbOk = false;
@@ -8668,10 +9069,10 @@ statusRoutes.get("/status", async (c) => {
   let lastJob = null;
   try {
     const db = await getDb();
-    await db.execute(sql24`select 1`);
+    await db.execute(sql25`select 1`);
     dbMs = Date.now() - t0;
     dbOk = true;
-    const [j] = await db.select().from(jobRuns).where(eq32(jobRuns.job, "daily")).orderBy(desc16(jobRuns.startedAt)).limit(1);
+    const [j] = await db.select().from(jobRuns).where(eq33(jobRuns.job, "daily")).orderBy(desc16(jobRuns.startedAt)).limit(1);
     if (j) lastJob = { status: j.status, finishedAt: j.finishedAt, durationMs: j.durationMs, sent: j.summary?.sent, count: j.summary?.count };
   } catch {
     dbOk = false;
@@ -8703,7 +9104,7 @@ statusRoutes.get("/status/jobs", async (c) => {
 // apps/api/src/app.ts
 init_ops();
 init_security();
-var app = new Hono23();
+var app = new Hono24();
 if (process.env.NODE_ENV !== "test") app.use("*", logger());
 app.use("*", securityHeaders);
 app.use("/api/auth/login", rateLimit({ windowMs: 6e4, max: 10 }));
@@ -8742,6 +9143,7 @@ app.route("/api", prospectRoutes);
 app.route("/api", restaurantRoutes);
 app.route("/api", catalogRoutes);
 app.route("/api", intelligenceRoutes);
+app.route("/api", analysisRoutes);
 app.route("/api", manageRoutes);
 app.route("/api", claimRoutes);
 app.route("/api", reviewRoutes);

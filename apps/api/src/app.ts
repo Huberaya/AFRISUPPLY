@@ -5,6 +5,7 @@ import { authRoutes } from './routes/auth.js';
 import { restaurantRoutes } from './routes/restaurant.js';
 import { catalogRoutes } from './routes/catalog.js';
 import { intelligenceRoutes } from './routes/intelligence.js';
+import { analysisRoutes } from './routes/analysis.js'; // chantier 4 : analyse des coûts (page Analyse)
 import { manageRoutes } from './routes/manage.js';
 import { publicRoutes } from './routes/public.js';
 import { storefrontRoutes } from './routes/storefront.js';
@@ -66,6 +67,7 @@ app.route('/api', prospectRoutes);
 app.route('/api', restaurantRoutes);
 app.route('/api', catalogRoutes);
 app.route('/api', intelligenceRoutes);
+app.route('/api', analysisRoutes);
 app.route('/api', manageRoutes);
 app.route('/api', claimRoutes);
 app.route('/api', reviewRoutes);
