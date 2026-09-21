@@ -8,16 +8,38 @@ import {
   orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, alerts, restaurants, vendors, commissions,
 } from '@afrisupply/db';
 import { sendMail } from '../lib/mailer.js';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { buildOrderMessage } from '../lib/messages.js';
 import { buildOrderDoc } from './vendor.js';
 import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
+import { checkLineEdit, checkStatusChange, isReceived } from '../lib/orders.js';
+import { assertPlausibleQuantity } from './restaurant.js';
 
 export const manageRoutes = new Hono<Env>();
 manageRoutes.use('*', requireAuth, requireRestaurant);
 
+// Chantier 2 (audit) — rôles réellement appliqués :
+//   • owner  : propriétaire (tout, y compris la suppression d'un fournisseur)
+//   • manager: responsable (fournisseurs, recettes, commandes, écarts)
+//   • staff  : quotidien (stock, inventaire, réception, ventes) — rien de tout cela ici
+manageRoutes.on(['POST'], '/suppliers', requireMinRole('manager'));
+manageRoutes.on(['PUT'], '/suppliers/:id', requireMinRole('manager'));
+manageRoutes.on(['DELETE'], '/suppliers/:id', requireMinRole('owner'));
+manageRoutes.on(['POST'], '/suppliers/:id/offers', requireMinRole('manager'));
+manageRoutes.on(['PUT'], '/offers/:id', requireMinRole('manager'));
+manageRoutes.on(['DELETE'], '/offers/:id', requireMinRole('manager'));
+manageRoutes.on(['POST'], '/recipes', requireMinRole('manager'));
+manageRoutes.on(['PUT'], '/recipes/:id', requireMinRole('manager'));
+manageRoutes.on(['DELETE'], '/recipes/:id', requireMinRole('manager'));
+manageRoutes.on(['PUT'], '/orders/:id', requireMinRole('manager'));
+manageRoutes.on(['PUT'], '/orders/:id/lines', requireMinRole('manager'));
+manageRoutes.on(['POST'], '/orders/:id/proposal', requireMinRole('manager'));
+manageRoutes.on(['POST'], '/discrepancies/:id/resolve', requireMinRole('manager'));
+
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 const CHANNELS = ['email', 'whatsapp', 'telephone', 'plateforme'] as const;
+/** Chantier 1 (audit) : plafond structurel de colis sur une ligne (au-delà : erreur de saisie). */
+const MAX_PACKS_PER_LINE = 1000;
 const CATEGORIES = ['feculents', 'frais', 'viandes_poissons', 'epicerie', 'boissons', 'emballages'] as const;
 
 // -------------------------------------------------------------
@@ -229,25 +251,47 @@ manageRoutes.get('/orders/:id/message', async (c) => {
 
 manageRoutes.put('/orders/:id', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
-  const body = z.object({ status: z.enum(['preparee', 'envoyee', 'confirmee', 'annulee']).optional(), expectedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), notes: z.string().nullable().optional(), channel: z.enum(CHANNELS).optional() }).safeParse(await c.req.json());
+  const body = z.object({ status: z.enum(['preparee', 'envoyee', 'confirmee', 'annulee']).optional(), expectedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), notes: z.string().max(2000).nullable().optional(), channel: z.enum(CHANNELS).optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const [cur] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid)));
   if (!cur) return c.json({ error: 'Commande introuvable' }, 404);
-  if (['livree', 'livree_partiel', 'annulee'].includes(cur.status)) return c.json({ error: 'Commande clôturée : modification impossible' }, 409);
+  // Chantier 1 (audit) : machine à états centralisée (déjà réceptionnée / clôturée / transition impossible)
+  if (body.data.status) {
+    const refusal = checkStatusChange(cur.status, body.data.status);
+    if (refusal) return c.json({ error: refusal.error, code: refusal.code }, refusal.status);
+  } else if (isReceived(cur)) {
+    return c.json({ error: 'Commande déjà réceptionnée : elle n\'est plus modifiable.', code: 'order_already_received' }, 409);
+  }
   const d = body.data;
   const [o] = await db.update(orders).set({ status: d.status, expectedAt: d.expectedAt, notes: d.notes, channel: d.channel, sentAt: d.status === 'envoyee' && !cur.sentAt ? new Date() : undefined }).where(eq(orders.id, cur.id)).returning();
+  if (d.status && d.status !== cur.status) void logOrderEvent(cur.id, d.status === 'annulee' ? 'cancelled' : d.status === 'confirmee' ? 'confirmed' : 'note', `Statut modifié par le restaurant : ${cur.status} → ${d.status}`, 'restaurant');
   return c.json({ order: o });
 });
 
 /** Modifier les lignes d'une commande encore « préparée ». */
 manageRoutes.put('/orders/:id/lines', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
-  const body = z.object({ lines: z.array(z.object({ lineId: z.string().uuid(), packs: z.number().int().nonnegative() })).min(1) }).safeParse(await c.req.json());
+  const body = z.object({ lines: z.array(z.object({ lineId: z.string().uuid(), packs: z.number().int().nonnegative().max(MAX_PACKS_PER_LINE) })).min(1) }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const [cur] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid)));
   if (!cur) return c.json({ error: 'Commande introuvable' }, 404);
+  // Chantier 1 (audit) : une commande réceptionnée ou clôturée n'est plus modifiable
+  const refusal = checkLineEdit(cur);
+  if (refusal) return c.json({ error: refusal.error, code: refusal.code }, refusal.status);
   if (cur.status !== 'preparee') return c.json({ error: 'Seule une commande « préparée » peut être modifiée' }, 409);
   const lines = await db.select().from(orderLines).where(eq(orderLines.orderId, cur.id));
+
+  // Chantier 1 (audit) : même plafond de plausibilité que la création (consommation réelle du restaurant)
+  const asked = await db.select({ line: orderLines, product: products }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(eq(orderLines.orderId, cur.id));
+  const outOfRange = await assertPlausibleQuantity(rid, asked
+    .filter(({ line }) => body.data.lines.some((x) => x.lineId === line.id))
+    .map(({ line, product }) => {
+      const packs = body.data.lines.find((x) => x.lineId === line.id)!.packs;
+      const packQty = n(line.quantity) / Math.max(1, line.packs) || 1;
+      return { productId: product.id, productName: product.name, unit: product.baseUnit, category: product.category, packQty, packs, quantity: packs * packQty };
+    }));
+  if (outOfRange) return c.json(outOfRange, 400);
+
   for (const l of lines) {
     const upd = body.data.lines.find((x) => x.lineId === l.id); if (!upd) continue;
     if (upd.packs === 0) { await db.delete(orderLines).where(eq(orderLines.id, l.id)); continue; }

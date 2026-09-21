@@ -36,7 +36,8 @@ export default function Settings() {
   const showPreview = async () => { setPreview(await api<{ subject: string; text: string; html: string }>('/digest/preview')); };
   return (
     <div className="animate-fade-up max-w-3xl space-y-6">
-      <PageTitle title="⚙️ Paramètres" subtitle="Restaurant, seuils d’alerte, auto-reorder et e-mail du matin." />
+      <PageTitle title="⚙️ Paramètres" subtitle="Restaurant, seuils d’alerte, auto-reorder et e-mail du matin."
+        action={<Link to="/app/equipe" className="btn-ghost">👥 Équipe & sécurité</Link>} />
       {msg && <p className="rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-900">{msg}</p>}
       <div className="grid grid-cols-3 gap-3"><Stat label="Formule" value={<Link to="/app/abonnement" className="underline capitalize">{data.restaurant.plan === 'trial' ? 'Essai' : data.restaurant.plan}</Link>} /><Stat label="Essai jusqu’au" value={data.restaurant.trialEndsAt ? new Date(data.restaurant.trialEndsAt).toLocaleDateString('fr-FR') : '—'} /><Stat label="Envoi e-mail" value={data.mail.transport === 'resend' ? 'Actif' : 'Dév.'} hint={data.mail.from} /></div>
       <section className="card space-y-3">

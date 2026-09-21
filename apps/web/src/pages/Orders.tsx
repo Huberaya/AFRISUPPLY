@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Send, PackageCheck, Copy, MessageCircle, Mail, Pencil, XCircle, AlertTriangle } from 'lucide-react';
-import { api, fmtEur, fmtQty, fmtDate, STATUS_LABEL, openPdf } from '../lib/api';
+import { api, ApiError, fmtEur, fmtQty, fmtDate, STATUS_LABEL, openPdf } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ReorderModal, RecurringList } from '../components/Reorder';
 
 type Line = { id: string; productId?: string; productName: string; packLabel: string | null; packs: number; quantity: string; unitPriceEur: string; lineTotalEur: string; receivedQty: string | null };
-type O = { id: string; reference: string; supplierName: string; status: string; channel: string; expectedAt: string | null; totalEur: string; source: string; createdAt: string; lines: Line[]; vendorId?: string | null; fulfillment?: string | null; deliverySlot?: string | null; hasProof?: boolean; proposal?: Proposal | null };
+type O = { id: string; reference: string; supplierName: string; status: string; channel: string; expectedAt: string | null; totalEur: string; source: string; createdAt: string; receivedAt?: string | null; lines: Line[]; vendorId?: string | null; fulfillment?: string | null; deliverySlot?: string | null; hasProof?: boolean; proposal?: Proposal | null };
 type Proposal = { note?: string; expectedAt?: string; newTotalEur: number; lines: { lineId: string; productName: string; packLabel: string | null; packs: number; newPacks: number; lineTotalEur: number; newLineTotalEur: number; replacement?: { productName: string; packLabel: string | null; packs: number; lineTotalEur: number } | null }[] };
 type TL = { order: { fulfillment: string | null; deliverySlot: string | null; driverName: string | null; proofPhoto: string | null; proofSignature: string | null; proofReceiverName: string | null; proofNote: string | null; vendorDeliveredAt: string | null }; events: { id: string; at: string; type: string; label: string; actor: string | null }[] };
 const STEPS = [['sent', 'Envoyée'], ['confirmed', 'Confirmée'], ['preparing', 'En préparation'], ['shipped', 'En livraison'], ['delivered', 'Livrée'], ['received', 'Réceptionnée']] as const;
@@ -37,16 +37,30 @@ export default function Orders() {
   const [sending, setSending] = useState<{ o: O; msg: Msg } | null>(null);
   const [editing, setEditing] = useState<O | null>(null); const [packs, setPacks] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
+  // Chantier 1 (audit) : anti double-clic + affichage des refus serveur (déjà réceptionnée, quantité invraisemblable)
+  const [recvBusy, setRecvBusy] = useState(false);
+  const [recvErr, setRecvErr] = useState<{ message: string; code?: string } | null>(null);
   const openSend = async (o: O) => { const msg = await api<Msg>(`/orders/${o.id}/message`); setSending({ o, msg }); setCopied(false); };
   const markSent = async (o: O) => { await api(`/orders/${o.id}`, { method: 'PUT', json: { status: 'envoyee' } }); setSending(null); await reload(); };
   const cancel = async (o: O) => { if (!confirm(`Annuler la commande ${o.reference} ?`)) return; await api(`/orders/${o.id}`, { method: 'PUT', json: { status: 'annulee' } }); await reload(); };
   const openEdit = (o: O) => { setEditing(o); setPacks(Object.fromEntries(o.lines.map((l) => [l.id, String(l.packs)]))); };
   const saveEdit = async () => { if (!editing) return; await api(`/orders/${editing.id}/lines`, { method: 'PUT', json: { lines: editing.lines.map((l) => ({ lineId: l.id, packs: Math.max(0, Number(packs[l.id]) || 0) })) } }); setEditing(null); await reload(); };
-  const openReceive = (o: O) => { setReceiving(o); setReceived(Object.fromEntries(o.lines.map((l) => [l.id, l.quantity]))); setResult(null); };
-  const confirmReceive = async () => {
-    if (!receiving) return;
-    const r = await api<{ claimMessage: string | null; discrepancies: unknown[] }>(`/orders/${receiving.id}/receive`, { method: 'POST', json: { lines: receiving.lines.map((l) => ({ lineId: l.id, receivedQty: Number(received[l.id]) || 0 })) } });
-    setResult(r); await reload(); void disc.reload(); if (!r.claimMessage) setReceiving(null);
+  const openReceive = (o: O) => { setReceiving(o); setReceived(Object.fromEntries(o.lines.map((l) => [l.id, l.quantity]))); setResult(null); setRecvErr(null); };
+  const confirmReceive = async (override = false) => {
+    if (!receiving || recvBusy) return;
+    if (!override && !confirm(`Réceptionner ${receiving.reference} ?\n\nLe stock sera mis à jour avec les quantités reçues. Une commande ne peut être réceptionnée qu'UNE fois.`)) return;
+    setRecvBusy(true); setRecvErr(null);
+    try {
+      const r = await api<{ claimMessage: string | null; discrepancies: unknown[] }>(`/orders/${receiving.id}/receive`, {
+        method: 'POST',
+        json: { lines: receiving.lines.map((l) => ({ lineId: l.id, receivedQty: Number(received[l.id]) || 0 })), override: override || undefined },
+      });
+      setResult(r); await reload(); void disc.reload(); if (!r.claimMessage) setReceiving(null);
+    } catch (e) {
+      const code = e instanceof ApiError ? e.code : undefined;
+      setRecvErr({ message: e instanceof Error ? e.message : 'Erreur pendant la réception', code });
+      await reload(); void disc.reload();
+    } finally { setRecvBusy(false); }
   };
   const copy = (t: string) => { void navigator.clipboard.writeText(t); setCopied(true); };
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />;
@@ -56,7 +70,7 @@ export default function Orders() {
     <details className="card !p-0 group">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4">
         <div><p className="font-bold">{o.supplierName}</p><p className="text-xs text-stone-500">{o.reference} · {fmtDate(o.createdAt)} · {o.lines.length} ligne{o.lines.length > 1 ? 's' : ''}{o.expectedAt && ` · livraison ${fmtDate(o.expectedAt)}`} · {SOURCE_LABEL[o.source] ?? o.source}</p></div>
-        <div className="flex items-center gap-3">{o.fulfillment && o.status === 'confirmee' && <span className="pill bg-sky-100 text-sky-800">{({ en_preparation: '🧺 En préparation', en_livraison: '🚚 En livraison', livree: '📦 Livrée — à réceptionner' } as Record<string, string>)[o.fulfillment]}</span>}<span className={`pill ${STATUS_TONE[o.status]}`}>{STATUS_LABEL[o.status]}</span><span className="font-extrabold">{fmtEur(o.totalEur)}</span></div>
+        <div className="flex items-center gap-3">{o.receivedAt && <span className="pill bg-emerald-100 text-emerald-800">✓ Reçue le {fmtDate(o.receivedAt)}</span>}{o.fulfillment && o.status === 'confirmee' && <span className="pill bg-sky-100 text-sky-800">{({ en_preparation: '🧺 En préparation', en_livraison: '🚚 En livraison', livree: '📦 Livrée — à réceptionner' } as Record<string, string>)[o.fulfillment]}</span>}<span className={`pill ${STATUS_TONE[o.status]}`}>{STATUS_LABEL[o.status]}</span><span className="font-extrabold">{fmtEur(o.totalEur)}</span></div>
       </summary>
       <div className="border-t border-stone-100 px-5 py-4">
         <table className="w-full text-sm"><tbody className="divide-y divide-stone-100">{o.lines.map((l) => <tr key={l.id}><td className="py-1.5">{l.productName}</td><td className="py-1.5 text-stone-500">{l.packs} × {l.packLabel}</td><td className="py-1.5 text-right">{fmtQty(l.quantity)}{l.receivedQty !== null && Number(l.receivedQty) !== Number(l.quantity) && <span className="ml-1 text-xs text-red-600">(reçu {fmtQty(l.receivedQty)})</span>}</td><td className="py-1.5 text-right font-semibold">{fmtEur(l.lineTotalEur)}</td></tr>)}</tbody></table>
@@ -72,7 +86,7 @@ export default function Orders() {
           {['envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void openSend(o)} className="btn-ghost !py-1.5"><Copy size={14} /> Revoir le message</button>}
           {!['brouillon', 'annulee'].includes(o.status) && <button onClick={() => void openPdf(`/orders/${o.id}/pdf`)} className="btn-ghost !py-1.5">📄 PDF</button>}
           {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <button onClick={() => setReorder(o.id)} className="btn-ghost !py-1.5 text-brand-800">🔁 Recommander</button>}
-          {['envoyee', 'confirmee', 'preparee'].includes(o.status) && <button onClick={() => openReceive(o)} className="btn-ghost !py-1.5"><PackageCheck size={14} /> Réceptionner</button>}
+          {['envoyee', 'confirmee', 'preparee'].includes(o.status) && !o.receivedAt && <button onClick={() => openReceive(o)} className="btn-ghost !py-1.5"><PackageCheck size={14} /> Réceptionner</button>}
           {['preparee', 'envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void cancel(o)} className="btn-ghost !py-1.5 text-red-700 ml-auto"><XCircle size={14} /> Annuler</button>}
         </div>
       </div>
@@ -106,7 +120,14 @@ export default function Orders() {
       {receiving && <Modal title={`Réception — ${receiving.reference}`} subtitle={`${receiving.supplierName}. Corrigez les quantités réellement reçues.`} onClose={() => setReceiving(null)}>
         {!result ? (<>
           <div className="space-y-2">{receiving.lines.map((l) => <label key={l.id} className="flex items-center justify-between gap-3 text-sm"><span>{l.productName} <span className="text-stone-400">(commandé {fmtQty(l.quantity)})</span></span><input inputMode="decimal" className="input !w-28 text-right" value={received[l.id] ?? ''} onChange={(e) => setReceived({ ...received, [l.id]: e.target.value })} /></label>)}</div>
-          <div className="mt-5 flex justify-end gap-2"><button className="btn-ghost" onClick={() => setReceiving(null)}>Annuler</button><button className="btn-primary" onClick={() => void confirmReceive()}>Valider la réception</button></div>
+          {recvErr && <div className={`mt-3 rounded-xl border p-3 text-sm ${recvErr.code === 'quantity_out_of_range' ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-red-200 bg-red-50 text-red-800'}`}>
+            <p className="font-semibold">{recvErr.code === 'quantity_out_of_range' ? '⚠️ Quantité invraisemblable' : recvErr.code === 'order_already_received' ? '🔒 Commande déjà réceptionnée' : 'Erreur'}</p>
+            <p className="mt-1">{recvErr.message}</p>
+            {recvErr.code === 'quantity_out_of_range' && <p className="mt-2 text-xs">Si ce volume est réellement celui livré (lot exceptionnel, stock de saison…), confirmez-le explicitement : la décision sera tracée dans le suivi de la commande.</p>}
+          </div>}
+          <div className="mt-5 flex justify-end gap-2"><button className="btn-ghost" onClick={() => setReceiving(null)}>Annuler</button>
+            {recvErr?.code === 'quantity_out_of_range' && <button className="btn-ghost" disabled={recvBusy} onClick={() => void confirmReceive(true)}>Le volume est réel, confirmer</button>}
+            <button className="btn-primary" disabled={recvBusy} onClick={() => void confirmReceive()}>{recvBusy ? 'Réception…' : 'Valider la réception'}</button></div>
         </>) : (<>
           <div className="rounded-xl bg-red-50 border border-red-200 p-4"><p className="font-semibold text-red-800">🔴 {result.discrepancies.length} écart{result.discrepancies.length > 1 ? 's' : ''} détecté{result.discrepancies.length > 1 ? 's' : ''}</p><pre className="mt-2 whitespace-pre-wrap text-xs text-red-900">{result.claimMessage}</pre></div>
           <div className="mt-4 flex justify-end gap-2"><button className="btn-ghost" onClick={() => copy(result.claimMessage ?? '')}><Copy size={14} /> {copied ? 'Copié !' : 'Copier la réclamation'}</button><Link to="/app/achats/ecarts" className="btn-primary" onClick={() => setReceiving(null)}>Suivre l’écart</Link></div>

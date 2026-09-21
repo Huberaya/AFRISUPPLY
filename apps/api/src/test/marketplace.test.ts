@@ -11,7 +11,7 @@ const call = async (method: string, path: string, body?: unknown, headers: Recor
   const text = await res.text(); let json: Json = {}; try { json = JSON.parse(text); } catch { json = { raw: text }; }
   return { status: res.status, json };
 };
-const reg = async (email: string, restaurantName: string, city = 'Nantes') => { const r = await call('POST', '/api/auth/register', { email, password: 'motdepasse1', fullName: 'Test', restaurantName, city }); return { h: { authorization: `Bearer ${r.json.token}` }, rid: r.json.restaurant.id as string }; };
+const reg = async (email: string, restaurantName: string, city = 'Nantes') => { const r = await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'Test', restaurantName, city }); return { h: { authorization: `Bearer ${r.json.token}` }, rid: r.json.restaurant.id as string }; };
 
 let V: Record<string, string>; let R1: { h: Record<string, string>; rid: string }; let R2: typeof R1; let ADM: Record<string, string>; let vendorId = ''; let offerId = ''; let productId = ''; let orderId = ''; let gbId = '';
 beforeAll(async () => {

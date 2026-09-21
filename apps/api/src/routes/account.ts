@@ -4,11 +4,15 @@ import { z } from 'zod';
 import { and, eq, inArray } from 'drizzle-orm';
 import { deleteCookie } from 'hono/cookie';
 import { getDb, users, restaurants, restaurantMembers, suppliers, products, inventoryItems, orders, orderLines, sales, recipes, alerts, reorderRules, deliveries, stockMovements, priceHistory, supplierOffers } from '@afrisupply/db';
-import { requireAuth, verifyPassword, type Env } from '../lib/auth.js';
+import { requireAuth, verifyPassword, requireMinRole, type Env } from '../lib/auth.js';
 import { audit } from '../lib/ops.js';
 
 export const accountRoutes = new Hono<Env>();
 accountRoutes.use('/account/*', requireAuth);
+
+// Chantier 2 (audit) — exporter les données : responsable ; supprimer le compte : propriétaire.
+accountRoutes.on(['GET'], '/account/export', requireMinRole('manager'));
+accountRoutes.on(['DELETE'], '/account', requireMinRole('owner'));
 
 /** Export complet (JSON) : profil + chaque restaurant dont l'utilisateur est membre. */
 accountRoutes.get('/account/export', async (c) => {

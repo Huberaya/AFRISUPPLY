@@ -18,6 +18,14 @@ const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 const num = (v: number, dec = 3) => v.toFixed(dec);
 
 export async function seedDemo(opts: { force?: boolean } = {}) {
+  // Chantier 2 (audit) : le restaurant de démonstration porte des identifiants publics.
+  // En production, il ne doit exister que si c'est un choix explicite (ALLOW_DEMO_SEED=true).
+  const prod = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+  if (prod && process.env.ALLOW_DEMO_SEED !== 'true') {
+    const msg = 'Seed de démonstration refusé en production (compte awa@chezawa.fr / demo1234 accessible publiquement). Utilisez ALLOW_DEMO_SEED=true si c’est volontaire.';
+    console.error(`[seed] ${msg}`);
+    return { skipped: true as const, reason: msg };
+  }
   const db = await getDb();
 
   const existing = await db.select().from(s.restaurants).where(eq(s.restaurants.slug, 'chez-awa')).limit(1);

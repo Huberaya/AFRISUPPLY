@@ -34,8 +34,13 @@ export function CatalogImport({ onDone }: { onDone: () => void }) {
   };
   const onFile = async (f: File) => {
     const name = f.name.toLowerCase();
-    if (/\.(xlsx|xls)$/.test(name)) { const XLSX = await import('xlsx'); const wb = XLSX.read(await f.arrayBuffer()); const ws = wb.Sheets[wb.SheetNames[0]]; const csv = XLSX.utils.sheet_to_csv(ws, { FS: ';' }); setText(csv); void analyse({ text: csv }); }
-    else { const t = await f.text(); setText(t); void analyse({ text: t }); }
+    // Chantier 2 (audit) : plus de bibliothèque Excel dans le navigateur (vulnérabilité HIGH sans correctif).
+    // On lit le CSV — qu'Excel produit en deux clics — et on explique comment faire.
+    if (/\.(xlsx|xls)$/.test(name)) {
+      setMsg('Fichier Excel (.xlsx) : enregistrez-le d’abord en CSV — dans Excel : Fichier ▸ Enregistrer sous ▸ « CSV UTF-8 (délimité par des virgules) ». Le fichier CSV se lit ensuite en un clic, sans risque pour votre poste.');
+      return;
+    }
+    const t = await f.text(); setText(t); void analyse({ text: t });
   };
   const onPhoto = (f: File) => { const rd = new FileReader(); rd.onload = () => void analyse({ image: String(rd.result) }); rd.readAsDataURL(f); };
   const pid = (i: number, l: Line) => (i in choice ? choice[i] : l.match?.id ?? null);
@@ -51,14 +56,14 @@ export function CatalogImport({ onDone }: { onDone: () => void }) {
       <div className="card space-y-3">
         <h2 className="flex items-center gap-2 font-bold"><Upload size={18} /> Importer mon tarif en 2 minutes</h2>
         <div className="grid gap-2 sm:grid-cols-3">
-          <button className="btn-ghost justify-center" onClick={() => fileRef.current?.click()}><FileSpreadsheet size={16} /> Fichier Excel / CSV</button>
+          <button className="btn-ghost justify-center" onClick={() => fileRef.current?.click()}><FileSpreadsheet size={16} /> Fichier CSV (Excel accepté)</button>
           <button className="btn-ghost justify-center" onClick={() => photoRef.current?.click()}><Camera size={16} /> Photo ou scan du tarif</button>
           <span className="flex items-center justify-center gap-1 text-sm text-stone-500"><ClipboardPaste size={16} /> …ou collez le texte ci-dessous</span>
-          <input ref={fileRef} type="file" accept=".csv,.txt,.xlsx,.xls" className="hidden" onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])} />
+          <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden" onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])} />
           <input ref={photoRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => e.target.files?.[0] && onPhoto(e.target.files[0])} />
         </div>
         <textarea className="input min-h-[120px] font-mono text-xs" placeholder={'Riz brisé parfumé sac 25 kg 29,90\nHuile de palme rouge bidon 5 L 24,50\nAttiéké 1 kg x 10 32\nGombo frais carton 5 kg 19'} value={text} onChange={(e) => setText(e.target.value)} />
-        <div className="flex flex-wrap items-center gap-2"><button className="btn-primary" disabled={busy || !text.trim()} onClick={() => void analyse({ text })}>{busy ? 'Analyse…' : 'Analyser'}</button><span className="text-xs text-stone-500">Formats acceptés : texte libre (produit, conditionnement, prix), colonnes séparées par ; ou tabulation, Excel, photo (si l’IA est activée).</span></div>
+        <div className="flex flex-wrap items-center gap-2"><button className="btn-primary" disabled={busy || !text.trim()} onClick={() => void analyse({ text })}>{busy ? 'Analyse…' : 'Analyser'}</button><span className="text-xs text-stone-500">Formats acceptés : texte libre (produit, conditionnement, prix), colonnes séparées par ; ou tabulation, fichier CSV (Excel : Enregistrer sous ▸ CSV), photo (si l’IA est activée).</span></div>
         {msg && <p className="rounded-xl bg-stone-50 p-3 text-sm">{msg}</p>}
       </div>
       {lines && lines.length > 0 && (

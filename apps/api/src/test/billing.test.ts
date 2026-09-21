@@ -13,7 +13,7 @@ const call = async (method: string, path: string, body?: unknown, headers: Recor
   const res = await app.request(path, { method, headers: { 'content-type': 'application/json', ...headers }, body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined });
   let json: Json = {}; try { json = await res.json(); } catch { /* */ } return { status: res.status, json };
 };
-const reg = async (email: string, restaurantName: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'motdepasse1', fullName: 'Test', restaurantName, city: 'Nantes' }); return { h: { authorization: `Bearer ${r.json.token}` }, rid: r.json.restaurant.id as string }; };
+const reg = async (email: string, restaurantName: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'Test', restaurantName, city: 'Nantes' }); return { h: { authorization: `Bearer ${r.json.token}` }, rid: r.json.restaurant.id as string }; };
 const sign = (body: string, t = Math.floor(Date.now() / 1000)) => `t=${t},v1=${createHmac('sha256', 'whsec_test').update(`${t}.${body}`).digest('hex')}`;
 
 let R: { h: Record<string, string>; rid: string }; let ADM: Record<string, string>;

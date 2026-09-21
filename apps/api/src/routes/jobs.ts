@@ -3,7 +3,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { getDb, restaurants } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { runDailyForAll, runDailyForRestaurant, buildDigestForRestaurant } from '../jobs/daily.js';
 import { buildDigest } from '../lib/digest.js';
 import { mailerConfig } from '../lib/mailer.js';
@@ -37,6 +37,11 @@ jobsRoutes.get('/jobs/daily', runDaily);
 // --- réglages & prévisualisation, côté restaurant connecté (monté séparément, après les routeurs protégés)
 export const settingsRoutes = new Hono<Env>();
 settingsRoutes.use('*', requireAuth, requireRestaurant);
+
+// Chantier 2 (audit) — réglages du restaurant, destinataires du mail du matin et envois de test : responsable.
+settingsRoutes.on(['PUT'], '/settings', requireMinRole('manager'));
+settingsRoutes.on(['POST'], '/digest/send-test', requireMinRole('manager'));
+settingsRoutes.on(['POST'], '/settings/test-sms', requireMinRole('manager'));
 
 settingsRoutes.get('/settings', async (c) => {
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.get('restaurantId')));

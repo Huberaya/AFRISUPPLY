@@ -11,7 +11,7 @@ const call = async (method: string, path: string, body?: unknown, headers: Recor
   let json: Json = {}; try { json = await res.json(); } catch { /* */ } return { status: res.status, json };
 };
 let ADM: Record<string, string>; let code = ''; let P: { h: Record<string, string>; rid: string };
-beforeAll(async () => { await runMigrations(); const r = await call('POST', '/api/auth/register', { email: 'admin@afrisupply.fr', password: 'motdepasse1', fullName: 'Admin', restaurantName: 'Admin' }); ADM = { authorization: `Bearer ${r.json.token}` }; }, 60_000);
+beforeAll(async () => { await runMigrations(); const r = await call('POST', '/api/auth/register', { email: 'admin@afrisupply.fr', password: 'Plantain-Yassa-42', fullName: 'Admin', restaurantName: 'Admin' }); ADM = { authorization: `Bearer ${r.json.token}` }; }, 60_000);
 
 describe('programme pilote', () => {
   it('code lisible', () => { expect(makeInviteCode()).toMatch(/^PILOTE-[A-Z2-9]{4}$/); });
@@ -22,11 +22,11 @@ describe('programme pilote', () => {
     expect((await call('GET', '/api/public/invite/PILOTE-ZZZZ')).status).toBe(404);
   });
   it('inscription avec le code → restaurant fondateur, lead client, code consommé', async () => {
-    const r = await call('POST', '/api/auth/register', { email: 'fatou@lateranga.fr', password: 'motdepasse1', fullName: 'Fatou Ndiaye', restaurantName: 'La Teranga', city: 'Nantes', inviteCode: code });
+    const r = await call('POST', '/api/auth/register', { email: 'fatou@lateranga.fr', password: 'Plantain-Yassa-42', fullName: 'Fatou Ndiaye', restaurantName: 'La Teranga', city: 'Nantes', inviteCode: code });
     expect(r.status).toBe(201); expect(r.json.restaurant.founder).toBe(true); P = { h: { authorization: `Bearer ${r.json.token}` }, rid: r.json.restaurant.id };
     expect((await call('GET', `/api/public/invite/${code}`)).status).toBe(410);
     expect((await call('GET', '/api/billing', undefined, P.h)).json.founder).toBe(true);
-    const r2 = await call('POST', '/api/auth/register', { email: 'x@y.fr', password: 'motdepasse1', fullName: 'X Y', restaurantName: 'Sans code', inviteCode: 'PILOTE-FAUX' }); expect(r2.json.restaurant.founder).toBe(false);
+    const r2 = await call('POST', '/api/auth/register', { email: 'x@y.fr', password: 'Plantain-Yassa-42', fullName: 'X Y', restaurantName: 'Sans code', inviteCode: 'PILOTE-FAUX' }); expect(r2.json.restaurant.founder).toBe(false);
   });
   it('checklist : détection automatique des étapes + étape manuelle + masquage', async () => {
     let c = await call('GET', '/api/onboarding/checklist', undefined, P.h); expect(c.json).toMatchObject({ done: 0, total: 7, dayNumber: 1, founder: true });

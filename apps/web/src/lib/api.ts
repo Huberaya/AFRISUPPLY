@@ -10,7 +10,7 @@ export const tokenStore = {
   setRestaurant: (id: string) => localStorage.setItem(RESTAURANT_KEY, id),
 };
 
-export class ApiError extends Error { constructor(public status: number, message: string, public details?: unknown) { super(message); } }
+export class ApiError extends Error { constructor(public status: number, message: string, public details?: unknown, public code?: string) { super(message); } }
 
 export async function api<T = unknown>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> ?? {}) };
@@ -21,7 +21,7 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   const res = await fetch(`/api${path}`, { ...init, headers, body, credentials: 'include' });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (res.status === 402 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('afs:paywall', { detail: data?.error ?? 'Abonnement requis' }));
-  if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`, data?.details);
+  if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`, data?.details, data?.code);
   return data as T;
 }
 

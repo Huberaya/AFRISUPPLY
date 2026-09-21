@@ -5,7 +5,7 @@ import { parseCatalogLine, parseCatalogText, matchCatalogLines } from '../lib/ca
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://catimp'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr'; delete process.env.STRIPE_SECRET_KEY; delete process.env.LLM_API_KEY;
 type Json = Record<string, any>;
 const call = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => { const res = await app.request(path, { method, headers: { 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined }); let json: Json = {}; try { json = await res.json(); } catch { /* */ } return { status: res.status, json }; };
-const reg = async (email: string, name: string) => ({ authorization: `Bearer ${(await call('POST', '/api/auth/register', { email, password: 'motdepasse1', fullName: 'X Y', restaurantName: name })).json.token}` });
+const reg = async (email: string, name: string) => ({ authorization: `Bearer ${(await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'X Y', restaurantName: name })).json.token}` });
 let V: Record<string, string>; let R: Record<string, string>; let ADM: Record<string, string>; let vid: string;
 beforeAll(async () => {
   await runMigrations(); V = await reg('g@tropic.fr', 'compte grossiste'); R = await reg('r@resto.fr', 'Chez Resto'); ADM = await reg('admin@afrisupply.fr', 'Admin');

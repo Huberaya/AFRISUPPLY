@@ -8,7 +8,7 @@ const call = async (method: string, path: string, body?: unknown, headers: Recor
 let H: Record<string, string>; let piment: string; let riz: string;
 beforeAll(async () => {
   await runMigrations();
-  H = { authorization: `Bearer ${(await call('POST', '/api/auth/register', { email: 'c@r.fr', password: 'motdepasse1', fullName: 'C R', restaurantName: 'Chez Courses' })).json.token}` };
+  H = { authorization: `Bearer ${(await call('POST', '/api/auth/register', { email: 'c@r.fr', password: 'Plantain-Yassa-42', fullName: 'C R', restaurantName: 'Chez Courses' })).json.token}` };
   piment = (await call('POST', '/api/catalog/products', { name: 'Piment frais', category: 'frais', baseUnit: 'kg', aliases: ['piment'] }, H)).json.id;
   riz = (await call('POST', '/api/catalog/products', { name: 'Riz parfumé', category: 'feculents', baseUnit: 'kg', aliases: ['riz'] }, H)).json.id;
   // mon fournisseur perso : piment 4 €/kg (carton 5 kg = 20 €), riz 1,20 €/kg (sac 25 kg = 30 €)

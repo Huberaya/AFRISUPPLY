@@ -14,6 +14,7 @@ import { claimRoutes, vendorClaimRoutes, adminClaimRoutes } from './routes/claim
 import { jobsRoutes, settingsRoutes } from './routes/jobs.js';
 import { isNeon } from '@afrisupply/db';
 import { accountRoutes } from './routes/account.js';
+import { memberRoutes } from './routes/members.js';
 import { quickRoutes } from './routes/quick.js';
 import { billingRoutes, billingPublicRoutes, billingAdminRoutes } from './routes/billing.js';
 import { pilotRoutes, pilotPublicRoutes, pilotAdminRoutes } from './routes/pilots.js';
@@ -23,14 +24,22 @@ import { shoppingRoutes } from './routes/shopping.js';
 import { vendorRoutes, vendorAdminRoutes } from './routes/vendor.js';
 import { statusRoutes } from './routes/status.js';
 import { captureException, securityHeaders, rateLimit, buildInfo } from './lib/ops.js';
+import { resolveCorsOrigin, setKnownRoutes } from './lib/security.js';
 
 export const app = new Hono();
 if (process.env.NODE_ENV !== 'test') app.use('*', logger());
 app.use('*', securityHeaders);
+// Chantier 2 (audit) : freinage des points d'entrée d'authentification (y compris mot de passe oublié).
 app.use('/api/auth/login', rateLimit({ windowMs: 60_000, max: 10 }));
 app.use('/api/auth/register', rateLimit({ windowMs: 60_000, max: 5 }));
+app.use('/api/auth/forgot-password', rateLimit({ windowMs: 15 * 60_000, max: 5 }));
+app.use('/api/auth/reset-password', rateLimit({ windowMs: 15 * 60_000, max: 10 }));
+app.use('/api/auth/password', rateLimit({ windowMs: 15 * 60_000, max: 10 }));
+app.use('/api/auth/logout-all', rateLimit({ windowMs: 15 * 60_000, max: 20 }));
 app.use('/api/public/leads', rateLimit({ windowMs: 60_000, max: 5 }));
-app.use('/api/*', cors({ origin: (o) => o ?? '*', credentials: true }));
+// Chantier 2 (audit) : plus de « * » avec credentials — liste blanche explicite (ALLOWED_ORIGINS / APP_URL).
+app.use('/api/*', async (c, next) => { await next(); c.header('Cache-Control', 'no-store'); });
+app.use('/api/*', cors({ origin: (o) => resolveCorsOrigin(o), credentials: true }));
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'afrisupply-api', db: isNeon() ? 'neon' : 'pglite-local', time: new Date().toISOString(), ...buildInfo() }));
 app.route('/api', statusRoutes);
@@ -58,12 +67,16 @@ app.route('/api', manageRoutes);
 app.route('/api', claimRoutes);
 app.route('/api', settingsRoutes);
 app.route('/api', accountRoutes);
+app.route('/api', memberRoutes); // chantier 2 : membres & rôles
 app.route('/api', quickRoutes);
 app.route('/api', marketplaceRoutes);
 app.route('/api', shoppingRoutes);
 app.route('/api', billingRoutes);
 app.route('/api', pilotRoutes);
 
+
+// Chantier 2 (audit) : registre des routes déclarées, pour répondre 404 (et non 401) sur une URL inconnue.
+setKnownRoutes(app.routes.filter((r) => r.method !== 'ALL').map((r) => r.path));
 
 app.notFound((c) => c.json({ error: 'Route inconnue' }, 404));
 app.onError((err, c) => {

@@ -3,11 +3,13 @@ import { z } from 'zod';
 import { and, eq, desc, gte, sql, inArray } from 'drizzle-orm';
 import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements,
-  orders, orderLines, deliveries, recipes, recipeIngredients, sales, alerts, restaurants,
+  orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, restaurants,
+  quantityCeiling,
 } from '@afrisupply/db';
 import { nextOrderReference } from '../lib/reference.js';
 import { logOrderEvent } from '../lib/order-events.js';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
+import { checkReceive, checkSend } from '../lib/orders.js';
 import {
   computeDailyUse, stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, alertsFromOpportunities,
   compareOffers, recipeCost, marginAnalysis, supplierReliability, type StockSnapshot, type PricePoint,
@@ -16,7 +18,65 @@ import {
 export const restaurantRoutes = new Hono<Env>();
 restaurantRoutes.use('*', requireAuth, requireRestaurant);
 
+// Chantier 2 (audit) — engager de l'argent (commander) est réservé au responsable ;
+// la réception, la saisie de stock et les ventes restent ouvertes à tout le monde.
+restaurantRoutes.on(['POST'], '/suppliers', requireMinRole('manager'));
+restaurantRoutes.on(['POST'], '/orders', requireMinRole('manager'));
+restaurantRoutes.on(['POST'], '/orders/:id/send', requireMinRole('manager'));
+
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
+
+// --- Chantier 1 (audit) : garde-fous de plausibilité des quantités ---
+/** Plafond absolu d'une quantité sur une ligne (au-delà : erreur de saisie, pas une commande). */
+const RECEIPT_ABS_MAX = 1_000_000;
+const MAX_PACKS_PER_LINE = 1000;
+
+/** Sentinelle : la commande a été réceptionnée entre la lecture et l'écriture (double validation). */
+class ReceptionAlreadyDone extends Error {
+  constructor(public at: Date) { super('reception_already_done'); }
+}
+
+/** Vrai si l'erreur vient de l'index unique `deliveries_order_unique` (deux réceptions simultanées). */
+function isUniqueViolation(e: unknown, constraint: string): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const err = e as { code?: string; constraint?: string; message?: string; cause?: { code?: string; constraint?: string; message?: string } };
+  const probe = [err, err.cause].filter(Boolean) as { code?: string; constraint?: string; message?: string }[];
+  return probe.some((p) => p.code === '23505' && `${p.constraint ?? ''}${p.message ?? ''}`.includes(constraint));
+}
+
+/** « 50 kg », « 12,5 L » — pour des messages d'erreur lisibles. */
+const fmtQty = (v: number, unit: string) => `${Number(v.toFixed(3)).toLocaleString('fr-FR')} ${unit}`;
+
+/**
+ * Vérifie qu'aucune quantité demandée n'est invraisemblable, en s'appuyant sur la
+ * consommation réelle du restaurant (et non sur une constante).
+ */
+export async function assertPlausibleQuantity(
+  rid: string,
+  asked: { productName: string; productId: string; unit: string; category?: string | null; packQty: number; quantity: number; packs: number }[],
+  opts: { override?: boolean } = {},
+): Promise<{ error: string; code: string; lines: unknown[] } | null> {
+  const db = await getDb();
+  const inv = await db.select().from(inventoryItems).where(and(eq(inventoryItems.restaurantId, rid), inArray(inventoryItems.productId, asked.map((a) => a.productId))));
+  const out: { productName: string; asked: number; max: number; unit: string; message: string }[] = [];
+  for (const a of asked) {
+    const criticalLevel = n(inv.find((i) => i.productId === a.productId)?.criticalLevel ?? 0);
+    const ceiling = await quantityCeiling(rid, { productId: a.productId, packQty: a.packQty, criticalLevel, category: a.category });
+    if (a.quantity > ceiling.maxQuantity && !opts.override) {
+      out.push({
+        productName: a.productName, asked: a.quantity, max: Math.round(ceiling.maxQuantity), unit: a.unit,
+        message: `« ${a.productName} » : ${a.packs} colis (${fmtQty(a.quantity, a.unit)}) dépasse votre maximum habituel de ${ceiling.maxPacks} colis (${Math.round(ceiling.maxQuantity)} ${a.unit}).`,
+      });
+    }
+  }
+  if (!out.length) return null;
+  return {
+    code: 'quantity_out_of_range',
+    lines: out,
+    error: `Quantité invraisemblable : ${out[0].message} Vérifiez la saisie (${out[0].asked.toLocaleString('fr-FR')} ${out[0].unit} saisis), ` +
+      `ou confirmez explicitement si ce volume est réellement voulu.`,
+  };
+}
 
 // -------------------------------------------------------------
 // Helpers de chargement (partagés entre plusieurs routes)
@@ -228,7 +288,9 @@ restaurantRoutes.get('/products', async (c) => {
 restaurantRoutes.get('/compare/:productId', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb(); const productId = c.req.param('productId');
   const [product] = await db.select().from(products).where(eq(products.id, productId));
-  if (!product) return c.json({ error: 'Produit introuvable' }, 404);
+  // Cloisonnement : un produit privé n'existe que pour son restaurant (le référentiel AFRISUPPLY a restaurantId = NULL).
+  // Sans cette garde, un restaurant pouvait lire le NOM du produit privé d'un concurrent (BUG-6).
+  if (!product || (product.restaurantId && product.restaurantId !== rid)) return c.json({ error: 'Produit introuvable' }, 404);
   const [offers, stats, stocks] = await Promise.all([loadOffers(rid, productId), loadSupplierStats(rid), loadStockSnapshots(rid)]);
   const snap = stocks.find((s) => s.productId === productId);
   const daysLeft = snap ? daysOfStock(snap) : null;
@@ -255,18 +317,33 @@ restaurantRoutes.get('/orders', async (c) => {
 restaurantRoutes.post('/orders', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb(); const user = c.get('user');
   const body = z.object({
-    supplierId: z.string().uuid(), channel: z.enum(['email', 'whatsapp', 'telephone', 'plateforme']).optional(), notes: z.string().optional(), source: z.string().optional(),
-    lines: z.array(z.object({ offerId: z.string().uuid(), packs: z.number().int().positive() })).min(1),
+    supplierId: z.string().uuid(), channel: z.enum(['email', 'whatsapp', 'telephone', 'plateforme']).optional(), notes: z.string().max(2000).optional(), source: z.string().optional(),
+    lines: z.array(z.object({ offerId: z.string().uuid(), packs: z.number().int().positive().max(MAX_PACKS_PER_LINE) })).min(1),
+    /** Confirmation explicite : autorise un volume au-delà du plafond de plausibilité. */
+    override: z.boolean().optional(),
   }).safeParse(await c.req.json());
-  if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
+  if (!body.success) return c.json({ error: 'Données invalides : chaque ligne attend un nombre de colis entre 1 et ' + MAX_PACKS_PER_LINE, details: body.error.flatten() }, 400);
   const d = body.data;
   const [sup] = await db.select().from(suppliers).where(and(eq(suppliers.id, d.supplierId), eq(suppliers.restaurantId, rid)));
   if (!sup) return c.json({ error: 'Fournisseur introuvable' }, 404);
-  const offers = await db.select().from(supplierOffers).where(and(eq(supplierOffers.supplierId, sup.id), inArray(supplierOffers.id, d.lines.map((l) => l.offerId))));
+  const offers = await db.select({ offer: supplierOffers, product: products }).from(supplierOffers)
+    .innerJoin(products, eq(products.id, supplierOffers.productId))
+    .where(and(eq(supplierOffers.supplierId, sup.id), inArray(supplierOffers.id, d.lines.map((l) => l.offerId))));
   if (offers.length !== d.lines.length) return c.json({ error: 'Offre invalide pour ce fournisseur' }, 400);
+
+  // Chantier 1 (audit) : refus des quantités invraisemblables (typo 25000000 au lieu de 25)
+  const outOfRange = await assertPlausibleQuantity(rid, d.lines.map((l) => {
+    const o = offers.find((x) => x.offer.id === l.offerId)!;
+    return {
+      productId: o.product.id, productName: o.product.name, unit: o.product.baseUnit, category: o.product.category,
+      packQty: n(o.offer.packQty) || 1, packs: l.packs, quantity: l.packs * n(o.offer.packQty),
+    };
+  }), { override: d.override });
+  if (outOfRange) return c.json(outOfRange, 400);
+
   const reference = await nextOrderReference();
   const linesData = d.lines.map((l) => {
-    const o = offers.find((x) => x.id === l.offerId)!;
+    const o = offers.find((x) => x.offer.id === l.offerId)!.offer;
     const qty = l.packs * n(o.packQty); const unit = n(o.packPriceEur) / n(o.packQty);
     return { productId: o.productId, offerId: o.id, packLabel: o.packLabel, packs: l.packs, quantity: qty.toFixed(3), unitPriceEur: unit.toFixed(4), lineTotalEur: (l.packs * n(o.packPriceEur)).toFixed(2) };
   });
@@ -280,60 +357,150 @@ restaurantRoutes.post('/orders', async (c) => {
   return c.json({ order, message: `Commande ${reference} préparée chez ${sup.name} pour ${total.toFixed(2).replace('.', ',')} €.` }, 201);
 });
 
+/**
+ * Envoi de la commande au fournisseur.
+ * Chantier 1 (audit) : refus si la commande est déjà réceptionnée, annulée ou à un stade
+ * plus avancé (avant : renvoyer une commande « livrée » la faisait repartir en « envoyée »).
+ */
 restaurantRoutes.post('/orders/:id/send', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
-  const [o] = await db.update(orders).set({ status: 'envoyee', sentAt: new Date() }).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid))).returning();
-  if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  const [cur] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid)));
+  if (!cur) return c.json({ error: 'Commande introuvable' }, 404);
+  const refusal = checkSend(cur);
+  if (refusal) return c.json({ error: refusal.error, code: refusal.code }, refusal.status);
+  const [o] = await db.update(orders).set({ status: 'envoyee', sentAt: cur.sentAt ?? new Date() })
+    .where(and(eq(orders.id, cur.id), inArray(orders.status, ['brouillon', 'preparee', 'envoyee']))).returning();
+  if (!o) return c.json({ error: 'Cette commande vient de changer d\'état : rechargez la page avant de réessayer.', code: 'order_state_changed' }, 409);
+  void logOrderEvent(o.id, 'sent', 'Commande envoyée au fournisseur', 'restaurant');
   return c.json({ order: o });
 });
 
-/** Réception : met à jour le stock, enregistre les prix, crée écarts + message de réclamation. */
+/**
+ * Réception : met à jour le stock, enregistre les prix, crée écarts + message de réclamation.
+ *
+ * Chantier 1 (audit) — trois protections ajoutées :
+ *   1. une commande ne peut être réceptionnée qu'UNE fois (`received_at` + index unique sur `deliveries.order_id`) ;
+ *   2. la quantité reçue est bornée (plafond de plausibilité dérivé de la consommation réelle) ;
+ *   3. tout est écrit dans une seule transaction : soit le stock et la commande avancent ensemble, soit rien ne bouge.
+ */
 restaurantRoutes.post('/orders/:id/receive', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb(); const user = c.get('user');
-  const body = z.object({ lines: z.array(z.object({ lineId: z.string().uuid(), receivedQty: z.number().nonnegative() })), notes: z.string().optional() }).safeParse(await c.req.json());
-  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const body = z.object({
+    lines: z.array(z.object({ lineId: z.string().uuid(), receivedQty: z.number().nonnegative().max(RECEIPT_ABS_MAX) })).min(1),
+    notes: z.string().max(500).optional(),
+    /** Confirmation explicite : autorise une quantité au-delà du plafond de plausibilité. */
+    override: z.boolean().optional(),
+  }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) {
+    return c.json({
+      error: `Quantités reçues invalides (nombre attendu entre 0 et ${RECEIPT_ABS_MAX.toLocaleString('fr-FR')}).`,
+      details: body.error.flatten(),
+    }, 400);
+  }
   const [order] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, rid)));
   if (!order) return c.json({ error: 'Commande introuvable' }, 404);
-  const lines = await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(eq(orderLines.orderId, order.id));
+
+  // Garde n°1 : état de la commande (déjà réceptionnée ? annulée ? clôturée ?)
+  const refusal = checkReceive(order);
+  if (refusal) return c.json({ error: refusal.error, code: refusal.code }, refusal.status);
+
+  const lines = await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit, category: products.category })
+    .from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(eq(orderLines.orderId, order.id));
+  if (!lines.length) return c.json({ error: 'Cette commande ne contient aucune ligne : rien à réceptionner.' }, 400);
+
+  // --- Validation AVANT toute écriture : plafonds de plausibilité ligne à ligne ---
+  const inventory = await db.select().from(inventoryItems).where(and(eq(inventoryItems.restaurantId, rid), inArray(inventoryItems.productId, lines.map((l) => l.line.productId))));
+  const overCeiling: { productName: string; asked: number; max: number; unit: string; message: string }[] = [];
+  const resolved = new Map<string, number>();
+  for (const { line, productName, unit, category } of lines) {
+    const asked = body.data.lines.find((l) => l.lineId === line.id)?.receivedQty;
+    const received = asked === undefined ? n(line.quantity) : asked;
+    resolved.set(line.id, received);
+    const packQty = n(line.quantity) / Math.max(1, n(line.packs)) || 1;
+    const criticalLevel = n(inventory.find((i) => i.productId === line.productId)?.criticalLevel ?? 0);
+    const ceiling = await quantityCeiling(rid, { productId: line.productId, packQty, criticalLevel, category });
+    // Une réception tolère un dépassement modéré (erreur du fournisseur, lot plus gros) : ×2 le plafond.
+    if (received > ceiling.maxQuantity * 2 && !body.data.override) {
+      overCeiling.push({
+        productName, asked: received, max: Math.round(ceiling.maxQuantity * 2), unit,
+        message: `Vous avez commandé ${fmtQty(n(line.quantity), unit)} et saisissez ${fmtQty(received, unit)} reçus : c'est plus de deux fois votre plafond habituel (${Math.round(ceiling.maxQuantity * 2)} ${unit}).`,
+      });
+    }
+  }
+  if (overCeiling.length) {
+    return c.json({
+      error: `Quantité reçue invraisemblable pour ${overCeiling.length} ligne${overCeiling.length > 1 ? 's' : ''}. ${overCeiling[0].message} Vérifiez la saisie, ou confirmez explicitement si cette quantité est réelle.`,
+      code: 'quantity_out_of_range', lines: overCeiling,
+    }, 400);
+  }
 
   const isLate = !!order.expectedAt && new Date(order.expectedAt).getTime() < Date.now() - 86_400_000;
   const discrepancies: { lineId: string; productName: string; ordered: number; received: number; unit: string }[] = [];
-  const [delivery] = await db.insert(deliveries).values({ restaurantId: rid, orderId: order.id, receivedBy: user.id, isLate, notes: body.data.notes }).returning();
-
-  for (const { line, productName, unit } of lines) {
-    const received = body.data.lines.find((l) => l.lineId === line.id)?.receivedQty ?? n(line.quantity);
-    await db.update(orderLines).set({ receivedQty: received.toFixed(3) }).where(eq(orderLines.id, line.id));
-    if (received > 0) {
-      let [inv] = await db.select().from(inventoryItems).where(and(eq(inventoryItems.restaurantId, rid), eq(inventoryItems.productId, line.productId)));
-      if (!inv) [inv] = await db.insert(inventoryItems).values({ restaurantId: rid, productId: line.productId, quantity: '0', criticalLevel: '0' }).returning();
-      await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: inv.id, type: 'reception', quantity: received.toFixed(3), unitCostEur: line.unitPriceEur, orderId: order.id, createdBy: user.id });
-      await db.update(inventoryItems).set({ quantity: (n(inv.quantity) + received).toFixed(3), updatedAt: new Date() }).where(eq(inventoryItems.id, inv.id));
-      if (line.offerId) await db.insert(priceHistory).values({ restaurantId: rid, offerId: line.offerId, unitPriceEur: line.unitPriceEur, source: 'reception' });
-    }
-    if (Math.abs(received - n(line.quantity)) > 0.001) discrepancies.push({ lineId: line.id, productName, ordered: n(line.quantity), received, unit });
-  }
-
+  const receivedByLine = new Map<string, number>();
+  let deliveryId = '';
   let claimMessage: string | null = null;
-  if (discrepancies.length) {
-    const [sup] = await db.select().from(suppliers).where(eq(suppliers.id, order.supplierId));
-    claimMessage = `Bonjour ${sup?.contactName ?? ''},\n\nNous avons constaté un écart sur la livraison ${order.reference} :\n` +
-      discrepancies.map((d) => `• ${d.productName} : commandé ${d.ordered} ${d.unit}, reçu ${d.received} ${d.unit} (${d.ordered - d.received > 0 ? 'manquant' : 'excédent'} ${Math.abs(d.ordered - d.received)} ${d.unit})`).join('\n') +
-      `\n\nMerci de nous indiquer la suite à donner (livraison complémentaire ou avoir).\n\nCordialement,\n${user.fullName}`;
-    const { deliveryDiscrepancies } = await import('@afrisupply/db');
-    await db.insert(deliveryDiscrepancies).values(discrepancies.map((d) => ({ deliveryId: delivery.id, orderLineId: d.lineId, orderedQty: d.ordered.toFixed(3), receivedQty: d.received.toFixed(3), reason: d.ordered > d.received ? 'manquant' : 'excédent', claimMessage })));
-    await db.update(deliveries).set({ hasDiscrepancy: true }).where(eq(deliveries.id, delivery.id));
-    const missingValue = discrepancies.reduce((a, d) => { const l = lines.find((x) => x.line.id === d.lineId); return a + Math.max(0, d.ordered - d.received) * n(l?.line.unitPriceEur); }, 0);
-    await db.insert(alerts).values({
-      restaurantId: rid, dedupeKey: `ecart:${delivery.id}`, kind: 'ecart_livraison', severity: 'orange', supplierId: order.supplierId,
-      title: `Écart sur la livraison ${order.reference}`,
-      message: `${discrepancies.length} ligne${discrepancies.length > 1 ? 's' : ''} en écart chez ${sup?.name ?? 'le fournisseur'}${missingValue > 0 ? ` (~${missingValue.toFixed(2).replace('.', ',')} € manquants)` : ''}. Réclamation pré-rédigée disponible.`,
-      actionUrl: '/app/achats/ecarts', payload: { discrepancies, missingValue },
-    }).onConflictDoNothing();
+
+  try {
+    await db.transaction(async (tx) => {
+      // Re-lecture verrouillée : si une autre requête a réceptionné entre-temps, elle a posé received_at.
+      const [locked] = await tx.select().from(orders).where(eq(orders.id, order.id)).for('update');
+      if (locked?.receivedAt) throw new ReceptionAlreadyDone(locked.receivedAt);
+
+      const [delivery] = await tx.insert(deliveries).values({ restaurantId: rid, orderId: order.id, receivedBy: user.id, isLate, notes: body.data.notes }).returning();
+      deliveryId = delivery.id;
+
+      for (const { line, productName, unit } of lines) {
+        const received = resolved.get(line.id) ?? n(line.quantity);
+        receivedByLine.set(line.id, received);
+        await tx.update(orderLines).set({ receivedQty: received.toFixed(3) }).where(eq(orderLines.id, line.id));
+        if (received > 0) {
+          await tx.insert(inventoryItems).values({ restaurantId: rid, productId: line.productId, quantity: '0', criticalLevel: '0' })
+            .onConflictDoNothing({ target: [inventoryItems.restaurantId, inventoryItems.productId] });
+          const [inv] = await tx.select().from(inventoryItems).where(and(eq(inventoryItems.restaurantId, rid), eq(inventoryItems.productId, line.productId)));
+          await tx.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: inv.id, type: 'reception', quantity: received.toFixed(3), unitCostEur: line.unitPriceEur, orderId: order.id, createdBy: user.id });
+          await tx.update(inventoryItems).set({ quantity: (n(inv.quantity) + received).toFixed(3), updatedAt: new Date() }).where(eq(inventoryItems.id, inv.id));
+          if (line.offerId) await tx.insert(priceHistory).values({ restaurantId: rid, offerId: line.offerId, unitPriceEur: line.unitPriceEur, source: 'reception' });
+        }
+        if (Math.abs(received - n(line.quantity)) > 0.001) discrepancies.push({ lineId: line.id, productName, ordered: n(line.quantity), received, unit });
+      }
+
+      if (discrepancies.length) {
+        const [sup] = await tx.select().from(suppliers).where(eq(suppliers.id, order.supplierId));
+        claimMessage = `Bonjour ${sup?.contactName ?? ''},\n\nNous avons constaté un écart sur la livraison ${order.reference} :\n` +
+          discrepancies.map((d) => `• ${d.productName} : commandé ${d.ordered} ${d.unit}, reçu ${d.received} ${d.unit} (${d.ordered - d.received > 0 ? 'manquant' : 'excédent'} ${Math.abs(d.ordered - d.received)} ${d.unit})`).join('\n') +
+          `\n\nMerci de nous indiquer la suite à donner (livraison complémentaire ou avoir).\n\nCordialement,\n${user.fullName}`;
+        await tx.insert(deliveryDiscrepancies).values(discrepancies.map((d) => ({ deliveryId: delivery.id, orderLineId: d.lineId, orderedQty: d.ordered.toFixed(3), receivedQty: d.received.toFixed(3), reason: d.ordered > d.received ? 'manquant' : 'excédent', claimMessage })));
+        await tx.update(deliveries).set({ hasDiscrepancy: true }).where(eq(deliveries.id, delivery.id));
+        const missingValue = discrepancies.reduce((a, d) => { const l = lines.find((x) => x.line.id === d.lineId); return a + Math.max(0, d.ordered - d.received) * n(l?.line.unitPriceEur); }, 0);
+        await tx.insert(alerts).values({
+          restaurantId: rid, dedupeKey: `ecart:${delivery.id}`, kind: 'ecart_livraison', severity: 'orange', supplierId: order.supplierId,
+          title: `Écart sur la livraison ${order.reference}`,
+          message: `${discrepancies.length} ligne${discrepancies.length > 1 ? 's' : ''} en écart chez ${sup?.name ?? 'le fournisseur'}${missingValue > 0 ? ` (~${missingValue.toFixed(2).replace('.', ',')} € manquants)` : ''}. Réclamation pré-rédigée disponible.`,
+          actionUrl: '/app/achats/ecarts', payload: { discrepancies, missingValue },
+        }).onConflictDoNothing();
+      }
+
+      const allReceived = discrepancies.every((d) => d.received >= d.ordered);
+      const now = new Date();
+      await tx.update(orders).set({
+        status: allReceived ? 'livree' : 'livree_partiel', deliveredAt: now, receivedAt: now,
+      }).where(eq(orders.id, order.id));
+    });
+  } catch (e) {
+    if (e instanceof ReceptionAlreadyDone) {
+      return c.json({ error: `Cette commande a déjà été réceptionnée le ${e.at.toLocaleDateString('fr-FR')} : le stock n'a pas été modifié.`, code: 'order_already_received' }, 409);
+    }
+    // Verrou de base (index unique deliveries.order_id) : deux validations simultanées.
+    if (isUniqueViolation(e, 'deliveries_order_unique')) {
+      return c.json({ error: 'Cette commande est déjà en cours de réception (double validation). Rechargez la page : le stock n\'a été modifié qu\'une fois.', code: 'order_already_received' }, 409);
+    }
+    throw e;
   }
+
   const allReceived = discrepancies.every((d) => d.received >= d.ordered);
-  await db.update(orders).set({ status: allReceived ? 'livree' : 'livree_partiel', deliveredAt: new Date() }).where(eq(orders.id, order.id));
-  void logOrderEvent(order.id, 'received', allReceived ? 'Réception confirmée par le restaurant' : 'Réception avec écarts signalés', 'restaurant');
-  return c.json({ ok: true, isLate, discrepancies, claimMessage });
+  void logOrderEvent(order.id, 'received', allReceived ? 'Réception confirmée par le restaurant' : 'Réception avec écarts signalés', 'restaurant',
+    body.data.override ? { override: true } : undefined);
+  return c.json({ ok: true, isLate, discrepancies, claimMessage, deliveryId, receivedAt: new Date().toISOString() });
 });
 
 // -------------------------------------------------------------

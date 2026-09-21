@@ -35,6 +35,9 @@ const Billing = lazy(() => import('./pages/Billing'));
 const Sales = lazy(() => import('./pages/Sales'));
 const Discrepancies = lazy(() => import('./pages/Discrepancies'));
 const Settings = lazy(() => import('./pages/Settings'));
+const Team = lazy(() => import('./pages/Team'));
+const Forgot = lazy(() => import('./pages/Forgot'));
+const Reset = lazy(() => import('./pages/Reset'));
 const Express = lazy(() => import('./pages/Express'));
 const StoreHome = lazy(() => import('./pages/store/StoreHome'));
 const Catalogue = lazy(() => import('./pages/store/Catalogue'));
@@ -79,6 +82,9 @@ export default function App() {
               <Route path="/statut" element={<StatusPage />} />
             </Route>
             <Route path="/connexion" element={<Login />} />
+            <Route path="/mot-de-passe-oublie" element={<Forgot />} />
+            <Route path="/reinitialiser" element={<Reset />} />
+            <Route path="/bienvenue" element={<Reset />} />
             <Route path="/fournisseur" element={<VendorSpace />} />
             <Route path="/inscription" element={<Register />} />
             <Route element={<Protected />}>
@@ -110,6 +116,7 @@ export default function App() {
                 <Route path="demarrer" element={<Onboarding />} />
                 <Route path="import" element={<Import />} />
                 <Route path="parametres" element={<Settings />} />
+                <Route path="equipe" element={<Team />} />
                 <Route path="express" element={<Express />} />
               </Route>
             </Route>

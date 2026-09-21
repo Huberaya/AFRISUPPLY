@@ -1,30 +1,37 @@
 // Port de ethimarket/src/components/DashboardLayout.tsx — navigation à 6 entrées du concept AFRISUPPLY
 import { useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import { FeedbackWidget, UsageBeacon } from './Pilot';
 import { useAuth } from '../lib/auth';
 import { useApi } from '../lib/useApi';
 
+// minRole : mêmes règles que le serveur (les écritures sont refusées en 403 au-delà du rôle).
+// L'employé voit donc ce qu'il peut réellement utiliser ; le responsable gère achats et réglages ;
+// seul le propriétaire touche aux membres, à l'abonnement et à la suppression du compte.
 const NAV = [
   { to: '/app', icon: LayoutDashboard, label: 'Accueil', end: true },
   { to: '/app/achats', icon: ShoppingCart, label: 'Achats' },
   { to: '/app/express', icon: Zap, label: 'Saisie express' },
   { to: '/app/stock', icon: Boxes, label: 'Stock' },
   { to: '/app/stock/prevision', icon: TrendingUp, label: 'Prévision 7 j' },
-  { to: '/app/achats/panier', icon: Basket, label: 'Panier intelligent' },
+  { to: '/app/achats/panier', icon: Basket, label: 'Panier intelligent', minRole: 'manager' as const },
   { to: '/app/ventes', icon: Receipt, label: 'Ventes & auto-reorder' },
-  { to: '/app/fournisseurs', icon: Truck, label: 'Fournisseurs' },
+  { to: '/app/fournisseurs', icon: Truck, label: 'Fournisseurs', minRole: 'manager' as const },
   { to: '/app/courses', icon: ListChecks, label: 'Liste de courses' },
-  { to: '/app/marketplace', icon: Store, label: 'Marketplace' },
-  { to: '/app/recettes', icon: ChefHat, label: 'Recettes' },
+  { to: '/app/marketplace', icon: Store, label: 'Marketplace', minRole: 'manager' as const },
+  { to: '/app/recettes', icon: ChefHat, label: 'Recettes', minRole: 'manager' as const },
   { to: '/app/catalogue', icon: BookOpen, label: 'Catalogue' },
   { to: '/app/analyse', icon: BarChart3, label: 'Analyse' },
   { to: '/app/ia', icon: Sparkles, label: 'Demander à l’IA' },
   { to: '/app/demarrer', icon: Rocket, label: 'Configurer ma carte' },
-  { to: '/app/parametres', icon: SettingsIcon, label: 'Paramètres' },
+  { to: '/app/equipe', icon: Users, label: 'Équipe & sécurité' },
+  { to: '/app/parametres', icon: SettingsIcon, label: 'Paramètres', minRole: 'manager' as const },
 ];
+
+const ROLE_RANK: Record<string, number> = { staff: 0, manager: 1, owner: 2 };
+const ROLE_LABEL: Record<string, string> = { staff: 'Employé', manager: 'Responsable', owner: 'Propriétaire' };
 
 export function Logo({ light = false, to = '/app' }: { light?: boolean; to?: string }) {
   return (
@@ -37,6 +44,8 @@ export function Logo({ light = false, to = '/app' }: { light?: boolean; to?: str
 
 export default function AppLayout() {
   const { user, restaurant, restaurants, logout, switchRestaurant } = useAuth();
+  const myRole = restaurant?.role ?? 'owner';
+  const visibleNav = NAV.filter((item) => ROLE_RANK[myRole] >= ROLE_RANK[(item as { minRole?: string }).minRole ?? 'staff']);
   const [open, setOpen] = useState(false);
   const nav = useNavigate();
   const { data: alerts } = useApi<{ alerts: { isRead: boolean }[] }>('/alerts');
@@ -53,9 +62,10 @@ export default function AppLayout() {
           </select>
         ) : <p className="mt-1 font-semibold text-white truncate">{restaurant?.name}</p>}
         <Link to="/app/abonnement" onClick={() => setOpen(false)} className="pill mt-2 bg-brand-700/30 text-brand-200 capitalize hover:bg-brand-700/50">{restaurant?.plan === 'trial' ? 'Essai gratuit' : `Offre ${restaurant?.plan}`}</Link>
+        <p className="mt-1.5 text-[11px] text-stone-500">Connecté·e comme <span className="font-semibold text-stone-300">{ROLE_LABEL[myRole] ?? myRole}</span></p>
       </div>
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-        {NAV.map(({ to, icon: Icon, label, end }) => (
+        {visibleNav.map(({ to, icon: Icon, label, end }) => (
           <NavLink key={to} to={to} end={end} onClick={() => setOpen(false)}
             className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${isActive ? 'bg-brand-700 text-white' : 'hover:bg-stone-800 text-stone-300'}`}>
             <Icon className="h-4.5 w-4.5" size={18} /> {label}

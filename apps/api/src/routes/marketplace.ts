@@ -6,14 +6,24 @@ import { z } from 'zod';
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { getDb, vendors, vendorOffers, suppliers, supplierOffers, priceHistory, products, orders, orderLines, groupBuys, groupBuyParticipations, restaurants, inventoryItems, recurringOrders, users, restaurantMembers } from '@afrisupply/db';
 import { nextOrderReference } from '../lib/reference.js';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { sendMessage } from '../lib/sms.js';
 import { logOrderEvent } from '../lib/order-events.js';
+import { assertPlausibleQuantity } from './restaurant.js';
 import { APP_URL } from '../jobs/daily.js';
 import { loadPricing, priceFor } from '../lib/pricing.js';
 
 export const marketplaceRoutes = new Hono<Env>();
+
+// Chantier 2 (audit) — commander sur la place de marché engage le restaurant : responsable requis.
+marketplaceRoutes.on(['POST'], '/marketplace/vendors/:id/orders', requireMinRole('manager'));
+marketplaceRoutes.on(['POST'], '/marketplace/vendors/:id/link', requireMinRole('manager'));
+marketplaceRoutes.on(['POST'], '/marketplace/group-buys/:id/join', requireMinRole('manager'));
+
+/** Chantier 1 (audit) : plafonds structurels d'une commande (ligne = colis, panier = lignes). */
+const MAX_PACKS_PER_LINE = 1000;
+const MAX_ORDER_LINES = 80;
 marketplaceRoutes.use('*', requireAuth, requireRestaurant);
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
@@ -81,13 +91,27 @@ marketplaceRoutes.post('/marketplace/vendors/:id/link', async (c) => {
 
 /** Commande plateforme : passe par le fournisseur privé lié, statut « envoyee » immédiat, le fournisseur confirme dans son espace. */
 /** Cœur de la commande plateforme (utilisé par le panier, « Recommander » et les commandes récurrentes). */
-export async function placeVendorOrder(rid: string, vid: string, userId: string | null, input: { lines: { vendorOfferId: string; packs: number }[]; notes?: string; source?: string; skipMin?: boolean }): Promise<{ ok: true; order: typeof orders.$inferSelect; total: number; vendorName: string } | { ok: false; error: string; status: number }> {
+export async function placeVendorOrder(rid: string, vid: string, userId: string | null, input: { lines: { vendorOfferId: string; packs: number }[]; notes?: string; source?: string; skipMin?: boolean; override?: boolean }): Promise<{ ok: true; order: typeof orders.$inferSelect; total: number; vendorName: string } | { ok: false; error: string; status: number }> {
   const db = await getDb();
   const link = await linkVendor(rid, vid); if (!link) return { ok: false, error: 'Fournisseur introuvable', status: 404 };
   const [v] = await db.select().from(vendors).where(eq(vendors.id, vid)); if (v.status !== 'actif') return { ok: false, error: `${v.name} n'est plus actif sur la plateforme`, status: 400 };
   const vo = await db.select().from(vendorOffers).where(and(eq(vendorOffers.vendorId, vid), inArray(vendorOffers.id, input.lines.map((l) => l.vendorOfferId))));
   if (vo.length !== input.lines.length) return { ok: false, error: 'Offre invalide', status: 400 };
   const out = vo.filter((o) => !o.inStock); if (out.length) return { ok: false, error: `Plus disponible chez ${v.name} : ${out.map((o) => o.packLabel).join(', ')}`, status: 400 };
+  // Chantier 1 (audit) — garde-fous de volume, appliqués ici pour couvrir tous les chemins :
+  // commande manuelle, « Recommander en 1 clic », commandes récurrentes et job quotidien.
+  if (input.lines.length > MAX_ORDER_LINES) return { ok: false, error: `Trop de lignes dans la commande (${input.lines.length}), maximum ${MAX_ORDER_LINES}.`, status: 400 };
+  const tooMany = input.lines.find((l) => l.packs > MAX_PACKS_PER_LINE);
+  if (tooMany) return { ok: false, error: `Nombre de colis invraisemblable sur une ligne (${tooMany.packs}), maximum ${MAX_PACKS_PER_LINE}.`, status: 400 };
+  const prodRows = await db.select({ id: products.id, name: products.name, unit: products.baseUnit, category: products.category })
+    .from(products).where(inArray(products.id, vo.map((o) => o.productId)));
+  const outOfRange = await assertPlausibleQuantity(rid, input.lines.map((l) => {
+    const o = vo.find((x) => x.id === l.vendorOfferId)!;
+    const pr = prodRows.find((x) => x.id === o.productId);
+    const packQty = n(o.packQty) || 1;
+    return { productId: o.productId, productName: pr?.name ?? 'Produit', unit: pr?.unit ?? 'kg', category: pr?.category ?? null, packQty, packs: l.packs, quantity: l.packs * packQty };
+  }), { override: input.override });
+  if (outOfRange) return { ok: false, error: outOfRange.error, status: 400 };
   const pricing = await loadPricing(vo, rid);
   const linesData = input.lines.map((l) => { const o = vo.find((x) => x.id === l.vendorOfferId)!; const pp = priceFor(o, l.packs, pricing).packPriceEur; return { productId: o.productId, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n(o.packQty)).toFixed(3), unitPriceEur: (pp / n(o.packQty)).toFixed(4), lineTotalEur: (l.packs * pp).toFixed(2) }; });
   const total = linesData.reduce((a, l) => a + Number(l.lineTotalEur), 0);
@@ -106,8 +130,13 @@ export async function placeVendorOrder(rid: string, vid: string, userId: string 
 
 marketplaceRoutes.post('/marketplace/vendors/:id/orders', async (c) => {
   const rid = c.get('restaurantId'); const user = c.get('user'); const vid = c.req.param('id');
-  const body = z.object({ lines: z.array(z.object({ vendorOfferId: z.string().uuid(), packs: z.number().int().positive() })).min(1), notes: z.string().max(300).optional(), source: z.string().optional() }).safeParse(await c.req.json());
-  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const body = z.object({
+    lines: z.array(z.object({ vendorOfferId: z.string().uuid(), packs: z.number().int().positive().max(MAX_PACKS_PER_LINE) })).min(1).max(MAX_ORDER_LINES),
+    notes: z.string().max(300).optional(), source: z.string().optional(),
+    /** Confirmation explicite : autorise un volume au-delà de votre plafond habituel. */
+    override: z.boolean().optional(),
+  }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: `Données invalides : chaque ligne attend un nombre de colis entre 1 et ${MAX_PACKS_PER_LINE} (panier de ${MAX_ORDER_LINES} lignes maximum).` }, 400);
   const res = await placeVendorOrder(rid, vid, user.id, body.data); if (!res.ok) return c.json({ error: res.error }, res.status as 400);
   return c.json({ order: res.order, message: `Commande ${res.order.reference} envoyée à ${res.vendorName} (${eur(res.total)}). Vous serez prévenu dès confirmation.` }, 201);
 });

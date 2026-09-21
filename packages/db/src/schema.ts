@@ -39,9 +39,23 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash').notNull(),
   fullName: text('full_name').notNull(),
   phone: text('phone'),
+  // Chantier 2 (audit) : numéro de génération de session. Incrémenté à chaque changement de mot de
+  // passe / déconnexion globale → tous les jetons déjà émis deviennent invalides (révocation immédiate).
+  tokenVersion: integer('token_version').default(0).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
 });
+
+/** Chantier 2 (audit) : jetons de réinitialisation de mot de passe (stockés hachés, usage unique, expiration 1 h). */
+export const passwordResets = pgTable('password_resets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  requestedIp: text('requested_ip'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('password_resets_user_idx').on(t.userId, t.createdAt)]);
 
 export const restaurants = pgTable('restaurants', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -222,6 +236,8 @@ export const orders = pgTable('orders', {
   // chantier 21 : proposition de modification du grossiste (ruptures / substitutions) en attente du restaurant
   proposal: jsonb('proposal').$type<OrderProposal>(),
   proposalAt: timestamp('proposal_at', { withTimezone: true }),
+  // chantier 1 (audit) : horodatage de la réception — une commande n'est réceptionnable qu'une seule fois
+  receivedAt: timestamp('received_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('orders_restaurant_idx').on(t.restaurantId, t.createdAt), uniqueIndex('orders_ref').on(t.reference)]);
 
@@ -248,7 +264,9 @@ export const deliveries = pgTable('deliveries', {
   hasDiscrepancy: boolean('has_discrepancy').default(false).notNull(),
   invoiceUrl: text('invoice_url'),
   notes: text('notes'),
-});
+  // chantier 1 (audit) : une commande = une seule livraison. Contrainte de base empêchant
+  // le double comptage du stock en cas de double validation (course ou double clic).
+}, (t) => [uniqueIndex('deliveries_order_unique').on(t.orderId)]);
 
 export const deliveryDiscrepancies = pgTable('delivery_discrepancies', {
   id: uuid('id').primaryKey().defaultRandom(),

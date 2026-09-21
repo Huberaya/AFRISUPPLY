@@ -4,7 +4,7 @@ import { runMigrations } from '@afrisupply/db';
 import { app } from '../app.js';
 type Json = Record<string, any>;
 const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, json: (await r.clone().json().catch(() => ({}))) as Json, raw: r }; };
-const reg = async (email: string, name: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'motdepasse1', fullName: 'Test', restaurantName: name, city: 'Nantes' }); return { h: { Authorization: `Bearer ${r.json.token}` } }; };
+const reg = async (email: string, name: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'Test', restaurantName: name, city: 'Nantes' }); return { h: { Authorization: `Bearer ${r.json.token}` } }; };
 let ADM: Record<string, string>; let V: Record<string, string>; let R: Record<string, string>;
 beforeAll(async () => { await runMigrations(); ADM = (await reg('admin@afrisupply.fr', 'Admin')).h; V = (await reg('gros@x.fr', 'Gros')).h; R = (await reg('resto@x.fr', 'Resto PDF')).h; const t = await call('GET', '/api/onboarding/templates', undefined, R); await call('POST', '/api/onboarding/apply', { templates: t.json.templates.slice(0, 2).map((x: Json) => x.id ?? x.name) }, R); }, 60_000);
 

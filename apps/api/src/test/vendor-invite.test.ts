@@ -4,7 +4,7 @@ import { runMigrations } from '@afrisupply/db';
 import { app } from '../app.js';
 type Json = Record<string, any>;
 const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, json: (await r.json().catch(() => ({}))) as Json }; };
-const reg = async (email: string, name: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'motdepasse1', fullName: 'Test', restaurantName: name, city: 'Nantes' }); return { h: { Authorization: `Bearer ${r.json.token}` } }; };
+const reg = async (email: string, name: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'Test', restaurantName: name, city: 'Nantes' }); return { h: { Authorization: `Bearer ${r.json.token}` } }; };
 let ADM: Record<string, string>; let pid: string;
 beforeAll(async () => { await runMigrations(); ADM = (await reg('admin@afrisupply.fr', 'Admin')).h; const p = await call('POST', '/api/admin/prospects', { kind: 'fournisseur', name: 'Exofoods Rungis', city: 'Rungis', phone: '0146870000', contactName: 'M. Diallo' }, ADM); pid = p.json.prospect?.id ?? p.json.id; }, 60_000);
 
@@ -32,7 +32,7 @@ describe('invitation fournisseur (chantier 14)', () => {
 
 describe('analytics fournisseur (chantier 15)', () => {
   it('renvoie ventes, clients, tendance et demande non couverte', async () => {
-    const V = { Authorization: (await call('POST', '/api/auth/login', { email: 'diallo@exofoods.fr', password: 'motdepasse1' })).json.token ? `Bearer ${(await call('POST', '/api/auth/login', { email: 'diallo@exofoods.fr', password: 'motdepasse1' })).json.token}` : '' };
+    const V = { Authorization: (await call('POST', '/api/auth/login', { email: 'diallo@exofoods.fr', password: 'Plantain-Yassa-42' })).json.token ? `Bearer ${(await call('POST', '/api/auth/login', { email: 'diallo@exofoods.fr', password: 'Plantain-Yassa-42' })).json.token}` : '' };
     const R = (await reg('client@resto.fr', 'Resto Client')).h;
     const t = await call('GET', '/api/onboarding/templates', undefined, R); await call('POST', '/api/onboarding/apply', { templates: t.json.templates.slice(0, 2).map((x: Json) => x.id ?? x.name) }, R);
     const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;

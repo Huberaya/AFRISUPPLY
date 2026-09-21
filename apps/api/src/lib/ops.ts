@@ -1,5 +1,6 @@
 // Exploitation : remontée d'erreurs (Sentry via API HTTP, zéro dépendance), rate limiting, en-têtes de sécurité, audit.
 import type { Context, MiddlewareHandler, Next } from 'hono';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import { getDb, auditLog } from '@afrisupply/db';
 
 // ---------- Sentry (envelope API) ----------
@@ -31,13 +32,28 @@ export async function captureException(err: unknown, ctx: { route?: string; meth
 
 // ---------- Rate limiting (mémoire par instance : suffisant pour freiner le brute-force sur une fonction serverless) ----------
 const buckets = new Map<string, { n: number; reset: number }>();
+
+/**
+ * Adresse client fiable. `X-Forwarded-For` n'est utilisé que si l'on est réellement derrière un proxy
+ * (Vercel, ou TRUST_PROXY=true) : sinon n'importe qui pourrait contourner la limitation en changeant l'en-tête.
+ */
+export function clientIp(c: Context): string {
+  const trustProxy = process.env.TRUST_PROXY === 'true' || !!process.env.VERCEL;
+  const xff = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
+  if (trustProxy && xff) return xff;
+  try { const addr = getConnInfo(c)?.remote?.address; if (addr) return addr; } catch { /* contexte sans socket (tests) */ }
+  return xff ?? c.req.header('x-real-ip') ?? 'local';
+}
+
 export function rateLimit(opts: { windowMs: number; max: number; key?: (c: Context) => string }): MiddlewareHandler {
   return async (c, next) => {
-    const ip = c.req.header('x-forwarded-for')?.split(',')[0].trim() ?? c.req.header('x-real-ip') ?? 'local';
+    const ip = clientIp(c);
     const k = `${opts.key ? opts.key(c) : c.req.path}:${ip}`; const now = Date.now();
     let b = buckets.get(k); if (!b || b.reset < now) { b = { n: 0, reset: now + opts.windowMs }; buckets.set(k, b); }
     b.n += 1;
+    // Purge des compteurs expirés (évite la croissance mémoire sur un process longue durée).
     if (buckets.size > 5000) for (const [kk, v] of buckets) if (v.reset < now) buckets.delete(kk);
+    if (buckets.size > 20_000) buckets.clear();
     c.header('X-RateLimit-Limit', String(opts.max)); c.header('X-RateLimit-Remaining', String(Math.max(0, opts.max - b.n)));
     if (b.n > opts.max) { c.header('Retry-After', String(Math.ceil((b.reset - now) / 1000))); return c.json({ error: 'Trop de tentatives, réessayez dans une minute.' }, 429); }
     await next();

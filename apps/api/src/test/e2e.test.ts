@@ -19,11 +19,11 @@ beforeAll(async () => { await runMigrations(); }, 60_000);
 
 describe('1. Inscription → connexion → isolation', () => {
   it('crée un compte + restaurant (essai 30 j) et renvoie un token', async () => {
-    const r = await call('POST', '/api/auth/register', { email: 'test@resto.fr', password: 'motdepasse1', fullName: 'Fatou Test', restaurantName: 'Le Test', city: 'Nantes', coversPerDay: 40 });
+    const r = await call('POST', '/api/auth/register', { email: 'test@resto.fr', password: 'Plantain-Yassa-42', fullName: 'Fatou Test', restaurantName: 'Le Test', city: 'Nantes', coversPerDay: 40 });
     expect(r.status).toBe(201); expect(r.json.restaurant.plan).toBe('trial'); token = r.json.token; restaurantId = r.json.restaurant.id; auth = { authorization: `Bearer ${token}` };
   });
   it('refuse un doublon (409) et un mauvais mot de passe (401), puis journalise l’échec', async () => {
-    expect((await call('POST', '/api/auth/register', { email: 'test@resto.fr', password: 'motdepasse1', fullName: 'X Y', restaurantName: 'Dup' })).status).toBe(409);
+    expect((await call('POST', '/api/auth/register', { email: 'test@resto.fr', password: 'Plantain-Yassa-42', fullName: 'X Y', restaurantName: 'Dup' })).status).toBe(409);
     expect((await call('POST', '/api/auth/login', { email: 'test@resto.fr', password: 'faux' })).status).toBe(401);
   });
   it('protège les routes (401 sans token) et sert le dashboard avec token', async () => {
@@ -31,7 +31,7 @@ describe('1. Inscription → connexion → isolation', () => {
     const d = await call('GET', '/api/dashboard', undefined, A()); expect(d.status).toBe(200); expect(d.json.restaurant.id).toBe(restaurantId);
   });
   it('un autre utilisateur ne voit pas ce restaurant (X-Restaurant-Id refusé)', async () => {
-    const o = await call('POST', '/api/auth/register', { email: 'autre@resto.fr', password: 'motdepasse1', fullName: 'Autre Chef', restaurantName: 'Autre' });
+    const o = await call('POST', '/api/auth/register', { email: 'autre@resto.fr', password: 'Plantain-Yassa-42', fullName: 'Autre Chef', restaurantName: 'Autre' });
     const r = await call('GET', '/api/dashboard', undefined, { authorization: `Bearer ${o.json.token}`, 'x-restaurant-id': restaurantId });
     expect(r.status).toBe(403);
   });
@@ -117,7 +117,7 @@ describe('5. Exploitation : cron, statut, RGPD, sécurité', () => {
   it('export RGPD contient le restaurant et ses commandes ; suppression exige le mot de passe puis efface tout', async () => {
     const ex = await call('GET', '/api/account/export', undefined, A()); expect(ex.status).toBe(200); expect(ex.json.user.email).toBe('test@resto.fr'); expect(ex.json.restaurants[0].orders.length).toBe(1);
     expect((await call('DELETE', '/api/account', { password: 'faux', confirm: 'SUPPRIMER' }, A())).status).toBe(401);
-    const del = await call('DELETE', '/api/account', { password: 'motdepasse1', confirm: 'SUPPRIMER' }, A()); expect(del.status).toBe(200); expect(del.json.restaurantsDeleted).toBe(1);
-    expect((await call('POST', '/api/auth/login', { email: 'test@resto.fr', password: 'motdepasse1' })).status).toBe(401);
+    const del = await call('DELETE', '/api/account', { password: 'Plantain-Yassa-42', confirm: 'SUPPRIMER' }, A()); expect(del.status).toBe(200); expect(del.json.restaurantsDeleted).toBe(1);
+    expect((await call('POST', '/api/auth/login', { email: 'test@resto.fr', password: 'Plantain-Yassa-42' })).status).toBe(401);
   });
 });

@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, sql, desc } from 'drizzle-orm';
 import { getDb, restaurants, billingEvents, commissions, commissionInvoices, vendors, vendorMembers, users } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { PLANS, FOUNDER_OFFER } from './public.js';
 import { accessState, applySubscription, createCheckout, createPortal, stripe, stripeConfigured, verifyStripeSignature, priceIdFor, billingEnforced, type PlanId } from '../lib/billing.js';
 import { sendMail } from '../lib/mailer.js';
@@ -42,6 +42,11 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
 
 // ---------- Côté restaurant ----------
 export const billingRoutes = new Hono<Env>();
+
+// Chantier 2 (audit) — souscrire, payer ou résilier : propriétaire uniquement.
+billingRoutes.on(['POST'], '/billing/checkout', requireMinRole('owner'));
+billingRoutes.on(['POST'], '/billing/portal', requireMinRole('owner'));
+billingRoutes.on(['POST'], '/billing/sync', requireMinRole('owner'));
 billingRoutes.use('*', requireAuth, requireRestaurant);
 
 billingRoutes.get('/billing', async (c) => {

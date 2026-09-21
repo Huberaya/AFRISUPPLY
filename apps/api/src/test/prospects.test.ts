@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.e
 type Json = Record<string, any>;
 const call = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => { const res = await app.request(path, { method, headers: { 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined }); let json: Json = {}; try { json = await res.json(); } catch { /* */ } return { status: res.status, json }; };
 let ADM: Record<string, string>; let USR: Record<string, string>;
-beforeAll(async () => { await runMigrations(); ADM = { authorization: `Bearer ${(await call('POST', '/api/auth/register', { email: 'admin@afrisupply.fr', password: 'motdepasse1', fullName: 'Admin', restaurantName: 'Admin' })).json.token}` }; USR = { authorization: `Bearer ${(await call('POST', '/api/auth/register', { email: 'u@r.fr', password: 'motdepasse1', fullName: 'U R', restaurantName: 'Resto U' })).json.token}` }; }, 60_000);
+beforeAll(async () => { await runMigrations(); ADM = { authorization: `Bearer ${(await call('POST', '/api/auth/register', { email: 'admin@afrisupply.fr', password: 'Plantain-Yassa-42', fullName: 'Admin', restaurantName: 'Admin' })).json.token}` }; USR = { authorization: `Bearer ${(await call('POST', '/api/auth/register', { email: 'u@r.fr', password: 'Plantain-Yassa-42', fullName: 'U R', restaurantName: 'Resto U' })).json.token}` }; }, 60_000);
 describe('prospection', () => {
   it('réservé admin ; création restaurant et fournisseur avec nom/adresse/tél/e-mail ; filtres ; import ; statut ; suppression', async () => {
     expect((await call('GET', '/api/admin/prospects', undefined, USR)).status).toBe(403);
