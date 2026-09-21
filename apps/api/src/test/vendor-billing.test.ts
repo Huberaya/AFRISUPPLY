@@ -81,6 +81,7 @@ describe('chantier 8 — moyen de paiement fournisseur', () => {
     const rows = await db.select().from(vendors).orderBy(vendors.createdAt);
     vid = rows.find((v) => v.name === 'Grossiste Huit')!.id;
     vid2 = rows.find((v) => v.name === 'Grossiste Huit Bis')!.id;
+    expect(vid2).toBeTruthy();   // le second grossiste existe bien (isolation)
   });
 
   it('sans carte : l’état annoncé est « relevé par e-mail », avec l’adresse réellement utilisée', async () => {

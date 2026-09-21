@@ -34,7 +34,7 @@ export function Commissions() {
         .catch(async () => { await load(); setMsg('Paiement reçu — l’activation prend quelques secondes, rechargez la page.'); });
     }
     if (p === 'annule') setMsg('Enregistrement de carte annulé — vous pouvez réessayer quand vous voulez.');
-  }, [sp, load]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sp, load]);
 
   const setup = async () => {
     setBusy(true); setMsg(null);

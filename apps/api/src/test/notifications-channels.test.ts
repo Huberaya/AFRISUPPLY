@@ -43,7 +43,7 @@ const outboxFiles = () => { try { return readdirSync(OUTBOX); } catch { return [
 const outboxText = (needle: string) => outboxFiles().filter((f) => f.endsWith('.txt')).map((f) => readFileSync(path.join(OUTBOX, f), 'utf8')).filter((t) => t.includes(needle));
 
 let A: Record<string, string>;        // propriétaire / manager du restaurant
-let rid = ''; let productId = ''; let supplierId = ''; let orderId = ''; let lineId = '';
+let rid = ''; let productId = ''; let orderId = ''; let lineId = '';
 const PWD = 'Plantain-Yassa-42';
 
 beforeAll(async () => {

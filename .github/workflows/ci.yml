@@ -1,0 +1,105 @@
+# Intégration continue — chantier 10 « Rendre le dépôt fiable et vérifiable ».
+#
+# Deux niveaux :
+#   1. « qualite »       : lint + types + tests + build + contrôle du bundle committé (rapide, quelques minutes) ;
+#   2. « verifications » : les 9 scripts de bout en bout contre une API réellement démarrée (PGlite + seed),
+#      avec le serveur web de développement (certains scripts lisent les sources web servies par Vite).
+#
+# Une erreur volontairement introduite (type, lint, test, ou bundle non régénéré) fait échouer la CI.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualite:
+    name: Qualité (lint, types, tests, build, bundle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Dépendances de production (aucune vulnérabilité connue)
+        run: npm audit --omit=dev --audit-level=high
+      - name: Scripts de vérification — syntaxe
+        run: |
+          python3 -m compileall -q scripts/verifications
+          echo "scripts de vérification — syntaxe OK"
+      - name: Lint
+        run: npm run lint
+      - name: Types (un workspace à la fois)
+        run: npm run typecheck
+      - name: Tests (base, API, web)
+        run: npm test
+      - name: Build (bundle web + typecheck)
+        run: npm run build
+      - name: Le bundle serverless committé correspond-il aux sources ?
+        run: npm run check:bundle
+
+  verifications:
+    name: Vérifications de bout en bout (API réelle)
+    runs-on: ubuntu-latest
+    needs: qualite
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - name: Dépendances de production (aucune vulnérabilité connue)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Démarrer l'API (PGlite + seed démo) et le web
+        env:
+          PGLITE_DIR: ${{ runner.temp }}/afs-pglite-ci
+          SEED_DEMO: 'true'
+          JWT_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+          CRON_SECRET: dev-cron
+          ADMIN_EMAILS: admin@afrisupply.fr
+        run: |
+          npm run start -w apps/api > /tmp/api.log 2>&1 &
+          npm run dev:web > /tmp/web.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8787/api/health > /dev/null && curl -sf http://localhost:3000/ > /dev/null; then
+              echo "API et web prêts"; break
+            fi
+            sleep 2
+          done
+          curl -sf http://localhost:8787/api/health || (tail -50 /tmp/api.log && exit 1)
+          curl -sf -o /dev/null http://localhost:3000/ || (tail -50 /tmp/web.log && exit 1)
+
+      - name: Vérifications de bout en bout (9 scripts)
+        env:
+          AFS_API: http://localhost:8787/api
+          AFS_WEB: http://localhost:3000
+        run: npm run verifs:e2e
+
+      - name: Journaux en cas d'échec
+        if: failure()
+        run: |
+          echo "=== API ==="; tail -60 /tmp/api.log || true
+          echo "=== WEB ==="; tail -60 /tmp/web.log || true
+
+      - name: Résultats des vérifications
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultats-verifications
+          path: scripts/verifications/resultats/*.json
+          if-no-files-found: warn

@@ -1,5 +1,5 @@
 // Chantier 27 — Indicateurs de fiabilité grossiste (calculés à la volée, 90 derniers jours pour l'opérationnel, tous les avis pour la note).
-import { and, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, gte, inArray, sql } from 'drizzle-orm';
 import { getDb, orders, vendorReviews } from '@afrisupply/db';
 
 export type Reliability = { rating: number | null; reviews: number; onTimePct: number | null; conformPct: number | null; acceptPct: number | null; avgResponseH: number | null; disputePct: number | null; orders90d: number; badge: 'excellent' | 'fiable' | 'nouveau' | 'a_surveiller' };

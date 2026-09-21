@@ -67,7 +67,7 @@ Document de cadrage : les **10 chantiers** à mener, de la base de code hérité
 - [ ] **RLS** par restaurant dès le départ (leçon d'ethimarket : le durcissement tardif a coûté une migration entière).
 - [ ] Porter tel quel : `auth.tsx`, `ProtectedRoute`, pages Login/Register/Reset, `DashboardLayout`, `NotificationBell`, `notificationService`, `ErrorBoundary`, `errorMonitor`, `Skeleton`.
 - [ ] i18n : garder le mécanisme mais **FR uniquement** au lancement.
-- [ ] CI GitHub Actions : lint + typecheck + tests + build. Déploiement Vercel (preview par PR).
+- [x] **CI GitHub Actions** (`.github/workflows/ci.yml`) : lint + types + tests + build + contrôle du bundle committé, **plus** les 9 scripts de vérification de bout en bout. Déploiement Vercel (preview par PR) — chantier de l'audit n° 10.
 - [ ] Environnements : `dev` / `staging` / `prod` Supabase.
 - [ ] Données de démonstration : 1 restaurant fictif (« Chez Awa ») avec 12 plats, 40 produits, 6 fournisseurs, 90 jours d'historique.
 
@@ -267,9 +267,31 @@ Financement possible : BPI Bourse French Tech, prêt d'honneur (Initiative / Ré
 
 ---
 
-## Les 30 prochains jours
+## Chantiers issus de l'audit de septembre 2026
 
-1. **Semaine 1** — Lancer les entretiens (chantier 0) **en parallèle** du bootstrap du repo (chantier 1).
-2. **Semaine 2** — Schéma Supabase + auth + layout déployés en staging ; 10 entretiens réalisés.
-3. **Semaine 3** — Module Stock + Fournisseurs fonctionnels avec données démo ; référentiel 100 produits.
-4. **Semaine 4** — Commandes + réception + comparateur ; décision go/no-go ; 5 pilotes signés.
+L'audit critique de l'existant (verdict « ⚠️ OUI, mais avec conditions », document tenu hors dépôt) a donné une liste
+de chantiers, menés **un par un**, chacun avec ses tests, ses vérifications en direct et son rapport :
+
+| # | Chantier | Statut |
+|---|---|---|
+| 1 | Intégrité de la réception et des statuts de commande | ✅ livré (poussé) |
+| 2 | Sécurisation du déploiement et cloisonnement des données | ✅ livré (poussé) |
+| 3 | Prix réellement facturé et détection de la hausse | ✅ livré (poussé) |
+| 4 | Page Analyse réellement utile (« pourquoi mes coûts augmentent ») | ✅ livré |
+| 5 | Accès et récupération de compte | ✅ livré |
+| 6 | Canaux réels : e-mail, WhatsApp, notifications | ✅ livré |
+| 7 | Encaissement et offre commerciale honnête | ✅ livré |
+| 8 | Parcours client et moyens de paiement | ✅ livré |
+| 9 | Prévision robuste (cascade de sources, relances, saisonnalité) | ✅ livré |
+| 10 | Qualité, CI et dette : rendre le dépôt fiable et vérifiable | ✅ livré |
+| 11 | UX : recentrer le produit sur le parcours d'achat | ⏳ à venir |
+| 12 | Exploitation : sauvegardes, supervision, support | ⏳ à venir |
+
+## Les 30 prochains jours (révisé après audit)
+
+1. **Semaine 1** — Chantier UX : navigation ramenée à 6 entrées, plus aucun `alert()`/`confirm()` natif, parcours guidé
+   « Rupture → Commander → Recevoir », mobile utilisable sur les 6 écrans principaux.
+2. **Semaine 2** — Chantier Exploitation : sauvegarde/restauration **testées**, supervision branchée, journal d'audit consultable,
+   canal de support, puis test à blanc avec 3 restaurateurs qui n'ont jamais vu le produit.
+3. **Semaine 3** — Brancher les clés réelles (Stripe, Resend) sur un environnement de recette, rejouer la CI sur les deux
+   environnements, puis ouvrir le pilote fondateur aux premiers restaurants.

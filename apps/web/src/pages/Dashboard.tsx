@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { RefreshCw, ArrowRight } from 'lucide-react';
 import { api, fmtEur, fmtQty, fmtDate, STATUS_LABEL } from '../lib/api';
@@ -18,8 +18,9 @@ type Dash = {
 export default function Dashboard() {
   const { data, loading, error, reload } = useApi<Dash>('/dashboard');
   const [refreshing, setRefreshing] = useState(false);
-  const refreshAlerts = async () => { setRefreshing(true); try { await api('/alerts/refresh', { method: 'POST' }); await reload(); } finally { setRefreshing(false); } };
-  useEffect(() => { if (data && data.alerts.length === 0) void refreshAlerts();   }, [data?.alerts.length === 0]);
+  const refreshAlerts = useCallback(async () => { setRefreshing(true); try { await api('/alerts/refresh', { method: 'POST' }); await reload(); } finally { setRefreshing(false); } }, [reload]);
+  const noAlertYet = data ? data.alerts.length === 0 : false;
+  useEffect(() => { if (noAlertYet) void refreshAlerts(); }, [noAlertYet, refreshAlerts]);
   const markRead = async (id: string) => { await api(`/alerts/${id}/read`, { method: 'POST' }); await reload(); };
 
   if (loading && !data) return <Loader />;

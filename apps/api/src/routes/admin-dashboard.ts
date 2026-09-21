@@ -1,7 +1,7 @@
 // Chantier 17 — Tableau de bord fondateur : toute la plateforme en un écran (offre, demande, activité, argent, funnel, journal).
 import { Hono } from 'hono';
-import { and, desc, eq, gte, isNull, sql } from 'drizzle-orm';
-import { getDb, users, restaurants, vendors, vendorOffers, products, orders, orderLines, inventoryItems, prospects, leads, commissions, auditLog, suppliers } from '@afrisupply/db';
+import { desc, eq, gte, isNull, sql } from 'drizzle-orm';
+import { getDb, users, restaurants, vendors, vendorOffers, products, orders, inventoryItems, prospects, leads, commissions, auditLog } from '@afrisupply/db';
 import { requireAuth, type Env } from '../lib/auth.js';
 
 const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());

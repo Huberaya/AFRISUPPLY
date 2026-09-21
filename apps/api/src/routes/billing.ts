@@ -2,13 +2,13 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, sql, desc } from 'drizzle-orm';
-import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors, vendorMembers, users } from '@afrisupply/db';
+import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { PLANS, FOUNDER_OFFER } from './public.js';
 import {
   accessState, applySubscription, createCheckout, createPortal, stripe, stripeConfigured, verifyStripeSignature,
   priceIdFor, billingEnforced, billingHealth, seatsFor, planPrice, billingRecipient, effectivePrice, mrr, recentInvoices,
-  recordSubscriptionInvoice, applyVendorSetup, vendorBillingRecipient, vendorCommissionInvoices, type PlanId,
+  recordSubscriptionInvoice, applyVendorSetup, vendorBillingRecipient, type PlanId,
 } from '../lib/billing.js';
 import { commissionPdf } from '../lib/pdf.js';
 import { invoicePdf, emitterComplete } from '../lib/pdf.js';

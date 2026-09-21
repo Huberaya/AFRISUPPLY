@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, isNull, gt } from 'drizzle-orm';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { setCookie, deleteCookie } from 'hono/cookie';
 import { getDb, users, restaurants, restaurantMembers, leads, passwordResets, emailVerifications } from '@afrisupply/db';
 import { hashPassword, verifyPassword, signToken, requireAuth, tokenTtlSeconds, type Env } from '../lib/auth.js';
@@ -13,7 +13,6 @@ import { audit } from '../lib/ops.js';
 const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 // Chantier 2 (audit) : la durée du cookie suit celle du jeton (7 j par défaut, au lieu de 30 j).
 const cookieOpts = { httpOnly: true, sameSite: 'Lax' as const, path: '/', maxAge: tokenTtlSeconds(), secure: process.env.NODE_ENV === 'production' };
-const RESET_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TTL_MINUTES ?? 60);
 const hashResetToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
 export const authRoutes = new Hono<Env>();

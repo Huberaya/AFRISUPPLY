@@ -2,7 +2,7 @@
 //
 // Page ouverte depuis le lien reçu par e-mail (/verifier-email?token=…).
 // Elle dit exactement ce qui s'est passé : confirmée, déjà confirmée, expirée, lien inconnu.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { MailCheck, MailWarning } from 'lucide-react';
 import { api } from '../lib/api';
@@ -18,7 +18,9 @@ export default function VerifyEmail() {
   const [state, setState] = useState<{ done: boolean; ok: boolean; message: string; email?: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const send = async () => {
+  // `useCallback` : la tentative est unique mais l'effet ci-dessous doit dépendre d'une fonction
+  // stable, sinon il se relancerait à chaque rendu.
+  const send = useCallback(async () => {
     if (!token) return;
     setBusy(true);
     try {
@@ -28,11 +30,11 @@ export default function VerifyEmail() {
     } catch (e) {
       setState({ done: true, ok: false, message: (e as Error).message });
     } finally { setBusy(false); }
-  };
+  }, [token, user, refresh]);
 
   // `send()` gère déjà les erreurs ; le `.catch` est une ceinture de sécurité : aucun échec
   // de cette page ne doit finir en « promesse non gérée » dans la console de l'utilisateur.
-  useEffect(() => { send().catch(() => {}); /* une seule tentative : un lien ne sert qu'une fois */ }, [token]);
+  useEffect(() => { send().catch(() => {}); }, [send]);   // `send` dépend du jeton : une seule tentative, un lien ne sert qu'une fois
 
   return (
     <div className="grid min-h-screen place-items-center p-6">

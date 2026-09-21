@@ -195,7 +195,7 @@ catalogRoutes.get('/export/offers.csv', async (c) => {
 });
 
 /** Modèle CSV vierge. */
-catalogRoutes.get('/import/template.csv', (c) => {
+catalogRoutes.get('/import/template.csv', (_c) => {
   const lines = [
     'fournisseur;produit;conditionnement;prix;telephone;whatsapp;ville;delai_h;minimum;frais_livraison',
     'Afro Distribution;Riz parfumé;Sac 25 kg;42,00;02 40 00 11 22;06 00 11 22 33;Nantes;24;80;0',

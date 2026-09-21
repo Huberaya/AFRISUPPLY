@@ -1,7 +1,7 @@
 // Job quotidien « matin » : alertes → auto-reorder → e-mail digest, pour chaque restaurant.
 // Déclenché par POST /api/jobs/daily (header X-Cron-Secret) — depuis GitHub Actions / Vercel cron / crontab.
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
-import { getDb, restaurants, restaurantMembers, users, alerts, orders, suppliers, deliveries, deliveryDiscrepancies, orderLines, sales, jobRuns } from '@afrisupply/db';
+import { getDb, restaurants, alerts, orders, suppliers, deliveries, deliveryDiscrepancies, orderLines, sales, jobRuns } from '@afrisupply/db';
 import { captureException } from '../lib/ops.js';
 import { refreshAlerts } from '../routes/restaurant.js';
 import { loadContext, runAutoReorder } from '../routes/intelligence.js';

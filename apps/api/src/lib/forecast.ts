@@ -220,7 +220,6 @@ export function forecastProducts(
     } else {
       const peak = perDay.indexOf(Math.max(...perDay)); const peakDay = DOW_FR[new Date(today.getTime() + (peak + 1) * DAY_MS).getDay()];
       const base = `Besoin estimé de ${fmt(Math.round(need * 10) / 10)} sur ${horizon} jours, calculé à partir de ${acc.recipes} recette${acc.recipes > 1 ? 's' : ''} et de ${source}`;
-      const degraded = basis === 'couverts' || basis === 'seuils';
       explanation = base +
         (basis === 'ventes_28j' ? ` (pic ${peakDay})` : '') + '. ' +
         (basis === 'seuils'

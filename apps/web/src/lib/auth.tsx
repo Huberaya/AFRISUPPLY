@@ -1,5 +1,5 @@
 // Port de ethimarket/src/lib/auth.tsx — sans Supabase : JWT + /api/auth/me
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, tokenStore } from './api';
 
 export type User = { id: string; email: string; fullName: string; isAdmin?: boolean; emailVerified?: boolean; emailVerifiedAt?: string | null };
@@ -22,7 +22,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Chantier 8 : message explicite quand l'accès change (établissement retiré, plus aucun restaurant).
   const [accessNotice, setAccessNotice] = useState<string | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     if (!tokenStore.get()) { setUser(null); setRestaurants([]); setLoading(false); return; }
     try {
       const me = await api<{ user: User; restaurants: Restaurant[] }>('/auth/me');
@@ -31,8 +31,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (rid) { tokenStore.setRestaurant(rid); setRestaurantId(rid); }
     } catch { tokenStore.clear(); setUser(null); setRestaurants([]); }
     finally { setLoading(false); }
-  };
-  useEffect(() => { void refresh();   }, []);
+  }, [restaurantId]);
+  // Chargement initial : une seule fois au montage, volontairement (on ne veut pas recharger la
+  // session à chaque changement d'établissement — c'est `setRestaurant` qui s'en charge).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- montage unique
+  useEffect(() => { void refresh(); }, []);
   // Chantier 8 : le serveur signale que l'établissement courant n'est plus accessible → on recharge
   // les appartenances et on repart sur un établissement valide, avec un message clair.
   useEffect(() => {

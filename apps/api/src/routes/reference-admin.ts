@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
-import { getDb, products, leads, vendorOffers, inventoryItems } from '@afrisupply/db';
+import { getDb, products, leads } from '@afrisupply/db';
 import { requireAuth, type Env } from '../lib/auth.js';
 import { audit } from '../lib/ops.js';
 

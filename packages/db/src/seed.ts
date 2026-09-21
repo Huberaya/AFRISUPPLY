@@ -10,7 +10,6 @@ import { getDb } from './client.js';
 import * as s from './schema.js';
 
 import { REFERENCE_PRODUCTS } from './data/products.js';
-import { RECIPE_TEMPLATES } from './data/recipes.js';
 export { REFERENCE_PRODUCTS };
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);

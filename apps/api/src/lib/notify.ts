@@ -6,7 +6,7 @@
 //   • ventes non saisies depuis plusieurs jours (relance).
 // L'idempotence est portée par alerts.notified_at : une alerte n'est envoyée qu'une fois, même si
 // la fonction est appelée à la fois par la réception, par la route d'alertes et par le cron horaire.
-import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { getDb, alerts, restaurants } from '@afrisupply/db';
 import { sendMail } from './mailer.js';
 import { recordJobRun } from './job-runs.js';

@@ -1,0 +1,22 @@
+# Déclenche le job « Votre matin AFRISUPPLY » chaque jour à 6h30 (Paris), plus les relances horaires.
+#
+# Deux déclencheurs existent : les crons Vercel (`vercel.json`, mêmes horaires, dans la plateforme) et ce
+# workflow — utile si l'API tourne ailleurs qu'en fonctions Vercel (Railway, Fly.io, Render).
+# Secrets à créer : API_URL (ex. https://api.afrisupply.fr) et CRON_SECRET (identique à l'env de l'API).
+name: Daily digest
+on:
+  schedule:
+    - cron: '30 4 * * *'   # 04:30 UTC = 06:30 Paris (été) / 05:30 (hiver) — ajuster si besoin
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Déclencher le job quotidien
+        run: |
+          curl -sS -f -X POST "${{ secrets.API_URL }}/api/jobs/daily" \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" | tee result.json
+      - name: Résumé (et échec si le job a échoué)
+        run: |
+          node -e "const r=require('./result.json');console.log(`${r.sent}/${r.count} digests envoyés`);for(const x of r.results)console.log('-',x.name,x.digest,x.error??'')"
+          node -e "const r=require('./result.json');const ko=(r.results??[]).filter(x=>x.error||x.digest==='error');if(ko.length){console.error('Échec pour :',ko.map(x=>x.name).join(', '));process.exit(1)}"

@@ -16,7 +16,7 @@ export default function Catalog() {
   const [showNew, setShowNew] = useState(false);
   const [np, setNp] = useState({ name: '', category: 'epicerie', baseUnit: 'kg' });
   const createProduct = async () => { const p = await api<P>('/catalog/products', { method: 'POST', json: np }); await api('/catalog/track', { method: 'POST', json: { productIds: [p.id] } }); setShowNew(false); setNp({ name: '', category: 'epicerie', baseUnit: 'kg' }); await reload(); };
-  const list = data?.products ?? [];
+  const list = useMemo(() => data?.products ?? [], [data?.products]);
   const counts = useMemo(() => list.reduce<Record<string, number>>((a, p) => { a[p.category] = (a[p.category] ?? 0) + 1; return a; }, {}), [list]);
 
   return (

@@ -7,7 +7,8 @@ export function captureFrontError(err: unknown, extra: Record<string, unknown> =
     const e = err instanceof Error ? err : new Error(String(err)); const id = crypto.randomUUID().replace(/-/g, '');
     const event = { event_id: id, timestamp: new Date().toISOString(), platform: 'javascript', level: 'error', environment: import.meta.env.MODE, request: { url: location.href }, exception: { values: [{ type: e.name, value: e.message }] }, extra: { stack: e.stack, ...extra } };
     const body = `${JSON.stringify({ event_id: id, sent_at: new Date().toISOString(), dsn })}\n${JSON.stringify({ type: 'event' })}\n${JSON.stringify(event)}\n`;
-    navigator.sendBeacon?.(endpoint, new Blob([body], { type: 'application/x-sentry-envelope' })) || fetch(endpoint, { method: 'POST', body, keepalive: true, headers: { 'X-Sentry-Auth': `Sentry sentry_version=7, sentry_key=${u.username}, sentry_client=afrisupply-web/1.0` } });
+    const beacon = navigator.sendBeacon?.(endpoint, new Blob([body], { type: 'application/x-sentry-envelope' }));
+    if (!beacon) void fetch(endpoint, { method: 'POST', body, keepalive: true, headers: { 'X-Sentry-Auth': `Sentry sentry_version=7, sentry_key=${u.username}, sentry_client=afrisupply-web/1.0` } });
   } catch { /* silencieux */ }
 }
 export function installGlobalHandlers() {

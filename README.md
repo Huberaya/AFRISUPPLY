@@ -5,7 +5,37 @@
 
 Monorepo TypeScript — **React + Vite** (web) · **Hono** (API) · **Drizzle ORM** · **Neon Postgres** (prod) / **PGlite** (local).
 
-Voir aussi : [`ROADMAP_MISE_SUR_LE_MARCHE.md`](./ROADMAP_MISE_SUR_LE_MARCHE.md) (les 10 chantiers).
+Voir aussi : [`ROADMAP_MISE_SUR_LE_MARCHE.md`](./ROADMAP_MISE_SUR_LE_MARCHE.md) (feuille de route + chantiers issus de l'audit de septembre 2026).
+
+> **État réel du produit** (sans complaisance) : voir la section « Ce qui est vérifié automatiquement » ci-dessous,
+> qui liste ce qui tourne, ce qui est testé, et ce qui n'est **pas** encore branché (clés de paiement, e-mail réel, SMS).
+
+---
+
+## Ce qui est vérifié automatiquement
+
+Tout ce qui suit est exécuté par la CI (`.github/workflows/ci.yml`) **et** disponible en local :
+
+| Commande | Ce qu'elle vérifie | Dernier relevé |
+|---|---|---|
+| `npm run lint` | ESLint (flat config, plugin `react-hooks` inclus) | **0 erreur, 0 avertissement** |
+| `npm run typecheck` | `tsc` sur `packages/db`, `apps/api`, `apps/web` (séquentiel) | ✅ |
+| `npm test` | Vitest : base de données 5 · API 273 · web 43 | **321 tests** |
+| `npm run build` | Bundle web (`vite build`) | ✅ |
+| `npm run check:bundle` | `api/index.js` (bundle Vercel **committé**) correspond-il aux sources ? | ✅ |
+| `npm run verifs:e2e` | 9 scripts de vérification **contre une API réelle** (parcours, réception, prix, alertes, e-mail, facturation, paiements, prévision) | **356 vérifications** |
+
+`npm run verify` enchaîne lint → typecheck → tests → build → bundle. Les scripts de bout en bout
+(`scripts/verifications/`) démarrent leur propre API (PGlite) et écrivent leurs preuves dans
+`scripts/verifications/resultats/` ; ils ne remplacent pas les tests unitaires, ils vérifient ce qui se passe vraiment
+(mails déposés dans `.outbox`, PDF produits, rôles refusés, quotas HTTP).
+
+### Ce qui n'est PAS encore branché (aucun faux « c'est fait »)
+
+- **Paiement en ligne** : sans `STRIPE_SECRET_KEY` / `STRIPE_PRICE_*`, `/billing/checkout` répond 503 et le web l'affiche honnêtement ; le passage d'un client en formule payante se fait à la main par l'admin, en attendant la clé.
+- **E-mail** : avec `RESEND_API_KEY` les mails partent réellement ; sans clé, ils sont écrits dans `.outbox` (dev) et **refusés** en production (jamais de « envoyé » mensonger).
+- **WhatsApp / SMS** : nécessite Twilio ; sans configuration, l'écran Réglages dit que rien n'a été envoyé.
+- **Sauvegardes / supervision** : `/api/status` expose l'état réel, mais aucune procédure de sauvegarde/restauration n'est encore documentée ni testée (chantier « Exploitation » à venir).
 
 ---
 
@@ -21,7 +51,8 @@ npm run dev          # API sur :8787 + web sur :3000 (proxy /api → API)
 ```
 
 Ouvrir http://localhost:3000 — compte démo : **awa@chezawa.fr / demo1234**
-(restaurant « Chez Awa », Nantes : 50 produits, 5 fournisseurs, 10 recettes, 60 jours de ventes, 12 commandes).
+(restaurant « Chez Awa », Nantes : 324 références au catalogue, 38 produits suivis en stock, 5 fournisseurs,
+10 recettes, 60 jours de ventes — lundi fermé, donc ~52 jours avec des ventes — et 12 commandes reçues).
 
 Sans `DATABASE_URL`, l'API utilise **PGlite** (Postgres WASM embarqué dans `packages/db/.pglite`). Migrations et seed sont appliqués automatiquement au démarrage.
 
@@ -39,14 +70,15 @@ Le code métier ne change pas : `getDb()` retourne le même client Drizzle dans 
 
 ```
 apps/
-  web/            React 18 + Vite + Tailwind — 9 pages, layout à 6 onglets
-  api/            Hono (Node) — auth JWT, endpoints métier, moteurs
+  web/            React 18 + Vite + Tailwind — 54 écrans (restaurant, fournisseur, admin, vitrine)
+  api/            Hono (Node) — auth JWT, endpoints métier, moteurs, jobs (matin, relances)
 packages/
-  db/             Schéma Drizzle (16 tables), migrations SQL, seed démo, client Neon/PGlite
+  db/             Schéma Drizzle (44 tables), migrations SQL versionnées, seed démo, client Neon/PGlite
                   + data/ : référentiel 324 produits africains, 31 recettes types
+scripts/          build du bundle API, contrôle du bundle committé, vérifications de bout en bout (Python)
 ```
 
-### Schéma (16 tables)
+### Schéma (44 tables)
 
 | Domaine | Tables |
 |---|---|
@@ -63,7 +95,7 @@ Isolation multi-tenant : chaque table métier porte `restaurant_id`, et l'API fi
 
 | Route | Rôle |
 |---|---|
-| `POST /auth/register` `POST /auth/login` `GET /auth/me` | Auth (bcrypt + JWT 30 j, cookie httpOnly ou Bearer) |
+| `POST /auth/register` `POST /auth/login` `GET /auth/me` | Auth (bcrypt + JWT 7 j, cookie httpOnly ou Bearer) |
 | `GET /dashboard` | Compteurs 🟢🟠🔴, dépenses 30 j & évolution, alertes, dernières commandes |
 | `GET /stock` `POST /stock/:id/movements` | Stock avec conso/jour et jours restants ; inventaire/ajustement |
 | `GET /suppliers` `GET /suppliers/:id` `POST /suppliers` | Fiches, fiabilité calculée (retards, écarts), dépenses |
@@ -103,10 +135,13 @@ Fonctions pures, testées (`npm test`), portées d'ethimarket (`alertsEngine`, `
 | Commande | Effet |
 |---|---|
 | `npm run dev` | API + web en parallèle |
-| `npm run typecheck` / `npm test` / `npm run lint` | Qualité |
+| `npm run verify` | **Porte de sortie** : lint → typecheck → tests → build → contrôle du bundle |
+| `npm run typecheck` / `npm test` / `npm run lint` | Qualité (un workspace à la fois, séquentiel) |
+| `npm run check:bundle` | Échoue si `api/index.js` n'est plus le bundle des sources |
+| `npm run verifs:e2e` | 9 scripts de vérification sur API réelle (~25 min, nécessite l'API sur :8787) |
 | `npm run db:generate` | Génère une migration SQL après modification de `schema.ts` |
 | `npm run db:migrate` / `npm run db:seed` | Applique / seed (PGlite ou Neon selon `DATABASE_URL`) |
-| `npm run build` | Build web (`apps/web/dist`) |
+| `npm run build` | Typecheck des workspaces + build web (`apps/web/dist`) |
 
 ## Déploiement
 
@@ -118,35 +153,41 @@ Fonctions pures, testées (`npm test`), portées d'ethimarket (`alertsEngine`, `
 
 Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout, auth-context, moteurs d'alertes / comparaison / prix, logique de commandes-réception. Abandonné : Supabase, certifications, Trust Center, RASFF, CRM, blog, admin (≈ 70 % du volume, hors périmètre restaurant).
 
-## État du chantier 1 ✅ et suite
+## Historique des chantiers (audit de septembre 2026)
 
-- [x] Monorepo, schéma, migrations, seed, client Neon/PGlite
-- [x] Auth JWT, multi-restaurants, isolation par tenant
-- [x] Dashboard, Stock, Fournisseurs, Comparateur, Commandes + Réception, Recettes, Alertes
-- [x] Tests des moteurs, CI GitHub Actions, build prod
-- [x] Chantier 2 : référentiel **324 produits** avec alias, **31 recettes types**, onboarding « Configurer ma carte », **import CSV** fournisseurs/prix avec aperçu, export — voir `docs/CHANTIER_2_DONNEES.md`
-- [x] Chantier 3 : formulaires fournisseur/prix/recette, réglages & inventaire stock, envoi de commande WhatsApp/e-mail, modification/annulation, écarts de livraison, historique de prix — voir `docs/CHANTIER_3_GESTION.md`
-- [x] Chantier 4 : prévision 7 j explicable, panier intelligent multi-fournisseurs, auto-reorder (préparation seule), assistant « Demander à l’IA » (moteur local + LLM optionnel) — voir `docs/CHANTIER_4_INTELLIGENCE.md`
-- [x] Chantier 5 : site vitrine (`/`, `/tarifs`, `/fonctionnalites`, `/faq`, `/demander-un-acces`), offre 39/89/199 + pilote fondateur, leads + admin, script démo & plaquette — voir `docs/CHANTIER_5_MARQUE_OFFRE.md`
-- [x] Chantier 9 : saisie express (phrase/dictée → ventes, comptage, réception, perte), inventaire rapide, photo de facture → stock + prix, PWA installable — `docs/CHANTIER_9_SAISIE_EXPRESS.md`
-- [x] Chantier 10 : marketplace B2B (fournisseurs plateforme validés, catalogue, commande en un clic, confirmation vendeur), achats groupés par zone, commission 3 % — `docs/CHANTIER_10_MARKETPLACE.md`
-- [x] Chantier 6 : facturation Stripe (essai 30 j, Checkout/Portal, relances, lecture seule après essai, fonctions par formule, factures de commission) — `docs/CHANTIER_6_FACTURATION.md`
-- [x] Chantier 7 : programme pilote (invitations avec code fondateur, checklist semaine 1, retours/bugs/NPS, mesure d’usage, cockpit santé 🟢🟠🔴, rapport hebdo) — `docs/CHANTIER_7_PILOTES.md`
-- Chantier 11 — Liste de courses en langage naturel : `docs/CHANTIER_11_LISTE_COURSES.md`
-- Chantier 12 — Import de catalogue fournisseur (texte/Excel/photo) + prix express : `docs/CHANTIER_12_IMPORT_CATALOGUE.md`
-- Chantier 13 — Vitrine publique (catalogue, fiche produit, panier, inscription au moment d’acheter) : `docs/CHANTIER_13_VITRINE.md`
-- Chantier 14 — Invitation fournisseur pré-remplie (e-mail / WhatsApp, activation immédiate) : `docs/CHANTIER_14_INVITATION_FOURNISSEUR.md`
-- Chantier 15 — Tableau de bord fournisseur « Analyses » (ventes, clients, demande non couverte) : `docs/CHANTIER_15_ANALYSES_FOURNISSEUR.md`
-- Chantier 16 — Admin référentiel produits (ajout, alias, fusion, demandes grossistes) + PDF bon de commande / livraison : `docs/CHANTIER_16_REFERENTIEL_PDF.md`
-- Chantier 17 — Tableau de bord fondateur `/app/admin` : `docs/CHANTIER_17_DASHBOARD_ADMIN.md`
-- Chantier 18 — WhatsApp / SMS (Twilio) : nouvelle commande, rappel grossiste 4 h, suivi restaurant : `docs/CHANTIER_18_WHATSAPP_SMS.md`
-- Chantier 22 — CGV fournisseur `/cgv-fournisseur`, acceptation versionnée : `docs/CHANTIER_22_CGV_FOURNISSEUR.md`
-- Chantier 20 — Préparation & livraison (picking, étapes, preuve photo/signature) + suivi restaurant : `docs/CHANTIER_20_PREPARATION_LIVRAISON.md`
-- Chantier 21 — Ruptures partielles & substitutions (proposition grossiste, acceptation 1 clic) : `docs/CHANTIER_21_RUPTURES_SUBSTITUTIONS.md`
-- Chantier 24 — Recommander en 1 clic + commandes récurrentes hebdomadaires : `docs/CHANTIER_24_RECOMMANDER_RECURRENT.md`
-- Chantier 26 — Litiges & avoirs (réclamation → réponse grossiste → escalade → arbitrage) : `docs/CHANTIER_26_LITIGES_AVOIRS.md`
-- Chantier 28 — Tarifs par volume (paliers) & prix négociés par restaurant : `docs/CHANTIER_28_TARIFS_VOLUME_NEGOCIES.md`
-- Chantier 27 — Avis & fiabilité grossiste : note après livraison, réponse du grossiste, badges (`docs/CHANTIER_27_AVIS_FIABILITE.md`)
-- [x] Admin → Prospection : carnet restaurants / fournisseurs (nom, adresse, téléphone, e-mail, contact, statut, relance, import tableur)
-- [x] Chantier 8 : fiabilité prod (Sentry sans SDK, `/statut`, job_runs, rate-limit, en-têtes, audit, RGPD export/suppression, CGV, migrations au déploiement, 12 tests e2e) — `docs/CHANTIER_8_FIABILITE.md`
-- [x] Chantier 4 bis : e-mail quotidien « Votre matin AFRISUPPLY » + job cron (alertes → auto-reorder → mail) — `docs/CHANTIER_4BIS_NOTIFICATIONS.md`
+L'audit complet (`AUDIT_AFRISUPPLY.md`, tenu hors dépôt) a donné un verdict « ⚠️ OUI, mais avec conditions » :
+l'application fonctionne, mais plusieurs promesses n'étaient pas tenues. Les chantiers ci-dessous ont été menés
+**un par un**, chacun avec ses tests et ses vérifications en direct, et un rapport de fin de chantier.
+
+| # | Chantier | Statut | Commit |
+|---|---|---|---|
+| 1 | Intégrité de la réception et des statuts de commande | ✅ livré | `48826af` (poussé) |
+| 2 | Sécurisation du déploiement et cloisonnement | ✅ livré | `48826af` (poussé) |
+| 3 | Prix réellement facturé et détection de la hausse | ✅ livré | `48826af` (poussé) |
+| 4 | Page Analyse réellement utile (comprendre ses coûts) | ✅ livré | `df5af01` |
+| 5 | Accès et récupération de compte | ✅ livré | `2f2bfef` |
+| 6 | Canaux réels : e-mail, WhatsApp, notifications | ✅ livré | `5b064b9` |
+| 7 | Encaissement et offre commerciale honnête | ✅ livré | `8db3ecc` |
+| 8 | Parcours client et moyens de paiement | ✅ livré | `d145e72` |
+| 9 | Prévision robuste (audit 2) : cascade de sources, relances, saisonnalité | ✅ livré | `31caa76` |
+| 10 | Qualité, CI et dette : rendre le dépôt fiable et vérifiable | ✅ livré | voir `git log` |
+| — | UX : recentrer le produit sur le parcours d'achat | ⏳ à venir | — |
+| — | Exploitation : sauvegardes, supervision, support | ⏳ à venir | — |
+
+Les rapports détaillés (fichiers, fonctionnalités, tests, ce qui reste) accompagnent l'audit hors dépôt.
+
+## Modules livrés avant l'audit
+
+Documentation dans `docs/` (état vérifié par les tests et les scripts de vérification ci-dessus) :
+référentiel produits et recettes types (`CHANTIER_2_DONNEES.md`), gestion fournisseurs/prix/recettes (`CHANTIER_3_GESTION.md`),
+intelligence — prévision, panier intelligent, auto-reorder, assistant (`CHANTIER_4_INTELLIGENCE.md`),
+site vitrine et offre (`CHANTIER_5_MARQUE_OFFRE.md`), facturation (`CHANTIER_6_FACTURATION.md`), pilotes (`CHANTIER_7_PILOTES.md`),
+fiabilité (`CHANTIER_8_FIABILITE.md`), notifications (`CHANTIER_4BIS_NOTIFICATIONS.md`), saisie express (`CHANTIER_9_SAISIE_EXPRESS.md`),
+marketplace B2B (`CHANTIER_10_MARKETPLACE.md`), liste de courses (`CHANTIER_11_LISTE_COURSES.md`),
+import de catalogue (`CHANTIER_12_IMPORT_CATALOGUE.md`), vitrine produit (`CHANTIER_13_VITRINE.md`),
+invitation fournisseur (`CHANTIER_14_INVITATION_FOURNISSEUR.md`), analyses fournisseur (`CHANTIER_15_ANALYSES_FOURNISSEUR.md`),
+référentiel/PDF (`CHANTIER_16_REFERENTIEL_PDF.md`), tableau de bord fondateur (`CHANTIER_17_DASHBOARD_ADMIN.md`),
+WhatsApp/SMS (`CHANTIER_18_WHATSAPP_SMS.md`), préparation & livraison (`CHANTIER_20_PREPARATION_LIVRAISON.md`),
+ruptures partielles (`CHANTIER_21_RUPTURES_SUBSTITUTIONS.md`), CGV fournisseur (`CHANTIER_22_CGV_FOURNISSEUR.md`),
+recommandation récurrente (`CHANTIER_24_RECOMMANDER_RECURRENT.md`), litiges & avoirs (`CHANTIER_26_LITIGES_AVOIRS.md`),
+avis & fiabilité (`CHANTIER_27_AVIS_FIABILITE.md`), tarifs par volume (`CHANTIER_28_TARIFS_VOLUME_NEGOCIES.md`).

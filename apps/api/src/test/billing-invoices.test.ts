@@ -13,7 +13,7 @@ import { eq } from 'drizzle-orm';
 import { runMigrations, getDb, restaurants, subscriptionInvoices, billingEvents, jobRuns } from '@afrisupply/db';
 import { app } from '../app.js';
 import { billingHealth, nextInvoiceNumber, recordSubscriptionInvoice, billingRecipient } from '../lib/billing.js';
-import { invoicePdf, emitterComplete } from '../lib/pdf.js';
+import { emitterComplete } from '../lib/pdf.js';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret';

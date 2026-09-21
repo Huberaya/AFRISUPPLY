@@ -1,7 +1,7 @@
 // Chantier 9 (audit 2) — « la prévision ne doit jamais être absente ».
 // Ces tests vérifient la cascade de sources, les jours de fermeture, la saisonnalité
 // et le rappel doux « ventes non saisies » — pas seulement le cas idéal où tout est saisi.
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { forecastRecipes, forecastProducts, parseSeasonality, weakestBasis, type StockRow } from '../lib/forecast.js';
 
 const today = new Date('2026-09-18T12:00:00Z'); // vendredi
