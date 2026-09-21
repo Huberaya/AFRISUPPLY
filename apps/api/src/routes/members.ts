@@ -11,6 +11,7 @@ import { and, eq, ne, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { getDb, users, restaurants, restaurantMembers } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, hashPassword, type Env } from '../lib/auth.js';
+import { memberCap } from '../lib/billing.js';
 import { issuePasswordLink } from '../lib/reset-link.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
@@ -41,6 +42,8 @@ memberRoutes.get('/members', async (c) => {
   return c.json({
     members: list.map((m) => ({ ...m, isYou: m.userId === c.get('user').id })),
     me: { userId: c.get('user').id, role: c.get('role') },
+    cap: memberCap(c.get('plan') ?? 'trial'),
+    count: list.length,
     roles: ROLES.map((r) => ({
       role: r,
       label: r === 'owner' ? 'Propriétaire' : r === 'manager' ? 'Responsable' : 'Équipe',
@@ -73,6 +76,15 @@ memberRoutes.post('/members', requireMinRole('owner'), async (c) => {
   const existing = await db.select({ role: restaurantMembers.role }).from(restaurantMembers)
     .where(and(eq(restaurantMembers.restaurantId, rid), eq(restaurantMembers.userId, user.id)));
   if (existing.length) return c.json({ error: `${user.fullName} fait déjà partie de l'équipe (${existing[0].role === 'owner' ? 'propriétaire' : existing[0].role === 'manager' ? 'responsable' : 'équipe'}).` }, 409);
+
+  // Audit final G2 — « 3 utilisateurs » Starter doit être vrai : plafond par offre (Pro/essai 5, Business illimité).
+  const cap = memberCap(c.get('plan') ?? 'trial');
+  if (cap !== null) {
+    const [row] = await db.select({ n: sql<number>`count(*)` }).from(restaurantMembers).where(eq(restaurantMembers.restaurantId, rid));
+    if (Number(row?.n ?? 0) >= cap) {
+      return c.json({ error: `Votre offre inclut ${cap} utilisateur${cap > 1 ? 's' : ''}. Passez à une formule supérieure (Abonnement) pour inviter toute votre équipe.`, code: 'member_limit', cap }, 402);
+    }
+  }
 
   await db.insert(restaurantMembers).values({ restaurantId: rid, userId: user.id, role: body.data.role });
   let devLink: string | undefined;

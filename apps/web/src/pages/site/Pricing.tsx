@@ -10,7 +10,7 @@ const MATRIX: { group: string; rows: { label: string; starter: boolean | string;
     { label: 'Commandes WhatsApp / e-mail', starter: true, pro: true, business: true },
     { label: 'Réception, écarts et réclamations', starter: true, pro: true, business: true },
     { label: 'Alertes rupture, stock bas, hausse de prix', starter: true, pro: true, business: true },
-    { label: 'Import / export CSV', starter: '1 import / mois', pro: 'Illimité', business: 'Illimité' },
+    { label: 'Import / export CSV', starter: true, pro: true, business: true },
   ] },
   { group: 'Intelligence', rows: [
     { label: 'Prévision des besoins 7 jours', starter: false, pro: true, business: true },
@@ -20,10 +20,8 @@ const MATRIX: { group: string; rows: { label: string; starter: boolean | string;
     { label: 'Assistant « Demander à l’IA »', starter: false, pro: true, business: true },
   ] },
   { group: 'Organisation', rows: [
-    { label: 'Établissements', starter: '1', pro: '1', business: 'Illimités' },
     { label: 'Utilisateurs', starter: '3', pro: '5', business: 'Illimités' },
     { label: 'Achats groupés entre restaurants', starter: false, pro: false, business: true },
-    { label: 'Accès API & exports comptables', starter: false, pro: false, business: true },
     { label: 'Support', starter: 'E-mail', pro: 'E-mail + WhatsApp', business: 'Accompagnement dédié' },
   ] },
 ];

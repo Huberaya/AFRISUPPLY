@@ -12,9 +12,9 @@ export const PLANS = [
   { id: 'starter', name: 'Starter', priceMonthly: 39, tagline: 'Fini le cahier et les ruptures.', highlight: false,
     features: ['Stock avec statuts 🟢🟠🔴 et jours restants', 'Fiches fournisseurs & prix', 'Commandes WhatsApp / e-mail', 'Réception & écarts de livraison', 'Alertes rupture et hausse de prix', '1 établissement · 3 utilisateurs'] },
   { id: 'pro', name: 'Pro', priceMonthly: 89, tagline: 'L’intelligence qui fait gagner de la marge.', highlight: true,
-    features: ['Tout Starter', 'Prévision des besoins 7 jours', 'Comparateur multi-fournisseurs', 'Panier intelligent & auto-reorder', 'Recettes, coût matière et marges', 'Assistant « Demander à l’IA »', 'Import CSV illimité'] },
+    features: ['Tout Starter', 'Prévision des besoins 7 jours', 'Comparateur multi-fournisseurs', 'Panier intelligent & auto-reorder', 'Recettes, coût matière et marges', 'Assistant « Demander à l’IA »', 'Import CSV illimité', '1 établissement · 5 utilisateurs'] },
   { id: 'business', name: 'Business', priceMonthly: 199, tagline: 'Pour les groupes et les ambitieux.', highlight: false,
-    features: ['Tout Pro', 'Multi-établissements & consolidation', 'Achats groupés entre restaurants', 'Accès API & exports comptables', 'Accompagnement dédié', 'Utilisateurs illimités'] },
+    features: ['Tout Pro', 'Achats groupés entre restaurants', 'Utilisateurs illimités', 'Accompagnement dédié'] },
 ] as const;
 
 export const FOUNDER_OFFER = { label: 'Offre pilote fondateur', discountPct: 50, seats: 20, trialDays: 30, description: '−50 % à vie pour les 20 premiers restaurants qui nous aident à construire le produit. Essai gratuit 30 jours, sans carte bancaire.' };

@@ -96,7 +96,7 @@ export async function requireRestaurant(c: Context<Env>, next: Next) {
 
 /** Fonctions réservées à une formule (chemins d'API). L'essai gratuit donne accès à tout le Pro. */
 const PRO_PATHS = ['/api/forecast', '/api/compare', '/api/smart-cart', '/api/assistant', '/api/recipes', '/api/reorder-rules', '/api/quick/invoice'];
-const BUSINESS_PATHS = ['/api/marketplace/group-buys', '/api/account/export'];
+const BUSINESS_PATHS = ['/api/marketplace/group-buys']; // audit final G1 : /api/account/export = droit RGPD, JAMAIS payant
 export function planRequired(path: string): 'pro' | 'business' | null {
   if (BUSINESS_PATHS.some((p) => path.startsWith(p))) return 'business';
   if (PRO_PATHS.some((p) => path.startsWith(p))) return 'pro';
