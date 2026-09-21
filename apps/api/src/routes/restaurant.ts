@@ -138,13 +138,27 @@ export async function refreshAlerts(rid: string) {
   const db = await getDb();
   const [restaurant] = await db.select().from(restaurants).where(eq(restaurants.id, rid));
   const threshold = restaurant.settings?.priceIncreaseAlertPct ?? 8;
-  const [stocks, offers, invRows, ph] = await Promise.all([
+  const [stocks, offers, invRows, ph, openLines] = await Promise.all([
     loadStockSnapshots(rid), loadOffers(rid),
     db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId)).where(eq(inventoryItems.restaurantId, rid)),
     db.select({ p: priceHistory, offer: supplierOffers, supplier: suppliers, product: products }).from(priceHistory)
       .innerJoin(supplierOffers, eq(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq(products.id, supplierOffers.productId))
       .where(and(eq(priceHistory.restaurantId, rid), gte(priceHistory.recordedAt, new Date(Date.now() - 90 * 86_400_000)))),
+    // Chantier 4 (audit) — lignes des commandes pas encore livrées (hors brouillon / annulée) :
+    // la prochaine livraison attendue par produit couvre-t-elle le creux prévu ?
+    db.select({ productId: orderLines.productId, expectedAt: orders.expectedAt, createdAt: orders.createdAt })
+      .from(orderLines).innerJoin(orders, eq(orders.id, orderLines.orderId))
+      .where(and(eq(orders.restaurantId, rid), inArray(orders.status, ['preparee', 'envoyee', 'confirmee', 'livree_partiel']))),
   ]);
+  // Chantier 4 (audit) — prochaine livraison (en jours) par produit, vue par les alertes de rupture.
+  const nextByProduct = new Map<string, number>();
+  for (const l of openLines) {
+    const eta = l.expectedAt ? new Date(l.expectedAt).getTime() : l.createdAt.getTime() + 2 * 86_400_000;
+    const d = Math.max(0, Math.ceil((eta - Date.now()) / 86_400_000));
+    const prev = nextByProduct.get(l.productId);
+    if (prev === undefined || d < prev) nextByProduct.set(l.productId, d);
+  }
+  const stocksWithDelivery = stocks.map((s) => ({ ...s, nextDeliveryInDays: nextByProduct.get(s.productId) }));
   const points: PricePoint[] = ph.map((r) => ({ offerId: r.offer.id, supplierId: r.supplier.id, supplierName: r.supplier.name, productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, unitPrice: n(r.p.unitPriceEur), recordedAt: r.p.recordedAt.toISOString() }));
   const alternatives = new Map<string, PricePoint[]>();
   for (const o of offers) {
@@ -154,7 +168,7 @@ export async function refreshAlerts(rid: string) {
     if (!alternatives.has(o.productId)) alternatives.set(o.productId, []); alternatives.get(o.productId)!.push(pp);
   }
   const computed = [
-    ...alertsFromStock(stocks),
+    ...alertsFromStock(stocksWithDelivery),
     ...alertsFromPrices(points, threshold, alternatives),
     ...alertsFromOpportunities(invRows.map((r) => ({ productId: r.product.id, productName: r.product.name, unit: r.product.baseUnit, preferredSupplierId: r.item.preferredSupplierId })), offers),
   ];

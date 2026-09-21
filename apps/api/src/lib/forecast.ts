@@ -10,7 +10,7 @@
 // =============================================================
 
 export interface SaleRow { recipeId: string; day: string; portions: number }
-export interface IngredientRow { recipeId: string; productId: string; quantity: number }
+export interface IngredientRow { recipeId: string; productId: string; quantity: number; seasonality?: number[] | string | null }
 export interface StockRow { productId: string; productName: string; unit: string; quantity: number; criticalLevel: number; targetLevel: number | null; shelfLifeDays?: number | null }
 
 export interface RecipeForecast { recipeId: string; perDay: number[]; total: number; confidence: number; daysWithData: number }
@@ -30,6 +30,20 @@ export interface ForecastOptions {
   safetyDays?: number;         // stock de sécurité en jours de besoin (défaut 2)
   eventMultipliers?: Record<string, number>; // 'YYYY-MM-DD' → coef (ex. 1.5 pour une soirée privatisée)
   today?: Date;
+}
+
+// Chantier 4 (audit) — saisonnalité : `products.seasonality` porte les mois de pleine saison (1-12).
+// Le référentiel ne donne qu'un booléen par mois : on applique un coef unique de pleine saison,
+// modeste et assumé, systématiquement rappelé dans l'explication produit.
+export const SEASON_PEAK_MULTIPLIER = 1.2;
+
+/** Accepte number[] ou le JSON texte stocké dans `products.seasonality` ('[2,3,12]'). */
+export function parseSeasonality(v: unknown): number[] {
+  if (Array.isArray(v)) return v.filter((m): m is number => typeof m === 'number' && m >= 1 && m <= 12);
+  if (typeof v === 'string' && v.trim().startsWith('[')) {
+    try { return parseSeasonality(JSON.parse(v)); } catch { return []; }
+  }
+  return [];
 }
 
 /** Prévision de ventes par plat, jour par jour. */
@@ -86,18 +100,29 @@ export function forecastProducts(
   recipeForecasts: Map<string, RecipeForecast>, ingredients: IngredientRow[], stocks: StockRow[], opts: ForecastOptions = {},
 ): ProductForecast[] {
   const horizon = opts.horizonDays ?? 7; const safetyDays = opts.safetyDays ?? 2; const today = opts.today ?? new Date();
-  const perProduct = new Map<string, { perDay: number[]; conf: number[]; recipes: number; daysWithData: number }>();
+  const perProduct = new Map<string, { perDay: number[]; conf: number[]; recipes: number; daysWithData: number; season: Set<number> }>();
   for (const ing of ingredients) {
     const rf = recipeForecasts.get(ing.recipeId); if (!rf) continue;
-    const acc = perProduct.get(ing.productId) ?? { perDay: new Array<number>(horizon).fill(0), conf: [] as number[], recipes: 0, daysWithData: 0 };
+    const acc = perProduct.get(ing.productId) ?? { perDay: new Array<number>(horizon).fill(0), conf: [] as number[], recipes: 0, daysWithData: 0, season: new Set<number>() };
     rf.perDay.forEach((p, i) => { acc.perDay[i] += p * ing.quantity; });
     acc.conf.push(rf.confidence); acc.recipes++; acc.daysWithData = Math.max(acc.daysWithData, rf.daysWithData);
+    for (const m of parseSeasonality(ing.seasonality)) acc.season.add(m);
     perProduct.set(ing.productId, acc);
   }
   const out: ProductForecast[] = [];
   for (const s of stocks) {
     const acc = perProduct.get(s.productId);
-    const perDay: number[] = acc ? acc.perDay.map((v) => Math.round(v * 1000) / 1000) : new Array<number>(horizon).fill(0);
+    // Chantier 4 (audit) — saisonnalité : les jours en mois de pleine saison voient leur besoin
+    // multiplié par SEASON_PEAK_MULTIPLIER (le facteur est rappelé dans l'explication).
+    let seasonalDays = 0;
+    const perDay: number[] = acc
+      ? acc.perDay.map((v, i) => {
+          const month = Number(isoDay(new Date(today.getTime() + (i + 1) * DAY_MS)).slice(5, 7));
+          const inSeason = acc.season.has(month);
+          if (inSeason && v > 0) seasonalDays++;
+          return Math.round(v * (inSeason ? SEASON_PEAK_MULTIPLIER : 1) * 1000) / 1000;
+        })
+      : new Array<number>(horizon).fill(0);
     const need = perDay.reduce((a, b) => a + b, 0);
     const avg = need / horizon;
     const confidence = acc && acc.conf.length ? Math.round((acc.conf.reduce((a, b) => a + b, 0) / acc.conf.length) * 100) / 100 : 0.2;
@@ -142,6 +167,8 @@ export function forecastProducts(
         `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null && need > 0 ? ` → rupture prévue ${DOW_FR[new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ', suffisant sur la période.') +
         (recommended > 0 ? ` Commande recommandée : ${fmt(recommended)} (inclut ${safetyDays} j de sécurité).` : '');
     }
+    // Chantier 4 — la saisonnalité appliquée est systématiquement dite (jamais de coef silencieux).
+    if (seasonalDays > 0) explanation += ` Saisonnalité : pleine saison sur ${seasonalDays} jour${seasonalDays > 1 ? 's' : ''} de la fenêtre (besoin ×${SEASON_PEAK_MULTIPLIER}).`;
     out.push({
       productId: s.productId, productName: s.productName, unit: s.unit, horizonDays: horizon,
       predictedNeed: Math.round(need * 10) / 10, currentStock: s.quantity, safetyStock: Math.round(safety * 10) / 10, recommendedOrder: recommended,

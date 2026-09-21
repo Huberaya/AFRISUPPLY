@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, compareOffers, recipeCost, marginAnalysis, supplierReliability, computeDailyUse, marginSeries, priceIndexByCategory, priceAtMonth } from '../lib/engines.js';
+import { stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, compareOffers, recipeCost, marginAnalysis, supplierReliability, computeDailyUse, marginSeries, priceIndexByCategory, priceAtMonth, type StockSnapshot } from '../lib/engines.js';
 
 const snap = (q: number, crit: number, use: number) => ({ productId: 'p', productName: 'Riz parfumé', unit: 'kg', quantity: q, criticalLevel: crit, targetLevel: 45, avgDailyUse: use });
 
@@ -186,4 +186,34 @@ describe('vérité des coûts (chantier 2)', () => {
 
 describe('fiabilité', () => {
   it('pénalise retards et écarts', () => { expect(supplierReliability({ delivered: 10, late: 2, discrepancies: 1 })).toBe(84); expect(supplierReliability({ delivered: 0, late: 0, discrepancies: 0 })).toBe(85); });
+});
+
+// =============================================================
+// Chantier 4 (audit) — alerte de rupture vs livraison couvrante
+// Critère de validation : rupture NON déclenchée si la livraison couvre le creux.
+// =============================================================
+describe('alertes stock : livraison couvrante (chantier 4)', () => {
+  const snap = (over: Partial<StockSnapshot> = {}): StockSnapshot => ({
+    productId: 'p1', productName: 'Riz', unit: 'kg', quantity: 2, criticalLevel: 5, targetLevel: 20, avgDailyUse: 1, ...over,
+  });
+  it('la livraison couvre le creux → pas d\'alerte de rupture (critère de validation)', () => {
+    // 2 kg à 1 kg/j → rupture dans 2 j ; livraison à J+2 (au plus tard le jour de la rupture) → couvert
+    expect(alertsFromStock([snap({ nextDeliveryInDays: 2 })])).toHaveLength(0);
+    expect(alertsFromStock([snap({ nextDeliveryInDays: 0 })])).toHaveLength(0);
+    expect(alertsFromStock([snap({ nextDeliveryInDays: 1 })])).toHaveLength(0);
+    // produit déjà à zéro : la livraison du jour couvre, celle de demain non
+    expect(alertsFromStock([snap({ quantity: 0, nextDeliveryInDays: 0 })])).toHaveLength(0);
+    expect(alertsFromStock([snap({ quantity: 0, nextDeliveryInDays: 1 })])).toHaveLength(1);
+  });
+  it('livraison APRÈS la rupture → alerte maintenue, message daté', () => {
+    const alerts = alertsFromStock([snap({ nextDeliveryInDays: 5 })]);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].kind).toBe('rupture');
+    expect(alerts[0].message).toContain('après la rupture prévue');
+    expect(alerts[0].message).toContain('5 j');
+  });
+  it('sans commande en cours → comportement inchangé', () => {
+    expect(alertsFromStock([snap()])).toHaveLength(1);
+    expect(alertsFromStock([snap({ quantity: 0 })])[0].kind).toBe('rupture');
+  });
 });

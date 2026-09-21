@@ -365,6 +365,17 @@ export const forecasts = pgTable('forecasts', {
   computedAt: timestamp('computed_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('forecasts_restaurant_idx').on(t.restaurantId, t.computedAt)]);
 
+// Chantier 4 (audit) — événements de fréquentation (soirée privatisée, mariage, fermeture…) :
+// un multiplicateur par jour qui gonfle ou réduit les portions prévues. Un seul événement par jour.
+export const forecastEvents = pgTable('forecast_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  day: date('day').notNull(),                                    // 'YYYY-MM-DD'
+  label: text('label').notNull(),                                // « Soirée privatisée »
+  multiplier: numeric('multiplier', { precision: 4, scale: 2 }).default('1').notNull(), // 0,05 – 5,00
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex('forecast_events_unique').on(t.restaurantId, t.day)]);
+
 
 // -------------------------------------------------------------
 // Leads (site vitrine « Demander un accès ») — chantier 5
@@ -461,6 +472,7 @@ export type OrderLine = typeof orderLines.$inferSelect;
 export type Recipe = typeof recipes.$inferSelect;
 export type Alert = typeof alerts.$inferSelect;
 export type Forecast = typeof forecasts.$inferSelect;
+export type ForecastEvent = typeof forecastEvents.$inferSelect;
 
 // -------------------------------------------------------------
 // Exploitation (chantier 8) : historique des jobs + journal d'audit RGPD

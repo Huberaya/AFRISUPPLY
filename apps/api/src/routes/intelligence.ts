@@ -3,10 +3,10 @@
 // =============================================================
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { and, eq, desc, gte, sql, inArray } from 'drizzle-orm';
+import { and, eq, desc, gte, asc, sql, inArray } from 'drizzle-orm';
 import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, orders, orderLines, deliveries,
-  recipes, recipeIngredients, sales, forecasts, reorderRules, alerts, restaurants,
+  recipes, recipeIngredients, sales, forecasts, forecastEvents, reorderRules, alerts, restaurants,
 } from '@afrisupply/db';
 import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
@@ -24,23 +24,35 @@ const n = (v: string | number | null | undefined) => (v === null || v === undefi
 export async function loadContext(rid: string) {
   const db = await getDb();
   const [restaurant] = await db.select().from(restaurants).where(eq(restaurants.id, rid));
-  const [inv, salesRows, ingRows, recs, offerRows, statRows] = await Promise.all([
+  const [inv, salesRows, ingRows, recs, offerRows, statRows, eventRows] = await Promise.all([
     db.select({ item: inventoryItems, product: products }).from(inventoryItems).innerJoin(products, eq(products.id, inventoryItems.productId)).where(eq(inventoryItems.restaurantId, rid)),
     db.select({ recipeId: sales.recipeId, day: sales.day, portions: sales.portions }).from(sales).where(and(eq(sales.restaurantId, rid), gte(sales.day, new Date(Date.now() - 70 * 86_400_000).toISOString().slice(0, 10)))),
-    db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, quantity: recipeIngredients.quantity }).from(recipeIngredients).innerJoin(recipes, eq(recipes.id, recipeIngredients.recipeId)).where(and(eq(recipes.restaurantId, rid), eq(recipes.isActive, true))),
+    db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, quantity: recipeIngredients.quantity, seasonality: products.seasonality }).from(recipeIngredients).innerJoin(recipes, eq(recipes.id, recipeIngredients.recipeId)).innerJoin(products, eq(products.id, recipeIngredients.productId)).where(and(eq(recipes.restaurantId, rid), eq(recipes.isActive, true))),
     db.select().from(recipes).where(eq(recipes.restaurantId, rid)),
     db.select({ offer: supplierOffers, supplier: suppliers }).from(supplierOffers).innerJoin(suppliers, eq(suppliers.id, supplierOffers.supplierId)).where(and(eq(supplierOffers.restaurantId, rid), eq(suppliers.isActive, true))),
     db.select({ supplierId: orders.supplierId, delivered: sql<number>`count(*) filter (where ${orders.status} in ('livree','livree_partiel'))`, late: sql<number>`count(*) filter (where ${deliveries.isLate})`, disc: sql<number>`count(*) filter (where ${deliveries.hasDiscrepancy})`, spent: sql<number>`coalesce(sum(${orders.totalEur}),0)` })
       .from(orders).leftJoin(deliveries, eq(deliveries.orderId, orders.id)).where(eq(orders.restaurantId, rid)).groupBy(orders.supplierId),
+    // Chantier 4 (audit) — événements déclarés (soirées privatisées…) à venir
+    db.select().from(forecastEvents).where(and(eq(forecastEvents.restaurantId, rid), gte(forecastEvents.day, new Date().toISOString().slice(0, 10)))),
   ]);
   const stats = new Map(statRows.map((r) => [r.supplierId, { delivered: n(r.delivered), late: n(r.late), discrepancies: n(r.disc), spent: n(r.spent), reliability: supplierReliability({ delivered: n(r.delivered), late: n(r.late), discrepancies: n(r.disc) }) }]));
   const offers: CartOffer[] = offerRows.map(({ offer, supplier }) => ({ offerId: offer.id, supplierId: supplier.id, supplierName: supplier.name, productId: offer.productId, packLabel: offer.packLabel, packQty: n(offer.packQty), packPrice: n(offer.packPriceEur), unitPrice: n(offer.packPriceEur) / n(offer.packQty), inStock: offer.inStock, leadTimeHours: supplier.leadTimeHours, deliveryFee: n(supplier.deliveryFeeEur), minOrder: n(supplier.minOrderEur), reliabilityPct: stats.get(supplier.id)?.reliability ?? 85 }));
   const stocks = inv.map(({ item, product }) => ({ productId: product.id, productName: product.name, unit: product.baseUnit, quantity: n(item.quantity), criticalLevel: n(item.criticalLevel), targetLevel: item.targetLevel ? n(item.targetLevel) : null, shelfLifeDays: product.shelfLifeDays, preferredSupplierId: item.preferredSupplierId, inventoryItemId: item.id }));
   const ingredients = ingRows.map((i) => ({ ...i, quantity: n(i.quantity) }));
   const horizon = restaurant.settings?.forecastHorizonDays ?? 7;
-  const rf = forecastRecipes(salesRows, recs.map((r) => r.id), { horizonDays: horizon });
+  // Chantier 4 (audit) — les coef d'événements déclarés alimentent le moteur (multiplier ≠ 1).
+  const eventMultipliers: Record<string, number> = {};
+  for (const e of eventRows) { const m = Number(e.multiplier); if (m !== 1) eventMultipliers[String(e.day)] = m; }
+  const rf = forecastRecipes(salesRows, recs.map((r) => r.id), { horizonDays: horizon, eventMultipliers });
   const pf = forecastProducts(rf, ingredients, stocks, { horizonDays: horizon });
-  return { restaurant, stocks, offers, stats, recipes: recs, ingredients, sales: salesRows, recipeForecasts: rf, productForecasts: pf, horizon };
+  // Jamais de coef silencieux : chaque événement appliqué est rappelé dans l'explication produit.
+  const evNotes = eventRows.filter((e) => Number(e.multiplier) !== 1)
+    .map((e) => `${e.label} ×${String(Number(e.multiplier)).replace('.', ',')} le ${String(e.day).slice(8, 10)}/${String(e.day).slice(5, 7)}`);
+  if (evNotes.length) {
+    const note = ` Événements déclarés sur la fenêtre : ${evNotes.join(' ; ')} — portions prévues ajustées en conséquence.`;
+    for (const p of pf) if (p.predictedNeed > 0) p.explanation += note;
+  }
+  return { restaurant, stocks, offers, stats, recipes: recs, ingredients, sales: salesRows, recipeForecasts: rf, productForecasts: pf, horizon, events: eventRows };
 }
 
 // -------------------------------------------------------------
@@ -49,7 +61,59 @@ export async function loadContext(rid: string) {
 intelligenceRoutes.get('/forecast', async (c) => {
   const rid = c.get('restaurantId'); const ctx = await loadContext(rid);
   const recipeView = ctx.recipes.map((r) => ({ id: r.id, name: r.name, ...(ctx.recipeForecasts.get(r.id) ?? { perDay: [], total: 0, confidence: 0 }) }));
-  return c.json({ horizonDays: ctx.horizon, generatedAt: new Date().toISOString(), products: ctx.productForecasts, recipes: recipeView, salesDays: new Set(ctx.sales.map((s) => s.day)).size });
+  return c.json({
+    horizonDays: ctx.horizon, generatedAt: new Date().toISOString(), products: ctx.productForecasts, recipes: recipeView,
+    salesDays: new Set(ctx.sales.map((s) => s.day)).size,
+    events: ctx.events.map((e) => ({ id: e.id, day: e.day, label: e.label, multiplier: Number(e.multiplier) })),
+  });
+});
+
+// ---- Chantier 4 (audit) — soirées privatisées & événements de fréquentation -------------------
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+intelligenceRoutes.get('/forecast/events', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const rows = await db.select().from(forecastEvents)
+    .where(and(eq(forecastEvents.restaurantId, rid), gte(forecastEvents.day, new Date().toISOString().slice(0, 10))))
+    .orderBy(asc(forecastEvents.day)).limit(60);
+  return c.json({ events: rows.map((e) => ({ id: e.id, day: e.day, label: e.label, multiplier: Number(e.multiplier) })) });
+});
+
+intelligenceRoutes.put('/forecast/events', async (c) => {
+  const rid = c.get('restaurantId');
+  const body = await c.req.json().catch(() => null) as { events?: unknown } | null;
+  const events = Array.isArray(body?.events) ? body.events : null;
+  if (!events || events.length < 1 || events.length > 60) {
+    return c.json({ error: 'Envoyez 1 à 60 événements : { events: [{ day: "YYYY-MM-DD", label, multiplier }] }' }, 400);
+  }
+  const rows: { restaurantId: string; day: string; label: string; multiplier: string }[] = [];
+  for (const raw of events) {
+    const e = (raw ?? {}) as Record<string, unknown>;
+    const day = String(e.day ?? ''); const label = String(e.label ?? '').trim(); const mult = Number(e.multiplier ?? NaN);
+    if (!DAY_RE.test(day) || !label || label.length > 80 || !(mult >= 0.05 && mult <= 5)) {
+      return c.json({ error: 'Événement invalide : day YYYY-MM-DD, label 1-80 car., multiplier entre 0,05 et 5 (1,5 = +50 % de couverts).' }, 400);
+    }
+    rows.push({ restaurantId: rid, day, label, multiplier: String(Math.round(mult * 100) / 100) });
+  }
+  const db = await getDb();
+  for (const r of rows) {
+    // un seul événement par jour : la déclaration du jour est remplacée (pas de doublon)
+    await db.insert(forecastEvents).values(r).onConflictDoUpdate({
+      target: [forecastEvents.restaurantId, forecastEvents.day],
+      set: { label: r.label, multiplier: r.multiplier },
+    });
+  }
+  return c.json({ saved: rows.length });
+});
+
+intelligenceRoutes.delete('/forecast/events/:id', async (c) => {
+  const rid = c.get('restaurantId'); const id = c.req.param('id');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return c.json({ error: 'Identifiant d’événement invalide.' }, 400);
+  }
+  const db = await getDb();
+  await db.delete(forecastEvents).where(and(eq(forecastEvents.id, id), eq(forecastEvents.restaurantId, rid)));
+  return c.json({ deleted: true });
 });
 
 /** Persiste un instantané (pour suivre la précision dans le temps). */

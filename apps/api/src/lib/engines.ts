@@ -101,10 +101,20 @@ export function alertsFromStock(stocks: StockSnapshot[], today = new Date()): En
       });
       continue;
     }
+    // Chantier 4 (audit) — livraison couvrante : une commande en cours qui arrive AVANT la rupture
+    // prévue couvre le creux → l'alerte de rupture ne doit PAS partir (critère de validation).
+    const covers = s.nextDeliveryInDays !== undefined && s.nextDeliveryInDays !== null
+      && days !== null && s.nextDeliveryInDays <= days;
+    if (covers) continue;
+    // Sinon la livraison reste un contexte utile : tardive (« après la rupture ») ou non datable.
+    const deliveryNote = s.nextDeliveryInDays === undefined || s.nextDeliveryInDays === null ? ''
+      : days !== null && s.nextDeliveryInDays > days
+        ? ` Votre commande arrive dans ${s.nextDeliveryInDays} j, après la rupture prévue.`
+        : ` Une commande arrive dans ${s.nextDeliveryInDays} j.`;
     if (status === 'critique') {
-      const reason = s.quantity <= s.criticalLevel
+      const reason = (s.quantity <= s.criticalLevel
         ? `Stock actuel ${fmtQty(s.quantity, s.unit)}, sous votre seuil critique de ${fmtQty(s.criticalLevel, s.unit)}.`
-        : `Stock actuel ${fmtQty(s.quantity, s.unit)} pour une consommation d'environ ${fmtQty(s.avgDailyUse, s.unit)}/jour : rupture dans ~${days} jour${days && days > 1 ? 's' : ''}.`;
+        : `Stock actuel ${fmtQty(s.quantity, s.unit)} pour une consommation d'environ ${fmtQty(s.avgDailyUse, s.unit)}/jour : rupture dans ~${days} jour${days && days > 1 ? 's' : ''}.`) + deliveryNote;
       out.push({
         dedupeKey: `rupture:${s.productId}:${dayKey}`, kind: 'rupture', severity: 'red',
         title: `🔴 Rupture imminente — ${s.productName}`, message: reason, productId: s.productId,
@@ -114,9 +124,9 @@ export function alertsFromStock(stocks: StockSnapshot[], today = new Date()): En
       out.push({
         dedupeKey: `stock_bas:${s.productId}:${dayKey}`, kind: 'stock_bas', severity: 'orange',
         title: `🟠 Stock bas — ${s.productName}`,
-        message: days !== null
+        message: (days !== null
           ? `Il vous reste environ ${days} jours de ${s.productName.toLowerCase()} (${fmtQty(s.quantity, s.unit)}). Pensez à commander.`
-          : `Stock de ${s.productName.toLowerCase()} à ${fmtQty(s.quantity, s.unit)}, proche du seuil critique.`,
+          : `Stock de ${s.productName.toLowerCase()} à ${fmtQty(s.quantity, s.unit)}, proche du seuil critique.`) + deliveryNote,
         productId: s.productId, actionUrl: `/stock`, payload: { quantity: s.quantity, daysLeft: days },
       });
     }
