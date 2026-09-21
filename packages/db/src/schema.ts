@@ -240,6 +240,8 @@ export const orders = pgTable('orders', {
   paidAt: timestamp('paid_at', { withTimezone: true }),
   paidAmountEur: numeric('paid_amount_eur', { precision: 10, scale: 2 }),
   paymentMethod: text('payment_method'),                // virement | cb | especes | cheque | prelevement | avoir
+  stripeCheckoutId: text('stripe_checkout_id'),         // chantier 25 : session Checkout du paiement en ligne (cs_…)
+  stripePaymentIntentId: text('stripe_payment_intent_id'),
   // chantier 21 : proposition de modification du grossiste (ruptures / substitutions) en attente du restaurant
   proposal: jsonb('proposal').$type<OrderProposal>(),
   proposalAt: timestamp('proposal_at', { withTimezone: true }),
@@ -505,6 +507,8 @@ export const vendors = pgTable('vendors', {
   cgvAcceptedAt: timestamp('cgv_accepted_at', { withTimezone: true }),
   cgvAcceptedBy: text('cgv_accepted_by'),
   stripeCustomerId: text('stripe_customer_id'),           // facturation mensuelle des commissions
+  stripeAccountId: text('stripe_account_id'),             // chantier 25 : compte Stripe Connect (Express) pour recevoir les paiements en ligne
+  stripePayoutsEnabled: boolean('stripe_payouts_enabled').default(false).notNull(),
   contactEmail: text('contact_email'),
   contactPhone: text('contact_phone'),
   whatsapp: text('whatsapp'),

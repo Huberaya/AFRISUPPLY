@@ -1,11 +1,11 @@
-process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://notif'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr'; process.env.VENDOR_AUTO_APPROVE = 'true'; process.env.CRON_SECRET = 'cron';
+process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://notif'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr'; process.env.VENDOR_AUTO_APPROVE = 'true'; process.env.CRON_SECRET = 'cron'; process.env.STRIPE_WEBHOOK_SECRET = 'whsec_notif';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { runMigrations, getDb, notifications, orders } from '@afrisupply/db';
 import { eq } from 'drizzle-orm';
 import { app } from '../app.js';
 import { normalizePhone, waLink } from '../lib/sms.js';
 type Json = Record<string, any>;
-const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, json: (await r.clone().json().catch(() => ({}))) as Json }; };
+const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined }); return { status: r.status, json: (await r.clone().json().catch(() => ({}))) as Json }; };
 const reg = async (email: string, name: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'Test', restaurantName: name, city: 'Nantes' }); return { h: { Authorization: `Bearer ${r.json.token}` } }; };
 let V: Record<string, string>; let R: Record<string, string>; let orderId = '';
 beforeAll(async () => { await runMigrations(); V = (await reg('gros@n.fr', 'Gros')).h; R = (await reg('resto@n.fr', 'Resto N')).h; }, 60_000);
@@ -307,5 +307,38 @@ describe('chantier 29 — encours & conditions de paiement', () => {
     await call('PUT', `/api/vendor/credit/${rid}`, { blocked: false, paymentDays: 0, creditLimitEur: null }, V);
     // rappels : rien à J-2 aujourd'hui (tout soldé)
     const { remindPayments } = await import('../lib/credit.js'); expect((await remindPayments()).reminded).toBe(0);
+  });
+});
+
+describe('chantier 25 — paiement en ligne des commandes (Stripe Connect)', () => {
+  it('sans Stripe : messages clairs ; webhook signé → commande soldée, idempotent, SEPA en attente ignoré', async () => {
+    const { createHmac } = await import('node:crypto');
+    const sign = (body: string, t = Math.floor(Date.now() / 1000)) => `t=${t},v1=${createHmac('sha256', 'whsec_notif').update(`${t}.${body}`).digest('hex')}`;
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id; const rid = (await call('GET', '/api/settings', undefined, R)).json.restaurant.id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Pot 1 kg', packQty: 1, packPrice: 8 }, V)).json.offer;
+    const o = (await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 3 }] }, R)).json.order; expect(o?.id).toBeTruthy();
+    // Stripe non configuré
+    const vp = await call('GET', '/api/vendor/payments', undefined, V); expect(vp.json.configured).toBe(false);
+    expect((await call('POST', '/api/vendor/payments/onboard', {}, V)).status).toBe(503);
+    const st = await call('GET', `/api/orders/${o.id}/payment`, undefined, R); expect(st.json.available).toBe(false); expect(st.json.reason).toBe('stripe_off'); expect(st.json.remainingEur).toBe(Number(o.totalEur) + Number(o.deliveryFeeEur));
+    expect((await call('POST', `/api/orders/${o.id}/pay`, {}, R)).status).toBe(400);
+    // webhook : SEPA en attente → rien
+    const total = Math.round((Number(o.totalEur) + Number(o.deliveryFeeEur)) * 100);
+    const mk = (id: string, type: string, extra: Record<string, unknown>) => JSON.stringify({ id, type, data: { object: { id: 'cs_1', object: 'checkout.session', mode: 'payment', amount_total: total, payment_intent: 'pi_1', metadata: { kind: 'order_payment', orderId: o.id, vendorId: vid, restaurantId: rid }, ...extra } } });
+    let body = mk('evt_p1', 'checkout.session.completed', { payment_status: 'unpaid' });
+    expect((await call('POST', '/api/billing/webhook', body, { 'stripe-signature': sign(body) })).status).toBe(200);
+    expect((await call('GET', `/api/orders/${o.id}/payment`, undefined, R)).json.paidAt).toBeNull();
+    // puis paiement effectif
+    body = mk('evt_p2', 'checkout.session.async_payment_succeeded', { payment_status: 'paid' });
+    expect((await call('POST', '/api/billing/webhook', body, { 'stripe-signature': sign(body) })).status).toBe(200);
+    const paid = await call('GET', `/api/orders/${o.id}/payment`, undefined, R); expect(paid.json.paidAt).toBeTruthy(); expect(paid.json.paymentMethod).toBe('en_ligne'); expect(paid.json.remainingEur).toBe(0); expect(paid.json.reason).toBe('already_paid');
+    // rejoué → dupliqué, pas de double comptage
+    expect((await call('POST', '/api/billing/webhook', body, { 'stripe-signature': sign(body) })).json.duplicate).toBe(true);
+    expect((await call('GET', `/api/orders/${o.id}/payment`, undefined, R)).json.paidAmountEur).toBe(total / 100);
+    // signature invalide
+    expect((await call('POST', '/api/billing/webhook', body, { 'stripe-signature': 't=1,v1=bad' })).status).toBe(400);
+    // le grossiste voit la commande soldée dans son encours (plus dans les factures ouvertes)
+    const cr = await call('GET', '/api/vendor/credit', undefined, V); expect(cr.json.receivables.some((x: Json) => x.id === o.id)).toBe(false);
   });
 });

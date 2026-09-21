@@ -149,6 +149,7 @@ Extrait de [ethimarket](https://github.com/Huberaya/ethimarket) : stack, layout,
 - Chantier 19 — Tournées & créneaux de livraison : jours/zones/heure limite/capacité côté grossiste, choix de la date côté restaurant (`docs/CHANTIER_19_TOURNEES_CRENEAUX.md`)
 - Chantier 24 bis — Récurrentes « me demander avant » : brouillon + validation en 1 clic (`docs/CHANTIER_24_BIS_RECURRENTES_A_VALIDER.md`)
 - Chantier 29 — Encours & conditions de paiement : délais/plafonds par client, encaissements, rappels (`docs/CHANTIER_29_ENCOURS_PAIEMENT.md`)
+- Chantier 25 — Paiement en ligne des commandes (Stripe Connect, commission à la source) (`docs/CHANTIER_25_PAIEMENT_EN_LIGNE.md`)
 - Chantier 27 — Avis & fiabilité grossiste : note après livraison, réponse du grossiste, badges (`docs/CHANTIER_27_AVIS_FIABILITE.md`)
 - [x] Admin → Prospection : carnet restaurants / fournisseurs (nom, adresse, téléphone, e-mail, contact, statut, relance, import tableur)
 - [x] Chantier 8 : fiabilité prod (Sentry sans SDK, `/statut`, job_runs, rate-limit, en-têtes, audit, RGPD export/suppression, CGV, migrations au déploiement, 12 tests e2e) — `docs/CHANTIER_8_FIABILITE.md`

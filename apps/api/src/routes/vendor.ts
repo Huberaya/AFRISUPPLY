@@ -13,6 +13,8 @@ import { maybeRemind } from '../jobs/reminders.js';
 import { VENDOR_CGV_VERSION } from '../lib/cgv.js';
 import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
 import { exposureFor } from '../lib/credit.js';
+import { connectOnboardingLink, syncConnectAccount } from '../lib/payments.js';
+import { stripeConfigured } from '../lib/billing.js';
 import { vendorPriceTiers, vendorCustomerPrices } from '@afrisupply/db';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
@@ -573,4 +575,17 @@ vendorRoutes.post('/vendor/orders/:id/payment', async (c) => {
   const [upd] = await db.update(orders).set({ paidAmountEur: newPaid.toFixed(2), paidAt: settled ? (body.data.paidAt ? new Date(`${body.data.paidAt}T12:00:00Z`) : new Date()) : null, paymentMethod: body.data.method }).where(eq(orders.id, o.id)).returning();
   void logOrderEvent(o.id, 'note', settled ? `Paiement reçu (${body.data.method}) — commande soldée` : `Acompte reçu : ${amt.toFixed(2)} € (${body.data.method}) — reste ${(total - newPaid).toFixed(2)} €`, 'vendor');
   return c.json({ order: upd, settled, remainingEur: Math.round((total - newPaid) * 100) / 100 });
+});
+
+// ---- Chantier 25 : paiement en ligne (Stripe Connect) ----
+vendorRoutes.get('/vendor/payments', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId'); const [v] = await db.select({ acct: vendors.stripeAccountId, enabled: vendors.stripePayoutsEnabled, commissionPct: vendors.commissionPct }).from(vendors).where(eq(vendors.id, vid));
+  if (!stripeConfigured()) return c.json({ configured: false, accountId: v.acct, payoutsEnabled: false, chargesEnabled: false, requirements: [], commissionPct: n(v.commissionPct) });
+  const st = v.acct ? await syncConnectAccount(vid).catch(() => ({ accountId: v.acct, payoutsEnabled: v.enabled, chargesEnabled: v.enabled, requirements: [] as string[] })) : { accountId: null, payoutsEnabled: false, chargesEnabled: false, requirements: [] as string[] };
+  const online = await db.select({ count: sql<number>`count(*)`, sum: sql<number>`coalesce(sum(${orders.paidAmountEur}),0)` }).from(orders).where(and(eq(orders.vendorId, vid), eq(orders.paymentMethod, 'en_ligne')));
+  return c.json({ configured: true, ...st, commissionPct: n(v.commissionPct), onlinePayments: n(online[0]?.count), onlineEur: n(online[0]?.sum) });
+});
+vendorRoutes.post('/vendor/payments/onboard', async (c) => {
+  if (!stripeConfigured()) return c.json({ error: 'Paiement en ligne non configuré sur la plateforme' }, 503);
+  try { return c.json(await connectOnboardingLink(c.get('vendorId'), c.get('user').email)); } catch (e) { return c.json({ error: (e as Error).message }, 502); }
 });
