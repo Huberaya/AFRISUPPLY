@@ -12,7 +12,7 @@ import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib
 import { checkReceive, checkSend } from '../lib/orders.js';
 import {
   computeDailyUse, stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, alertsFromOpportunities,
-  compareOffers, recipeCost, marginAnalysis, supplierReliability, type StockSnapshot, type PricePoint,
+  compareOffers, recipeCost, marginAnalysis, supplierReliability, marginSeries, priceIndexByCategory, type StockSnapshot, type PricePoint,
 } from '../lib/engines.js';
 
 export const restaurantRoutes = new Hono<Env>();
@@ -625,11 +625,82 @@ restaurantRoutes.get('/recipes', async (c) => {
     recipes: recs.map((r) => {
       const list = ings.filter((i) => i.ing.recipeId === r.id).map((i) => ({ productId: i.product.id, productName: i.product.name, quantity: n(i.ing.quantity), unit: i.product.baseUnit }));
       const cost = recipeCost(list, prices);
-      const margin = marginAnalysis(cost.total, r.sellingPriceEur ? n(r.sellingPriceEur) : null, n(r.targetMarginPct) || 70);
+      const margin = marginAnalysis(cost.total, r.sellingPriceEur ? n(r.sellingPriceEur) : null, n(r.targetMarginPct) || 70, cost.status === 'complet');
       const drifting = cost.lines.filter((l) => (drift.get(l.productId) ?? 0) >= 5).map((l) => ({ productName: l.productName, pct: drift.get(l.productId)! }));
-      return { ...r, sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null, ingredients: cost.lines, cost: cost.total, unpriced: cost.unpriced, ...margin, drifting };
+      // Chantier 2 (audit B3/U4) : coût partiel affiché « ≥ X € » (costStatus), marge masquée ('à calculer')
+      // dès qu'un ingrédient est sans prix — jamais « 0,00 € » ni « marge 100 % » présentés comme vrais.
+      return {
+        ...r, sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null,
+        ingredients: cost.lines, cost: cost.total, costStatus: cost.status, coverage: cost.coverage,
+        unpriced: cost.unpriced, grossMargin: margin.grossMargin, marginPct: margin.marginPct,
+        suggestedPrice: margin.suggestedPrice, marginStatus: margin.status, drifting,
+      };
     }),
   });
+});
+
+// -------------------------------------------------------------
+// Chantier 2 (audit) — vérité des coûts : courbe de marge par plat + indice de prix par catégorie
+// (les deux promesses du sous-titre de la page Analyse, désormais tenues plutôt que promues).
+// -------------------------------------------------------------
+restaurantRoutes.get('/analysis/margins', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const q = Number(c.req.query('months'));
+  const monthsCount = q >= 12 ? 12 : q >= 3 ? Math.round(q) : 6; // 3 | 6 | 12 (6 par défaut)
+  const today = new Date();
+  const months: string[] = [];
+  for (let k = monthsCount - 1; k >= 0; k--) {
+    months.push(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - k, 1)).toISOString().slice(0, 7));
+  }
+  const windowStart = `${months[0]}-01`;
+  const [recs, ings, salesRows, priceRows, offers] = await Promise.all([
+    db.select().from(recipes).where(eq(recipes.restaurantId, rid)).orderBy(recipes.name),
+    db.select({ ing: recipeIngredients, product: products }).from(recipeIngredients).innerJoin(products, eq(products.id, recipeIngredients.productId))
+      .innerJoin(recipes, eq(recipes.id, recipeIngredients.recipeId)).where(eq(recipes.restaurantId, rid)),
+    db.select({ recipeId: sales.recipeId, day: sales.day, portions: sales.portions }).from(sales)
+      .where(and(eq(sales.restaurantId, rid), gte(sales.day, windowStart))),
+    db.select({ productId: supplierOffers.productId, category: products.category, unitPrice: priceHistory.unitPriceEur, recordedAt: priceHistory.recordedAt })
+      .from(priceHistory).innerJoin(supplierOffers, eq(supplierOffers.id, priceHistory.offerId)).innerJoin(products, eq(products.id, supplierOffers.productId))
+      .where(eq(priceHistory.restaurantId, rid)),
+    loadOffers(rid),
+  ]);
+  // prix courants (offres en stock) = état « maintenant » pour complét/incomplet
+  const now = new Map<string, number>();
+  for (const o of offers) if (o.inStock && (!now.has(o.productId) || o.unitPrice < now.get(o.productId)!)) now.set(o.productId, o.unitPrice);
+  // séries de prix par produit : moyenne mensuelle 'YYYY-MM' (le report en avant se fait dans engines.priceAtMonth)
+  const acc = new Map<string, Map<string, { sum: number; cnt: number }>>();
+  for (const p of priceRows) {
+    const month = new Date(p.recordedAt).toISOString().slice(0, 7);
+    if (!acc.has(p.productId)) acc.set(p.productId, new Map());
+    const m = acc.get(p.productId)!; const a = m.get(month) ?? { sum: 0, cnt: 0 };
+    a.sum += n(p.unitPrice); a.cnt++; m.set(month, a);
+  }
+  const priceByMonth = new Map<string, Map<string, number>>();
+  for (const [pid, m] of acc) priceByMonth.set(pid, new Map([...m.entries()].map(([month, a]) => [month, Math.round((a.sum / a.cnt) * 10_000) / 10_000])));
+  // portions vendues par recette/mois
+  const portions = new Map<string, Map<string, number>>();
+  for (const s of salesRows) {
+    const month = String(s.day).slice(0, 7);
+    if (!portions.has(s.recipeId)) portions.set(s.recipeId, new Map());
+    const m = portions.get(s.recipeId)!; m.set(month, (m.get(month) ?? 0) + s.portions);
+  }
+  const dishes = recs.map((r) => {
+    const list = ings.filter((i) => i.ing.recipeId === r.id).map((i) => ({ productId: i.product.id, productName: i.product.name, quantity: n(i.ing.quantity), unit: i.product.baseUnit }));
+    const currentUnpriced = list.filter((i) => !now.has(i.productId)).map((i) => i.productName);
+    return marginSeries({
+      recipeId: r.id, name: r.name, ingredients: list,
+      sellingPriceEur: r.sellingPriceEur ? n(r.sellingPriceEur) : null,
+      months, portionsByMonth: portions.get(r.id) ?? new Map(),
+      priceByMonth, currentUnpriced,
+    });
+  });
+  // indice de prix par catégorie : produits ayant au moins un prix historique
+  const catOf = new Map(priceRows.map((p) => [p.productId, p.category as string]));
+  const priceIndex = priceIndexByCategory({
+    months,
+    products: [...priceByMonth.entries()].map(([productId, pbm]) => ({ productId, category: catOf.get(productId) ?? 'autre', priceByMonth: pbm })),
+  });
+  return c.json({ months, windowStart, dishes, priceIndex });
 });
 
 // -------------------------------------------------------------

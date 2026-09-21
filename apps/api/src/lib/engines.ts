@@ -239,24 +239,167 @@ export function compareOffers(offers: OfferForComparison[], ctx: { daysOfStockLe
 // -------------------------------------------------------------
 // Recettes : coût matière & marge
 // -------------------------------------------------------------
+export interface CostLine { productId: string; productName: string; quantity: number; unit: string; unitPrice: number; cost: number; priced: boolean }
+
+export interface RecipeCostResult {
+  lines: CostLine[];
+  /** Coût des seuls ingrédients cotés — à afficher « ≥ X € » si status 'incomplet' (jamais « 0,00 € »). */
+  total: number;
+  /** Noms des ingrédients sans prix connu. */
+  unpriced: string[];
+  /** 'incomplet' dès qu'un ingrédient est sans prix : la marge réelle ne peut pas être calculée. */
+  status: 'complet' | 'incomplet';
+  /** Part des ingrédients dont le prix est connu (0..1). */
+  coverage: number;
+  /** Faux si plus de 30 % des ingrédients sont sans prix : le total n'est pas annonçable en chiffre (règle IA, chantier 2). */
+  reliable: boolean;
+}
+
 export function recipeCost(
   ingredients: { productId: string; productName: string; quantity: number; unit: string }[],
   lastUnitPrices: Map<string, number>,
-) {
+): RecipeCostResult {
   const lines = ingredients.map((i) => {
     const unitPrice = lastUnitPrices.get(i.productId) ?? 0;
     return { ...i, unitPrice, cost: Math.round(i.quantity * unitPrice * 1000) / 1000, priced: lastUnitPrices.has(i.productId) };
   });
   const total = Math.round(lines.reduce((a, l) => a + l.cost, 0) * 100) / 100;
-  return { lines, total, unpriced: lines.filter((l) => !l.priced).map((l) => l.productName) };
+  const unpriced = lines.filter((l) => !l.priced).map((l) => l.productName);
+  const coverage = lines.length ? (lines.length - unpriced.length) / lines.length : 1;
+  return {
+    lines, total, unpriced,
+    status: unpriced.length ? 'incomplet' : 'complet',
+    coverage: Math.round(coverage * 100) / 100,
+    reliable: coverage >= 0.7,
+  };
 }
 
-export function marginAnalysis(cost: number, sellingPrice: number | null, targetMarginPct = 70) {
-  if (!sellingPrice) return { grossMargin: null, marginPct: null, suggestedPrice: Math.round((cost / (1 - targetMarginPct / 100)) * 10) / 10 };
+export interface MarginAnalysisResult {
+  grossMargin: number | null;
+  marginPct: number | null;
+  suggestedPrice: number | null;
+  /** 'incomplet' quand le coût de référence est partiel : les champs marge restent null (masqués, jamais faux). */
+  status: 'complet' | 'incomplet';
+}
+
+export function marginAnalysis(cost: number, sellingPrice: number | null, targetMarginPct = 70, costComplete = true): MarginAnalysisResult {
+  // Chantier 2 (audit B3/U4) : un coût partiel donnerait une marge FAUSSE (trop haute) et un
+  // « 0,00 € » présenté comme vrai. Coût incomplet ⇒ marge et prix conseillé masqués.
+  if (!costComplete) return { grossMargin: null, marginPct: null, suggestedPrice: null, status: 'incomplet' };
+  if (!sellingPrice) return { grossMargin: null, marginPct: null, suggestedPrice: Math.round((cost / (1 - targetMarginPct / 100)) * 10) / 10, status: 'complet' };
   const grossMargin = Math.round((sellingPrice - cost) * 100) / 100;
   const marginPct = Math.round((grossMargin / sellingPrice) * 1000) / 10;
   const suggestedPrice = marginPct < targetMarginPct ? Math.round((cost / (1 - targetMarginPct / 100)) * 10) / 10 : null;
-  return { grossMargin, marginPct, suggestedPrice };
+  return { grossMargin, marginPct, suggestedPrice, status: 'complet' };
+}
+
+// -------------------------------------------------------------
+// Chantier 2 (audit) — courbe de marge par plat & indice de prix par catégorie
+// -------------------------------------------------------------
+export interface MarginPoint {
+  month: string;                       // 'YYYY-MM'
+  /** Coût matière / portion pour ce mois (prix de l'historique, reportés en avant) — null si un ingrédient est introuvable. */
+  costPerPortion: number | null;
+  marginPct: number | null;
+  grossMarginPerPortion: number | null;
+  portionsSold: number;
+  revenueEur: number;
+}
+
+export interface DishMarginSeries {
+  recipeId: string; name: string; sellingPriceEur: number | null;
+  /** État du coût AUJOURD'HUI : 'incomplet' si des ingrédients sont encore sans prix (courbe partielle). */
+  status: 'complet' | 'incomplet';
+  points: MarginPoint[];
+  portionsSold: number;
+  revenueEur: number;
+}
+
+/** Prix du produit pour un mois : moyenne du mois si cotée, sinon dernier prix connu avant (report). */
+export function priceAtMonth(priceByMonth: Map<string, number>, month: string): number | null {
+  const direct = priceByMonth.get(month);
+  if (direct !== undefined) return direct;
+  let best: string | null = null;
+  for (const m of priceByMonth.keys()) if (m < month && (best === null || m > best)) best = m;
+  return best === null ? null : priceByMonth.get(best)!;
+}
+
+/**
+ * Série de marge d'un plat sur une fenêtre de mois ('YYYY-MM' croissants).
+ * Un mois sans prix connu pour TOUS les ingrédients reste à null (trou dans la courbe) —
+ * jamais une extrapolation silencieuse.
+ */
+export function marginSeries(input: {
+  recipeId: string; name: string;
+  ingredients: { productId: string; productName: string; quantity: number; unit: string }[];
+  sellingPriceEur: number | null;
+  months: string[];
+  portionsByMonth: Map<string, number>;
+  priceByMonth: Map<string, Map<string, number>>; // productId → 'YYYY-MM' → prix moyen du mois
+  currentUnpriced: string[];
+}): DishMarginSeries {
+  const sell = input.sellingPriceEur;
+  let portionsSold = 0; let revenueEur = 0;
+  const points: MarginPoint[] = input.months.map((month) => {
+    const portions = input.portionsByMonth.get(month) ?? 0;
+    portionsSold += portions;
+    const revenue = sell ? Math.round(sell * portions * 100) / 100 : 0;
+    revenueEur = Math.round((revenueEur + revenue) * 100) / 100;
+    let cost: number | null = 0;
+    for (const ing of input.ingredients) {
+      const p = priceAtMonth(input.priceByMonth.get(ing.productId) ?? new Map(), month);
+      if (p === null) { cost = null; break; }
+      cost += ing.quantity * p;
+    }
+    const costPerPortion = cost === null ? null : Math.round(cost * 100) / 100;
+    const grossMarginPerPortion = costPerPortion !== null && sell ? Math.round((sell - costPerPortion) * 100) / 100 : null;
+    const marginPct = grossMarginPerPortion !== null && sell ? Math.round((grossMarginPerPortion / sell) * 1000) / 10 : null;
+    return { month, costPerPortion, marginPct, grossMarginPerPortion, portionsSold: portions, revenueEur: revenue };
+  });
+  return {
+    recipeId: input.recipeId, name: input.name, sellingPriceEur: sell,
+    status: input.currentUnpriced.length ? 'incomplet' : 'complet',
+    points, portionsSold, revenueEur,
+  };
+}
+
+export interface CategoryPriceIndex {
+  category: string;
+  baseMonth: string | null;
+  points: { month: string; index: number | null }[];
+}
+
+/**
+ * Indice de prix par catégorie (type « indice des prix », base = 100 au premier mois avec données).
+ * Pour chaque produit : prix du mois (report en avant) ; l'indice est la moyenne des produits
+ * ayant un prix à la base ET au mois visé. Aucun produit éligible ⇒ index null (trou honnête).
+ */
+export function priceIndexByCategory(input: {
+  months: string[];
+  products: { productId: string; category: string; priceByMonth: Map<string, number> }[];
+}): CategoryPriceIndex[] {
+  const byCat = new Map<string, { productId: string; priceByMonth: Map<string, number> }[]>();
+  for (const p of input.products) {
+    if (!byCat.has(p.category)) byCat.set(p.category, []);
+    byCat.get(p.category)!.push(p);
+  }
+  const out: CategoryPriceIndex[] = [];
+  for (const [category, prods] of [...byCat.entries()].sort()) {
+    const baseMonth = input.months.find((m) => prods.some((p) => priceAtMonth(p.priceByMonth, m) !== null)) ?? null;
+    const points = input.months.map((month) => {
+      if (!baseMonth) return { month, index: null };
+      const ratios: number[] = [];
+      for (const p of prods) {
+        const base = priceAtMonth(p.priceByMonth, baseMonth);
+        const cur = priceAtMonth(p.priceByMonth, month);
+        if (base !== null && base > 0 && cur !== null) ratios.push(cur / base);
+      }
+      const index = ratios.length ? Math.round((ratios.reduce((a, b) => a + b, 0) / ratios.length) * 1000) / 10 : null;
+      return { month, index };
+    });
+    out.push({ category, baseMonth, points });
+  }
+  return out;
 }
 
 /** Fiabilité fournisseur : 100 − pénalités (retards, écarts). */

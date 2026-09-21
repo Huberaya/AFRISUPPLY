@@ -236,13 +236,26 @@ intelligenceRoutes.post('/assistant/ask', async (c) => {
       if (!r) { draft = `Quel plat ? Tes recettes : ${ctx.recipes.map((x) => x.name).slice(0, 8).join(', ')}.`; break; }
       const prices = new Map<string, number>(); for (const o of ctx.offers) if (o.inStock && (!prices.has(o.productId) || o.unitPrice < prices.get(o.productId)!)) prices.set(o.productId, o.unitPrice);
       const list = ctx.ingredients.filter((i) => i.recipeId === r.id).map((i) => { const s = ctx.stocks.find((x) => x.productId === i.productId); return { productId: i.productId, productName: s?.productName ?? '?', quantity: i.quantity, unit: s?.unit ?? '' }; });
-      const cost = recipeCost(list, prices); const sell = r.sellingPriceEur ? n(r.sellingPriceEur) : null; const m = marginAnalysis(cost.total, sell, n(r.targetMarginPct) || 70);
+      const cost = recipeCost(list, prices); const sell = r.sellingPriceEur ? n(r.sellingPriceEur) : null; const target = n(r.targetMarginPct) || 70;
+      const m = marginAnalysis(cost.total, sell, target, cost.status === 'complet');
       const top = [...cost.lines].sort((a, b) => b.cost - a.cost).slice(0, 3);
-      facts.push(`${r.name} : coût matière ${eur(cost.total)}, prix de vente ${sell ? eur(sell) : 'non renseigné'}, marge brute ${m.grossMargin !== null ? eur(m.grossMargin) : 'n/a'} (${m.marginPct ?? 'n/a'} %), objectif ${n(r.targetMarginPct) || 70} %`, `Top ingrédients : ${top.map((l) => `${l.productName} ${eur(l.cost)}`).join(', ')}`, ...(cost.unpriced.length ? [`Sans prix connu : ${cost.unpriced.join(', ')}`] : []));
-      if (cls.intent === 'dish_cost') draft = `Ton **${r.name}** te coûte **${eur(cost.total)}** de matières par portion${sell ? `, pour un prix de vente de ${eur(sell)} : marge brute **${eur(m.grossMargin!)}** (${m.marginPct} %)` : ''}. Les postes principaux : ${top.map((l) => `${l.productName.toLowerCase()} (${eur(l.cost)})`).join(', ')}.${cost.unpriced.length ? ` Attention, ${cost.unpriced.length} ingrédient${cost.unpriced.length > 1 ? 's' : ''} sans prix connu (${cost.unpriced.slice(0, 3).join(', ')}) : le coût réel est un peu plus élevé.` : ''}`;
-      else draft = !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un coût matière de ${eur(cost.total)} et un objectif de ${n(r.targetMarginPct) || 70} % de marge, le prix conseillé serait **${eur(m.suggestedPrice!)}**.`
-        : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur(sell)} pour ${eur(cost.total)} de matières, soit ${m.marginPct} % de marge, sous ton objectif de ${n(r.targetMarginPct) || 70} %. **Prix conseillé : ${eur(m.suggestedPrice)}**. Alternative : réduire le poste ${top[0].productName.toLowerCase()} (${eur(top[0].cost)}).`
-        : `Pas nécessaire : à ${eur(sell)}, ton ${r.name} dégage ${m.marginPct} % de marge brute (${eur(m.grossMargin!)}), au-dessus de ton objectif. Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de coût.`;
+      facts.push(`${r.name} : coût matière ${cost.status === 'complet' ? '' : '≥ '}${eur(cost.total)}, prix de vente ${sell ? eur(sell) : 'non renseigné'}, marge brute ${m.grossMargin !== null ? eur(m.grossMargin) : 'à calculer'} (${m.marginPct ?? '—'} %), objectif ${target} %`, `Top ingrédients : ${top.map((l) => `${l.productName} ${eur(l.cost)}`).join(', ')}`, ...(cost.unpriced.length ? [`Sans prix connu : ${cost.unpriced.join(', ')}`] : []));
+      if (cls.intent === 'dish_cost') {
+        // Chantier 2 (audit B3) : jamais de « te coûte 0,00 € » présenté comme vrai — et pas de chiffre
+        // du tout si plus de 30 % du coût est inconnu (règle métier).
+        draft = !cost.reliable
+          ? `Je ne peux pas chiffrer ton **${r.name}** de façon fiable : ${cost.unpriced.length} des ${cost.lines.length} ingrédients sont sans prix (${cost.unpriced.slice(0, 3).join(', ')}) — plus de 30 % du coût est inconnu. Ajoute leurs prix (import fournisseurs ou fiche offre) et je te donne le coût matière et la marge.`
+          : cost.status === 'incomplet'
+            ? `Ton **${r.name}** coûte **au moins ${eur(cost.total)}** de matières par portion${sell ? `, pour un prix de vente de ${eur(sell)}` : ''}. ${cost.unpriced.length} ingrédient${cost.unpriced.length > 1 ? 's' : ''} sans prix (${cost.unpriced.slice(0, 3).join(', ')}) : le coût réel est un peu plus élevé, et la marge reste à calculer. Les postes déjà chiffrés : ${top.map((l) => `${l.productName.toLowerCase()} (${eur(l.cost)})`).join(', ')}.`
+            : `Ton **${r.name}** te coûte **${eur(cost.total)}** de matières par portion${sell ? `, pour un prix de vente de ${eur(sell)} : marge brute **${eur(m.grossMargin!)}** (${m.marginPct} %)` : ''}. Les postes principaux : ${top.map((l) => `${l.productName.toLowerCase()} (${eur(l.cost)})`).join(', ')}.`;
+      } else {
+        // should_raise_price : marge masquée tant que le coût est incomplet — aucun conseil chiffré.
+        draft = cost.status !== 'complet'
+          ? `Je ne peux pas te conseiller sur le prix du **${r.name}** pour l'instant : ${cost.unpriced.length} ingrédient${cost.unpriced.length > 1 ? 's sont' : ' est'} sans prix (${cost.unpriced.slice(0, 3).join(', ')}) et la marge reste à calculer. ${!cost.reliable ? 'Plus de 30 % du coût est inconnu. ' : ''}Complète les prix et je comparerai à ton objectif de ${target} % de marge.`
+          : !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un coût matière de ${eur(cost.total)} et un objectif de ${target} % de marge, le prix conseillé serait **${eur(m.suggestedPrice!)}**.`
+          : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur(sell)} pour ${eur(cost.total)} de matières, soit ${m.marginPct} % de marge, sous ton objectif de ${target} %. **Prix conseillé : ${eur(m.suggestedPrice)}**. Alternative : réduire le poste ${top[0].productName.toLowerCase()} (${eur(top[0].cost)}).`
+          : `Pas nécessaire : à ${eur(sell)}, ton ${r.name} dégage ${m.marginPct} % de marge brute (${eur(m.grossMargin!)}), au-dessus de ton objectif. Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de coût.`;
+      }
       actions.push({ label: 'Voir les recettes', url: '/app/recettes' });
       break;
     }

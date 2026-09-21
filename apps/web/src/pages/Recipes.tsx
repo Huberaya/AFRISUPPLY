@@ -8,7 +8,7 @@ import { Modal, Field } from '../components/Modal';
 import { ProductPicker } from '../components/ProductPicker';
 
 type Ing = { productId: string; productName: string; quantity: number; unit: string; cost: number | null };
-type R = { id: string; name: string; sellingPriceEur: number | null; targetMarginPct: string | null; cost: number; grossMargin: number | null; marginPct: number | null; suggestedPrice: number | null; unpriced: string[]; drifting: { productName: string; pct: number }[]; ingredients: Ing[] };
+type R = { id: string; name: string; sellingPriceEur: number | null; targetMarginPct: string | null; cost: number; costStatus: 'complet' | 'incomplet'; grossMargin: number | null; marginPct: number | null; suggestedPrice: number | null; unpriced: string[]; drifting: { productName: string; pct: number }[]; ingredients: Ing[] };
 type Draft = { name: string; sellingPriceEur: string; targetMarginPct: string; ingredients: { productId: string; productName: string; unit: string; quantity: string }[] };
 
 export default function Recipes() {
@@ -38,12 +38,13 @@ export default function Recipes() {
             <summary className="cursor-pointer list-none">
               <div className="flex items-start justify-between gap-2"><h3 className="font-bold">{r.name}</h3><div className="flex items-center gap-1">{r.sellingPriceEur && <span className="text-sm text-stone-500">Vente {fmtEur(r.sellingPriceEur)}</span>}<button onClick={(e) => { e.preventDefault(); openEdit(r); }} className="p-1 text-stone-400 hover:text-brand-700" aria-label="Modifier"><Pencil size={14} /></button><button onClick={(e) => { e.preventDefault(); void remove(r); }} className="p-1 text-stone-400 hover:text-red-600" aria-label="Supprimer"><Trash2 size={14} /></button></div></div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-xl bg-stone-50 p-2"><p className="text-[10px] uppercase text-stone-500">Coût matière</p><p className="font-extrabold">{fmtEur(r.cost)}</p></div>
-                <div className="rounded-xl bg-stone-50 p-2"><p className="text-[10px] uppercase text-stone-500">Marge brute</p><p className="font-extrabold text-emerald-700">{fmtEur(r.grossMargin)}</p></div>
-                <div className="rounded-xl bg-stone-50 p-2"><p className="text-[10px] uppercase text-stone-500">Taux</p><p className={`font-extrabold ${(r.marginPct ?? 0) < 70 ? 'text-amber-700' : ''}`}>{r.marginPct !== null ? `${r.marginPct} %` : '—'}</p></div>
+                {/* Chantier 2 (audit B3/U4) : coût partiel = « ≥ X € », marge masquée si incomplet — jamais 0,00 € ni 100 %. */}
+                <div className="rounded-xl bg-stone-50 p-2"><p className="text-[10px] uppercase text-stone-500">Coût matière</p><p className="font-extrabold">{r.costStatus === 'incomplet' ? `≥ ${fmtEur(r.cost)}` : fmtEur(r.cost)}</p>{r.costStatus === 'incomplet' && <p className="text-[9px] text-amber-700">{r.unpriced.length} sans prix</p>}</div>
+                <div className="rounded-xl bg-stone-50 p-2"><p className="text-[10px] uppercase text-stone-500">Marge brute</p>{r.marginPct === null ? <p className="font-extrabold text-stone-400">à calculer</p> : <p className="font-extrabold text-emerald-700">{fmtEur(r.grossMargin)}</p>}</div>
+                <div className="rounded-xl bg-stone-50 p-2"><p className="text-[10px] uppercase text-stone-500">Taux</p><p className={`font-extrabold ${r.marginPct === null ? 'text-stone-400' : r.marginPct < 70 ? 'text-amber-700' : ''}`}>{r.marginPct !== null ? `${r.marginPct} %` : r.costStatus === 'incomplet' ? 'à calculer' : '—'}</p></div>
               </div>
               {r.drifting.length > 0 && <p className="mt-3 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-900">⚠️ {r.drifting.map((d) => `${d.productName} +${d.pct} %`).join(', ')} sur 45 j.{r.suggestedPrice && r.sellingPriceEur && r.suggestedPrice > r.sellingPriceEur ? ` Prix conseillé : ${fmtEur(r.suggestedPrice)}.` : ''}</p>}
-              {r.unpriced.length > 0 && <p className="mt-2 text-xs text-stone-500">Sans prix : {r.unpriced.join(', ')}</p>}
+              {r.unpriced.length > 0 && <p className="mt-2 text-xs text-amber-800">Sans prix : {r.unpriced.join(', ')} — coût sous-estimé, marge masquée tant que ce n’est pas complet.</p>}
             </summary>
             <table className="mt-4 w-full text-xs"><tbody className="divide-y divide-stone-100">{r.ingredients.map((i) => <tr key={i.productId}><td className="py-1">{i.productName}</td><td className="py-1 text-right text-stone-500">{fmtQty(i.quantity, i.unit)}</td><td className="py-1 text-right font-semibold">{i.cost !== null ? fmtEur(i.cost) : '—'}</td></tr>)}</tbody></table>
           </details>

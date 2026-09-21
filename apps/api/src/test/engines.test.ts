@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, compareOffers, recipeCost, marginAnalysis, supplierReliability, computeDailyUse } from '../lib/engines.js';
+import { stockStatus, daysOfStock, alertsFromStock, alertsFromPrices, compareOffers, recipeCost, marginAnalysis, supplierReliability, computeDailyUse, marginSeries, priceIndexByCategory, priceAtMonth } from '../lib/engines.js';
 
 const snap = (q: number, crit: number, use: number) => ({ productId: 'p', productName: 'Riz parfumé', unit: 'kg', quantity: q, criticalLevel: crit, targetLevel: 45, avgDailyUse: use });
 
@@ -70,6 +70,79 @@ describe('recettes', () => {
     const today = new Date().toISOString().slice(0, 10);
     const use = computeDailyUse([{ recipeId: 'r', day: today, portions: 28 }], [{ recipeId: 'r', productId: 'riz', quantity: 0.5 }], 28);
     expect(use.get('riz')).toBe(0.5);
+  });
+});
+
+// Chantier 2 (audit B3/U4) — la vérité des coûts : jamais « 0,00 € » ni marge 100 % sans cotations.
+describe('vérité des coûts (chantier 2)', () => {
+  const ing = (id: string, name: string, q = 1) => ({ productId: id, productName: name, quantity: q, unit: 'kg' });
+
+  it('un ingrédient sans prix ⇒ coût incomplet (« ≥ X € »), pas fiable si > 30 % inconnu', () => {
+    const cost = recipeCost([ing('a', 'A'), ing('b', 'B')], new Map([['a', 4]]));
+    expect(cost.status).toBe('incomplet');
+    expect(cost.unpriced).toEqual(['B']);
+    expect(cost.total).toBe(4);          // coût connu PARTIEL — affiché « ≥ 4,00 € », jamais 0,00 €
+    expect(cost.coverage).toBe(0.5);
+    expect(cost.reliable).toBe(false);   // 50 % > 30 % : l'IA ne doit pas chiffrer
+  });
+  it('≤ 30 % d\'ingrédients sans prix : annonçable en « ≥ X »', () => {
+    const items = Array.from({ length: 10 }, (_, k) => ing(`p${k}`, `P${k}`, 0.1));
+    const prices = new Map(Array.from({ length: 9 }, (_, k) => [`p${k}`, 10] as const));
+    const cost = recipeCost(items, prices);
+    expect(cost.status).toBe('incomplet');
+    expect(cost.reliable).toBe(true);    // 10 % inconnu seulement
+    expect(cost.total).toBeCloseTo(9, 2);
+  });
+  it('marge masquée si coût incomplet : jamais de marge fausse ni de prix conseillé', () => {
+    const m = marginAnalysis(2, 10, 70, false);
+    expect(m).toEqual({ grossMargin: null, marginPct: null, suggestedPrice: null, status: 'incomplet' });
+  });
+  it('coût complet : comportement historique inchangé', () => {
+    const m = marginAnalysis(6.3, 18, 70, true);
+    expect(m.grossMargin).toBe(11.7); expect(m.marginPct).toBe(65); expect(m.suggestedPrice).toBe(21); expect(m.status).toBe('complet');
+  });
+  it('report de prix : le dernier prix connu sert jusqu\'au mois suivant, jamais avant', () => {
+    const pbm = new Map([['2026-02', 5], ['2026-04', 7]]);
+    expect(priceAtMonth(pbm, '2026-01')).toBeNull();  // avant la première cotation : inconnu
+    expect(priceAtMonth(pbm, '2026-02')).toBe(5);
+    expect(priceAtMonth(pbm, '2026-03')).toBe(5);     // report en avant
+    expect(priceAtMonth(pbm, '2026-05')).toBe(7);
+  });
+  it('courbe de marge : prix qui monte → marge qui baisse, ventes agrégées', () => {
+    const s = marginSeries({
+      recipeId: 'r', name: 'Riz sauce', ingredients: [ing('riz', 'Riz')], sellingPriceEur: 10,
+      months: ['2026-01', '2026-02', '2026-03'],
+      portionsByMonth: new Map([['2026-01', 2]]),
+      priceByMonth: new Map([['riz', new Map([['2026-01', 4], ['2026-02', 5]])]]),
+      currentUnpriced: [],
+    });
+    expect(s.points[0]).toMatchObject({ month: '2026-01', costPerPortion: 4, marginPct: 60, grossMarginPerPortion: 6, portionsSold: 2, revenueEur: 20 });
+    expect(s.points[1].marginPct).toBe(50);            // coût 5 → marge 50 %
+    expect(s.points[2].costPerPortion).toBe(5);        // prix de février reporté en mars
+    expect(s.portionsSold).toBe(2); expect(s.revenueEur).toBe(20);
+  });
+  it('mois sans aucun prix connu ⇒ trou honnête (null), pas d\'extrapolation vers le passé', () => {
+    const s = marginSeries({
+      recipeId: 'r', name: 'Riz sauce', ingredients: [ing('riz', 'Riz')], sellingPriceEur: 10,
+      months: ['2025-11', '2026-01'], portionsByMonth: new Map(),
+      priceByMonth: new Map([['riz', new Map([['2026-01', 4]])]]), currentUnpriced: ['Riz'],
+    });
+    expect(s.points[0].costPerPortion).toBeNull();
+    expect(s.points[0].marginPct).toBeNull();
+    expect(s.points[1].costPerPortion).toBe(4);
+    expect(s.status).toBe('incomplet');                 // ingrédient encore sans prix aujourd'hui
+  });
+  it('indice de prix par catégorie : base 100, moyenne des produits', () => {
+    const idx = priceIndexByCategory({
+      months: ['2026-01', '2026-02'],
+      products: [
+        { productId: 'r1', category: 'feculents', priceByMonth: new Map([['2026-01', 2], ['2026-02', 2.2]]) },
+        { productId: 'r2', category: 'feculents', priceByMonth: new Map([['2026-01', 4], ['2026-02', 4]]) },
+      ],
+    });
+    expect(idx[0].points[0]).toEqual({ month: '2026-01', index: 100 });
+    expect(idx[0].points[1].index).toBe(105);           // moyenne(110 %, 100 %)
+    expect(idx[0].baseMonth).toBe('2026-01');
   });
 });
 
