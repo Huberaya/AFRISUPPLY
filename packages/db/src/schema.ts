@@ -252,6 +252,10 @@ export const orderLines = pgTable('order_lines', {
   unitPriceEur: numeric('unit_price_eur', { precision: 10, scale: 4 }).notNull(),
   lineTotalEur: numeric('line_total_eur', { precision: 10, scale: 2 }).notNull(),
   receivedQty: numeric('received_qty', { precision: 12, scale: 3 }),
+  // chantier 3 (audit) : prix réellement facturé (€ / unité de base), saisi à la réception.
+  // Sans lui, l'historique de prix reste plat (il ne contient que les prix commandés) et
+  // l'alerte « vos prix augmentent » ne peut jamais se déclencher.
+  invoicedUnitPriceEur: numeric('invoiced_unit_price_eur', { precision: 10, scale: 4 }),
 });
 
 export const deliveries = pgTable('deliveries', {

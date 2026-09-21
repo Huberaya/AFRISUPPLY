@@ -29,6 +29,10 @@ const n = (v: string | number | null | undefined) => (v === null || v === undefi
 // --- Chantier 1 (audit) : garde-fous de plausibilité des quantités ---
 /** Plafond absolu d'une quantité sur une ligne (au-delà : erreur de saisie, pas une commande). */
 const RECEIPT_ABS_MAX = 1_000_000;
+/** Chantier 3 (audit) : plafond de plausibilité d'un prix facturé (€ par unité de base). */
+const INVOICE_UNIT_MAX = 10_000;
+/** Au-delà de ce facteur (et de 50 centimes), le prix facturé est considéré comme une faute de frappe. */
+const INVOICE_UNIT_FACTOR = 3;
 const MAX_PACKS_PER_LINE = 1000;
 
 /** Sentinelle : la commande a été réceptionnée entre la lecture et l'écriture (double validation). */
@@ -46,6 +50,8 @@ function isUniqueViolation(e: unknown, constraint: string): boolean {
 
 /** « 50 kg », « 12,5 L » — pour des messages d'erreur lisibles. */
 const fmtQty = (v: number, unit: string) => `${Number(v.toFixed(3)).toLocaleString('fr-FR')} ${unit}`;
+/** Chantier 3 (audit) : montants en euros à la française, pour les messages destinés au restaurateur. */
+const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
 
 /**
  * Vérifie qu'aucune quantité demandée n'est invraisemblable, en s'appuyant sur la
@@ -386,9 +392,13 @@ restaurantRoutes.post('/orders/:id/send', async (c) => {
 restaurantRoutes.post('/orders/:id/receive', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb(); const user = c.get('user');
   const body = z.object({
-    lines: z.array(z.object({ lineId: z.string().uuid(), receivedQty: z.number().nonnegative().max(RECEIPT_ABS_MAX) })).min(1),
+    lines: z.array(z.object({
+      lineId: z.string().uuid(), receivedQty: z.number().nonnegative().max(RECEIPT_ABS_MAX),
+      /** Prix réellement facturé par le fournisseur (€ par unité de base : kg, L, pièce…). Optionnel. */
+      invoicedUnitPrice: z.number().positive().max(INVOICE_UNIT_MAX).optional(),
+    })).min(1),
     notes: z.string().max(500).optional(),
-    /** Confirmation explicite : autorise une quantité au-delà du plafond de plausibilité. */
+    /** Confirmation explicite : autorise une quantité ou un prix au-delà du plafond de plausibilité. */
     override: z.boolean().optional(),
   }).safeParse(await c.req.json().catch(() => ({})));
   if (!body.success) {
@@ -434,8 +444,32 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
     }, 400);
   }
 
+  // --- Prix facturés (chantier 3) : lus, bornés et vérifiés avant toute écriture ---
+  const invoicedByLine = new Map<string, number>();
+  const invoiceOutOfRange: { productName: string; ordered: number; invoiced: number; unit: string; message: string }[] = [];
+  for (const { line, productName, unit } of lines) {
+    const invoiced = body.data.lines.find((l) => l.lineId === line.id)?.invoicedUnitPrice;
+    if (invoiced === undefined) continue;
+    invoicedByLine.set(line.id, invoiced);
+    const orderedUnit = n(line.unitPriceEur);
+    if (orderedUnit > 0 && invoiced > orderedUnit * INVOICE_UNIT_FACTOR + 0.5 && !body.data.override) {
+      invoiceOutOfRange.push({
+        productName, ordered: orderedUnit, invoiced, unit,
+        message: `${productName} : prix facturé ${eur(invoiced)}/${unit} contre ${eur(orderedUnit)}/${unit} commandés (×${(invoiced / orderedUnit).toFixed(1)}).`,
+      });
+    }
+  }
+  if (invoiceOutOfRange.length) {
+    return c.json({
+      error: `Prix facturé invraisemblable pour ${invoiceOutOfRange.length} ligne${invoiceOutOfRange.length > 1 ? 's' : ''}. ${invoiceOutOfRange[0].message} ` +
+        `Vérifiez l'unité de la facture (prix au kilo ou au sac ?), ou confirmez si le fournisseur a réellement facturé ce prix.`,
+      code: 'invoice_out_of_range', lines: invoiceOutOfRange,
+    }, 400);
+  }
+
   const isLate = !!order.expectedAt && new Date(order.expectedAt).getTime() < Date.now() - 86_400_000;
   const discrepancies: { lineId: string; productName: string; ordered: number; received: number; unit: string }[] = [];
+  const priceVariance: { lineId: string; productName: string; unit: string; orderedUnit: number; invoicedUnit: number; deltaUnit: number; deltaPct: number | null; receivedQty: number; deltaEur: number }[] = [];
   const receivedByLine = new Map<string, number>();
   let deliveryId = '';
   let claimMessage: string | null = null;
@@ -452,16 +486,62 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
       for (const { line, productName, unit } of lines) {
         const received = resolved.get(line.id) ?? n(line.quantity);
         receivedByLine.set(line.id, received);
-        await tx.update(orderLines).set({ receivedQty: received.toFixed(3) }).where(eq(orderLines.id, line.id));
+        const invoiced = invoicedByLine.get(line.id) ?? null;
+        const orderedUnit = n(line.unitPriceEur);
+        // Le coût réel de l'entrée en stock est le prix facturé s'il est connu, sinon le prix commandé.
+        const unitCost = invoiced ?? orderedUnit;
+
+        await tx.update(orderLines).set({
+          receivedQty: received.toFixed(3),
+          ...(invoiced !== null ? { invoicedUnitPriceEur: invoiced.toFixed(4) } : {}),
+        }).where(eq(orderLines.id, line.id));
+
         if (received > 0) {
           await tx.insert(inventoryItems).values({ restaurantId: rid, productId: line.productId, quantity: '0', criticalLevel: '0' })
             .onConflictDoNothing({ target: [inventoryItems.restaurantId, inventoryItems.productId] });
           const [inv] = await tx.select().from(inventoryItems).where(and(eq(inventoryItems.restaurantId, rid), eq(inventoryItems.productId, line.productId)));
-          await tx.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: inv.id, type: 'reception', quantity: received.toFixed(3), unitCostEur: line.unitPriceEur, orderId: order.id, createdBy: user.id });
+          await tx.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: inv.id, type: 'reception', quantity: received.toFixed(3), unitCostEur: unitCost.toFixed(4), orderId: order.id, createdBy: user.id, note: invoiced !== null ? 'Prix facturé saisi à la réception' : null });
           await tx.update(inventoryItems).set({ quantity: (n(inv.quantity) + received).toFixed(3), updatedAt: new Date() }).where(eq(inventoryItems.id, inv.id));
-          if (line.offerId) await tx.insert(priceHistory).values({ restaurantId: rid, offerId: line.offerId, unitPriceEur: line.unitPriceEur, source: 'reception' });
+          if (line.offerId) {
+            // L'historique de prix enregistre le prix RÉELLEMENT payé : c'est lui qui fait vivre
+            // l'alerte de hausse et l'analyse de coûts (chantier 3 de l'audit).
+            await tx.insert(priceHistory).values({ restaurantId: rid, offerId: line.offerId, unitPriceEur: unitCost.toFixed(4), source: invoiced !== null ? 'facture' : 'reception' });
+            if (invoiced !== null) {
+              // L'offre du fournisseur reflète le dernier prix payé (au lieu du tarif annoncé).
+              const [off] = await tx.select().from(supplierOffers).where(eq(supplierOffers.id, line.offerId));
+              if (off) await tx.update(supplierOffers).set({ packPriceEur: (invoiced * n(off.packQty)).toFixed(2), lastSeenAt: new Date() }).where(eq(supplierOffers.id, off.id));
+            }
+          }
         }
         if (Math.abs(received - n(line.quantity)) > 0.001) discrepancies.push({ lineId: line.id, productName, ordered: n(line.quantity), received, unit });
+        if (invoiced !== null && Math.abs(invoiced - orderedUnit) > 0.0001) {
+          const deltaUnit = invoiced - orderedUnit;
+          priceVariance.push({
+            lineId: line.id, productName, unit,
+            orderedUnit: Math.round(orderedUnit * 10000) / 10000,
+            invoicedUnit: Math.round(invoiced * 10000) / 10000,
+            deltaUnit: Math.round(deltaUnit * 10000) / 10000,
+            deltaPct: orderedUnit > 0 ? Math.round((deltaUnit / orderedUnit) * 1000) / 10 : null,
+            receivedQty: received,
+            deltaEur: Math.round(deltaUnit * received * 100) / 100,
+          });
+        }
+      }
+
+      // Alerte de surfacturation : la facture dépasse la commande au-delà du bruit d'arrondi.
+      const surcharge = priceVariance.reduce((a, v) => a + Math.max(0, v.deltaEur), 0);
+      const orderedValue = lines.reduce((a, l) => a + n(l.line.unitPriceEur) * (resolved.get(l.line.id) ?? n(l.line.quantity)), 0);
+      if (surcharge > Math.max(1, orderedValue * 0.01)) {
+        const worst = priceVariance.filter((v) => v.deltaEur > 0).sort((a, b) => b.deltaEur - a.deltaEur)[0];
+        await tx.insert(alerts).values({
+          restaurantId: rid, dedupeKey: `facture:${deliveryId}`, kind: 'hausse_prix', severity: 'orange',
+          productId: lines.find((l) => l.line.id === worst.lineId)?.line.productId ?? null, supplierId: order.supplierId,
+          title: `💸 Facture plus élevée que la commande — ${order.reference}`,
+          message: `Les prix facturés dépassent les prix commandés de ${eur(surcharge)} au total. ` +
+            `Le plus gros écart : ${worst.productName}, ${eur(worst.orderedUnit)} → ${eur(worst.invoicedUnit)}/${worst.unit} (${worst.deltaPct !== null ? `+${worst.deltaPct} %` : `+${eur(worst.deltaUnit)}`}), soit ${eur(worst.deltaEur)} sur la quantité reçue.`,
+          actionUrl: '/app/analyse',
+          payload: { reference: order.reference, surchargeEur: Math.round(surcharge * 100) / 100, lines: priceVariance },
+        }).onConflictDoNothing();
       }
 
       if (discrepancies.length) {
@@ -500,7 +580,18 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
   const allReceived = discrepancies.every((d) => d.received >= d.ordered);
   void logOrderEvent(order.id, 'received', allReceived ? 'Réception confirmée par le restaurant' : 'Réception avec écarts signalés', 'restaurant',
     body.data.override ? { override: true } : undefined);
-  return c.json({ ok: true, isLate, discrepancies, claimMessage, deliveryId, receivedAt: new Date().toISOString() });
+  const surchargeEur = Math.round(priceVariance.reduce((a, v) => a + v.deltaEur, 0) * 100) / 100;
+  const invoicedTotal = priceVariance.length || invoicedByLine.size
+    ? Math.round(lines.reduce((a, l) => {
+        const received = receivedByLine.get(l.line.id) ?? n(l.line.quantity);
+        return a + (invoicedByLine.get(l.line.id) ?? n(l.line.unitPriceEur)) * received;
+      }, 0) * 100) / 100
+    : null;
+  const orderedTotal = Math.round(lines.reduce((a, l) => a + n(l.line.unitPriceEur) * (receivedByLine.get(l.line.id) ?? n(l.line.quantity)), 0) * 100) / 100;
+  return c.json({
+    ok: true, isLate, discrepancies, claimMessage, deliveryId, receivedAt: new Date().toISOString(),
+    priceVariance, surchargeEur, orderedTotal, invoicedTotal,
+  });
 });
 
 // -------------------------------------------------------------

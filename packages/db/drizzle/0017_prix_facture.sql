@@ -1,0 +1,1 @@
+ALTER TABLE "order_lines" ADD COLUMN "invoiced_unit_price_eur" numeric(10, 4);

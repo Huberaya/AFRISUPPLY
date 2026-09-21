@@ -331,7 +331,11 @@ var init_schema = __esm({
       // en baseUnit (packs × packQty)
       unitPriceEur: numeric("unit_price_eur", { precision: 10, scale: 4 }).notNull(),
       lineTotalEur: numeric("line_total_eur", { precision: 10, scale: 2 }).notNull(),
-      receivedQty: numeric("received_qty", { precision: 12, scale: 3 })
+      receivedQty: numeric("received_qty", { precision: 12, scale: 3 }),
+      // chantier 3 (audit) : prix réellement facturé (€ / unité de base), saisi à la réception.
+      // Sans lui, l'historique de prix reste plat (il ne contient que les prix commandés) et
+      // l'alerte « vos prix augmentent » ne peut jamais se déclencher.
+      invoicedUnitPriceEur: numeric("invoiced_unit_price_eur", { precision: 10, scale: 4 })
     });
     deliveries = pgTable("deliveries", {
       id: uuid("id").primaryKey().defaultRandom(),
@@ -2994,7 +2998,7 @@ async function refreshAlerts(rid) {
   }
   return { computed: computed.length, inserted };
 }
-var restaurantRoutes, n, RECEIPT_ABS_MAX, MAX_PACKS_PER_LINE, ReceptionAlreadyDone, fmtQty2;
+var restaurantRoutes, n, RECEIPT_ABS_MAX, INVOICE_UNIT_MAX, INVOICE_UNIT_FACTOR, MAX_PACKS_PER_LINE, ReceptionAlreadyDone, fmtQty2, eur;
 var init_restaurant = __esm({
   "apps/api/src/routes/restaurant.ts"() {
     "use strict";
@@ -3011,6 +3015,8 @@ var init_restaurant = __esm({
     restaurantRoutes.on(["POST"], "/orders/:id/send", requireMinRole("manager"));
     n = (v) => v === null || v === void 0 ? 0 : Number(v);
     RECEIPT_ABS_MAX = 1e6;
+    INVOICE_UNIT_MAX = 1e4;
+    INVOICE_UNIT_FACTOR = 3;
     MAX_PACKS_PER_LINE = 1e3;
     ReceptionAlreadyDone = class extends Error {
       constructor(at) {
@@ -3019,6 +3025,7 @@ var init_restaurant = __esm({
       }
     };
     fmtQty2 = (v, unit2) => `${Number(v.toFixed(3)).toLocaleString("fr-FR")} ${unit2}`;
+    eur = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     restaurantRoutes.get("/dashboard", async (c) => {
       const rid = c.get("restaurantId");
       const db = await getDb();
@@ -3245,9 +3252,14 @@ var init_restaurant = __esm({
       const db = await getDb();
       const user = c.get("user");
       const body3 = z2.object({
-        lines: z2.array(z2.object({ lineId: z2.string().uuid(), receivedQty: z2.number().nonnegative().max(RECEIPT_ABS_MAX) })).min(1),
+        lines: z2.array(z2.object({
+          lineId: z2.string().uuid(),
+          receivedQty: z2.number().nonnegative().max(RECEIPT_ABS_MAX),
+          /** Prix réellement facturé par le fournisseur (€ par unité de base : kg, L, pièce…). Optionnel. */
+          invoicedUnitPrice: z2.number().positive().max(INVOICE_UNIT_MAX).optional()
+        })).min(1),
         notes: z2.string().max(500).optional(),
-        /** Confirmation explicite : autorise une quantité au-delà du plafond de plausibilité. */
+        /** Confirmation explicite : autorise une quantité ou un prix au-delà du plafond de plausibilité. */
         override: z2.boolean().optional()
       }).safeParse(await c.req.json().catch(() => ({})));
       if (!body3.success) {
@@ -3289,8 +3301,33 @@ var init_restaurant = __esm({
           lines: overCeiling
         }, 400);
       }
+      const invoicedByLine = /* @__PURE__ */ new Map();
+      const invoiceOutOfRange = [];
+      for (const { line, productName, unit: unit2 } of lines) {
+        const invoiced = body3.data.lines.find((l) => l.lineId === line.id)?.invoicedUnitPrice;
+        if (invoiced === void 0) continue;
+        invoicedByLine.set(line.id, invoiced);
+        const orderedUnit = n(line.unitPriceEur);
+        if (orderedUnit > 0 && invoiced > orderedUnit * INVOICE_UNIT_FACTOR + 0.5 && !body3.data.override) {
+          invoiceOutOfRange.push({
+            productName,
+            ordered: orderedUnit,
+            invoiced,
+            unit: unit2,
+            message: `${productName} : prix factur\xE9 ${eur(invoiced)}/${unit2} contre ${eur(orderedUnit)}/${unit2} command\xE9s (\xD7${(invoiced / orderedUnit).toFixed(1)}).`
+          });
+        }
+      }
+      if (invoiceOutOfRange.length) {
+        return c.json({
+          error: `Prix factur\xE9 invraisemblable pour ${invoiceOutOfRange.length} ligne${invoiceOutOfRange.length > 1 ? "s" : ""}. ${invoiceOutOfRange[0].message} V\xE9rifiez l'unit\xE9 de la facture (prix au kilo ou au sac ?), ou confirmez si le fournisseur a r\xE9ellement factur\xE9 ce prix.`,
+          code: "invoice_out_of_range",
+          lines: invoiceOutOfRange
+        }, 400);
+      }
       const isLate = !!order.expectedAt && new Date(order.expectedAt).getTime() < Date.now() - 864e5;
       const discrepancies = [];
+      const priceVariance = [];
       const receivedByLine = /* @__PURE__ */ new Map();
       let deliveryId = "";
       let claimMessage = null;
@@ -3303,15 +3340,58 @@ var init_restaurant = __esm({
           for (const { line, productName, unit: unit2 } of lines) {
             const received = resolved.get(line.id) ?? n(line.quantity);
             receivedByLine.set(line.id, received);
-            await tx.update(orderLines).set({ receivedQty: received.toFixed(3) }).where(eq8(orderLines.id, line.id));
+            const invoiced = invoicedByLine.get(line.id) ?? null;
+            const orderedUnit = n(line.unitPriceEur);
+            const unitCost = invoiced ?? orderedUnit;
+            await tx.update(orderLines).set({
+              receivedQty: received.toFixed(3),
+              ...invoiced !== null ? { invoicedUnitPriceEur: invoiced.toFixed(4) } : {}
+            }).where(eq8(orderLines.id, line.id));
             if (received > 0) {
               await tx.insert(inventoryItems).values({ restaurantId: rid, productId: line.productId, quantity: "0", criticalLevel: "0" }).onConflictDoNothing({ target: [inventoryItems.restaurantId, inventoryItems.productId] });
               const [inv] = await tx.select().from(inventoryItems).where(and6(eq8(inventoryItems.restaurantId, rid), eq8(inventoryItems.productId, line.productId)));
-              await tx.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: inv.id, type: "reception", quantity: received.toFixed(3), unitCostEur: line.unitPriceEur, orderId: order.id, createdBy: user.id });
+              await tx.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: inv.id, type: "reception", quantity: received.toFixed(3), unitCostEur: unitCost.toFixed(4), orderId: order.id, createdBy: user.id, note: invoiced !== null ? "Prix factur\xE9 saisi \xE0 la r\xE9ception" : null });
               await tx.update(inventoryItems).set({ quantity: (n(inv.quantity) + received).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq8(inventoryItems.id, inv.id));
-              if (line.offerId) await tx.insert(priceHistory).values({ restaurantId: rid, offerId: line.offerId, unitPriceEur: line.unitPriceEur, source: "reception" });
+              if (line.offerId) {
+                await tx.insert(priceHistory).values({ restaurantId: rid, offerId: line.offerId, unitPriceEur: unitCost.toFixed(4), source: invoiced !== null ? "facture" : "reception" });
+                if (invoiced !== null) {
+                  const [off] = await tx.select().from(supplierOffers).where(eq8(supplierOffers.id, line.offerId));
+                  if (off) await tx.update(supplierOffers).set({ packPriceEur: (invoiced * n(off.packQty)).toFixed(2), lastSeenAt: /* @__PURE__ */ new Date() }).where(eq8(supplierOffers.id, off.id));
+                }
+              }
             }
             if (Math.abs(received - n(line.quantity)) > 1e-3) discrepancies.push({ lineId: line.id, productName, ordered: n(line.quantity), received, unit: unit2 });
+            if (invoiced !== null && Math.abs(invoiced - orderedUnit) > 1e-4) {
+              const deltaUnit = invoiced - orderedUnit;
+              priceVariance.push({
+                lineId: line.id,
+                productName,
+                unit: unit2,
+                orderedUnit: Math.round(orderedUnit * 1e4) / 1e4,
+                invoicedUnit: Math.round(invoiced * 1e4) / 1e4,
+                deltaUnit: Math.round(deltaUnit * 1e4) / 1e4,
+                deltaPct: orderedUnit > 0 ? Math.round(deltaUnit / orderedUnit * 1e3) / 10 : null,
+                receivedQty: received,
+                deltaEur: Math.round(deltaUnit * received * 100) / 100
+              });
+            }
+          }
+          const surcharge = priceVariance.reduce((a, v) => a + Math.max(0, v.deltaEur), 0);
+          const orderedValue = lines.reduce((a, l) => a + n(l.line.unitPriceEur) * (resolved.get(l.line.id) ?? n(l.line.quantity)), 0);
+          if (surcharge > Math.max(1, orderedValue * 0.01)) {
+            const worst = priceVariance.filter((v) => v.deltaEur > 0).sort((a, b) => b.deltaEur - a.deltaEur)[0];
+            await tx.insert(alerts).values({
+              restaurantId: rid,
+              dedupeKey: `facture:${deliveryId}`,
+              kind: "hausse_prix",
+              severity: "orange",
+              productId: lines.find((l) => l.line.id === worst.lineId)?.line.productId ?? null,
+              supplierId: order.supplierId,
+              title: `\u{1F4B8} Facture plus \xE9lev\xE9e que la commande \u2014 ${order.reference}`,
+              message: `Les prix factur\xE9s d\xE9passent les prix command\xE9s de ${eur(surcharge)} au total. Le plus gros \xE9cart : ${worst.productName}, ${eur(worst.orderedUnit)} \u2192 ${eur(worst.invoicedUnit)}/${worst.unit} (${worst.deltaPct !== null ? `+${worst.deltaPct} %` : `+${eur(worst.deltaUnit)}`}), soit ${eur(worst.deltaEur)} sur la quantit\xE9 re\xE7ue.`,
+              actionUrl: "/app/analyse",
+              payload: { reference: order.reference, surchargeEur: Math.round(surcharge * 100) / 100, lines: priceVariance }
+            }).onConflictDoNothing();
           }
           if (discrepancies.length) {
             const [sup] = await tx.select().from(suppliers).where(eq8(suppliers.id, order.supplierId));
@@ -3367,7 +3447,24 @@ ${user.fullName}`;
         "restaurant",
         body3.data.override ? { override: true } : void 0
       );
-      return c.json({ ok: true, isLate, discrepancies, claimMessage, deliveryId, receivedAt: (/* @__PURE__ */ new Date()).toISOString() });
+      const surchargeEur = Math.round(priceVariance.reduce((a, v) => a + v.deltaEur, 0) * 100) / 100;
+      const invoicedTotal = priceVariance.length || invoicedByLine.size ? Math.round(lines.reduce((a, l) => {
+        const received = receivedByLine.get(l.line.id) ?? n(l.line.quantity);
+        return a + (invoicedByLine.get(l.line.id) ?? n(l.line.unitPriceEur)) * received;
+      }, 0) * 100) / 100 : null;
+      const orderedTotal = Math.round(lines.reduce((a, l) => a + n(l.line.unitPriceEur) * (receivedByLine.get(l.line.id) ?? n(l.line.quantity)), 0) * 100) / 100;
+      return c.json({
+        ok: true,
+        isLate,
+        discrepancies,
+        claimMessage,
+        deliveryId,
+        receivedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        priceVariance,
+        surchargeEur,
+        orderedTotal,
+        invoicedTotal
+      });
     });
     restaurantRoutes.get("/recipes", async (c) => {
       const rid = c.get("restaurantId");
@@ -3676,7 +3773,7 @@ ${draft}` }
     return null;
   }
 }
-var norm, RULES, EXAMPLE_QUESTIONS, eur, qty;
+var norm, RULES, EXAMPLE_QUESTIONS, eur2, qty;
 var init_assistant = __esm({
   "apps/api/src/lib/assistant.ts"() {
     "use strict";
@@ -3703,7 +3800,7 @@ var init_assistant = __esm({
       "Quelles ruptures arrivent ?",
       "Combien il me reste de plantain ?"
     ];
-    eur = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+    eur2 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     qty = (v, u) => `${Number.isInteger(v) ? v : v.toFixed(1).replace(".", ",")} ${u}`;
   }
 });
@@ -3762,7 +3859,7 @@ async function runAutoReorder(rid, userId = null) {
     const sup = await db.select().from(suppliers).where(eq10(suppliers.id, best.supplierId)).then((r) => r[0]);
     const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: best.supplierId, reference, status: "preparee", channel: sup.preferredChannel, expectedAt: new Date(Date.now() + best.leadTimeHours * 36e5).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: best.deliveryFee.toFixed(2), source: "auto_reorder", createdBy: userId, notes: cmp.justification.join(" ") }).returning();
     await db.insert(orderLines).values({ orderId: order.id, productId: s.productId, offerId: best.offerId, packLabel: best.packLabel, packs, quantity: (packs * best.packQty).toFixed(3), unitPriceEur: best.unitPrice.toFixed(4), lineTotalEur: total.toFixed(2) });
-    await db.insert(alerts).values({ restaurantId: rid, dedupeKey: `auto_reorder:${order.id}`, kind: "stock_bas", severity: "blue", title: `\u{1F916} Auto-Reorder \u2014 ${s.productName}`, message: `Stock \xE0 ${qty(s.quantity, s.unit)} (seuil ${qty(n3(rule.threshold), s.unit)}). Commande de ${qty(packs * best.packQty, s.unit)} pr\xE9par\xE9e chez ${best.supplierName} pour ${eur(total)}. ${cmp.justification[1] ?? ""}`.trim(), productId: s.productId, supplierId: best.supplierId, actionUrl: "/app/achats" }).onConflictDoNothing();
+    await db.insert(alerts).values({ restaurantId: rid, dedupeKey: `auto_reorder:${order.id}`, kind: "stock_bas", severity: "blue", title: `\u{1F916} Auto-Reorder \u2014 ${s.productName}`, message: `Stock \xE0 ${qty(s.quantity, s.unit)} (seuil ${qty(n3(rule.threshold), s.unit)}). Commande de ${qty(packs * best.packQty, s.unit)} pr\xE9par\xE9e chez ${best.supplierName} pour ${eur2(total)}. ${cmp.justification[1] ?? ""}`.trim(), productId: s.productId, supplierId: best.supplierId, actionUrl: "/app/achats" }).onConflictDoNothing();
     prepared.push({ productName: s.productName, supplierName: best.supplierName, packs, packLabel: best.packLabel, total, reference });
   }
   return { prepared, skipped };
@@ -3826,7 +3923,7 @@ var init_intelligence = __esm({
         await db.insert(orderLines).values(lines.map((l) => ({ ...l, orderId: order.id })));
         created.push({ reference, supplierName: sup.name, total });
       }
-      return c.json({ created, message: `${created.length} commande${created.length > 1 ? "s" : ""} pr\xE9par\xE9e${created.length > 1 ? "s" : ""} pour ${eur(created.reduce((a, x) => a + x.total, 0))}. Validez-les dans Achats.` }, 201);
+      return c.json({ created, message: `${created.length} commande${created.length > 1 ? "s" : ""} pr\xE9par\xE9e${created.length > 1 ? "s" : ""} pour ${eur2(created.reduce((a, x) => a + x.total, 0))}. Validez-les dans Achats.` }, 201);
     });
     intelligenceRoutes.get("/reorder-rules", async (c) => {
       const rid = c.get("restaurantId");
@@ -3908,8 +4005,8 @@ var init_intelligence = __esm({
           const needs = ctx.productForecasts.filter((f) => f.recommendedOrder > 0);
           const cart = buildSmartCart(needs.map((f) => ({ productId: f.productId, productName: f.productName, unit: f.unit, neededQty: f.recommendedOrder, daysOfStockLeft: f.daysOfStockLeft, preferredSupplierId: ctx.stocks.find((s) => s.productId === f.productId)?.preferredSupplierId })), ctx.offers);
           const urgent = needs.filter((f) => f.stockoutDay).slice(0, 5);
-          facts.push(`Produits \xE0 commander sur ${ctx.horizon} j : ${needs.length}`, ...needs.slice(0, 12).map((f) => `- ${f.productName} : besoin ${qty(f.predictedNeed, f.unit)}, stock ${qty(f.currentStock, f.unit)}, commander ${qty(f.recommendedOrder, f.unit)}${f.stockoutDay ? ` (rupture pr\xE9vue le ${f.stockoutDay})` : ""}`), `Panier optimis\xE9 : ${eur(cart.total)} chez ${cart.suppliers.length} fournisseur(s) ; \xE9conomie vs habitudes : ${eur(cart.saving)}`);
-          draft = needs.length ? `Pour les ${ctx.horizon} prochains jours, tu dois commander **${needs.length} produits**. Les plus urgents : ${urgent.map((f) => `${f.productName} (${qty(f.recommendedOrder, f.unit)}, rupture pr\xE9vue le ${f.stockoutDay?.slice(8, 10)}/${f.stockoutDay?.slice(5, 7)})`).join(", ") || "aucune rupture imminente"}. J'ai pr\xE9par\xE9 un panier optimis\xE9 de **${eur(cart.total)}** r\xE9parti entre ${cart.suppliers.map((s) => s.supplierName).join(", ")}${cart.saving > 0 ? `, soit **${eur(cart.saving)} d'\xE9conomie** par rapport \xE0 tes fournisseurs habituels` : ""}.` : `Bonne nouvelle : d'apr\xE8s tes ventes et ton stock, rien d'urgent \xE0 commander sur ${ctx.horizon} jours.`;
+          facts.push(`Produits \xE0 commander sur ${ctx.horizon} j : ${needs.length}`, ...needs.slice(0, 12).map((f) => `- ${f.productName} : besoin ${qty(f.predictedNeed, f.unit)}, stock ${qty(f.currentStock, f.unit)}, commander ${qty(f.recommendedOrder, f.unit)}${f.stockoutDay ? ` (rupture pr\xE9vue le ${f.stockoutDay})` : ""}`), `Panier optimis\xE9 : ${eur2(cart.total)} chez ${cart.suppliers.length} fournisseur(s) ; \xE9conomie vs habitudes : ${eur2(cart.saving)}`);
+          draft = needs.length ? `Pour les ${ctx.horizon} prochains jours, tu dois commander **${needs.length} produits**. Les plus urgents : ${urgent.map((f) => `${f.productName} (${qty(f.recommendedOrder, f.unit)}, rupture pr\xE9vue le ${f.stockoutDay?.slice(8, 10)}/${f.stockoutDay?.slice(5, 7)})`).join(", ") || "aucune rupture imminente"}. J'ai pr\xE9par\xE9 un panier optimis\xE9 de **${eur2(cart.total)}** r\xE9parti entre ${cart.suppliers.map((s) => s.supplierName).join(", ")}${cart.saving > 0 ? `, soit **${eur2(cart.saving)} d'\xE9conomie** par rapport \xE0 tes fournisseurs habituels` : ""}.` : `Bonne nouvelle : d'apr\xE8s tes ventes et ton stock, rien d'urgent \xE0 commander sur ${ctx.horizon} jours.`;
           actions.push({ label: "Voir le panier intelligent", url: "/app/achats/panier" });
           break;
         }
@@ -3941,8 +4038,8 @@ var init_intelligence = __esm({
           const cands = ctx.offers.filter((o) => o.productId === s.productId);
           const f = ctx.productForecasts.find((x) => x.productId === s.productId);
           const cmp = compareOffers(cands, { daysOfStockLeft: f?.daysOfStockLeft ?? null, neededQty: f?.recommendedOrder || 1, unit: s.unit });
-          facts.push(...cmp.ranked.map((o) => `- ${o.supplierName} : ${eur(o.unitPrice)}/${s.unit} (${o.packLabel} ${eur(o.packPrice)}), d\xE9lai ${Math.round(o.leadTimeHours / 24)} j, ${o.inStock ? "en stock" : "rupture"}, fiabilit\xE9 ${o.reliabilityPct} %, score ${o.score}`));
-          draft = cmp.recommended ? `Pour **${s.productName.toLowerCase()}**, ${cmp.ranked.length} fournisseur${cmp.ranked.length > 1 ? "s" : ""} : ${cmp.ranked.map((o) => `${o.supplierName} \xE0 ${eur(o.unitPrice)}/${s.unit}`).join(", ")}. ${cmp.headline}. ${cmp.justification.slice(0, 2).join(" ")}` : `Aucun fournisseur ne propose ${s.productName.toLowerCase()} pour l'instant \u2014 ajoute une offre via l'import.`;
+          facts.push(...cmp.ranked.map((o) => `- ${o.supplierName} : ${eur2(o.unitPrice)}/${s.unit} (${o.packLabel} ${eur2(o.packPrice)}), d\xE9lai ${Math.round(o.leadTimeHours / 24)} j, ${o.inStock ? "en stock" : "rupture"}, fiabilit\xE9 ${o.reliabilityPct} %, score ${o.score}`));
+          draft = cmp.recommended ? `Pour **${s.productName.toLowerCase()}**, ${cmp.ranked.length} fournisseur${cmp.ranked.length > 1 ? "s" : ""} : ${cmp.ranked.map((o) => `${o.supplierName} \xE0 ${eur2(o.unitPrice)}/${s.unit}`).join(", ")}. ${cmp.headline}. ${cmp.justification.slice(0, 2).join(" ")}` : `Aucun fournisseur ne propose ${s.productName.toLowerCase()} pour l'instant \u2014 ajoute une offre via l'import.`;
           actions.push({ label: "Ouvrir le comparateur", url: `/app/achats/comparer/${s.productId}` });
           break;
         }
@@ -3963,9 +4060,9 @@ var init_intelligence = __esm({
           const sell = r.sellingPriceEur ? n3(r.sellingPriceEur) : null;
           const m = marginAnalysis(cost.total, sell, n3(r.targetMarginPct) || 70);
           const top = [...cost.lines].sort((a, b) => b.cost - a.cost).slice(0, 3);
-          facts.push(`${r.name} : co\xFBt mati\xE8re ${eur(cost.total)}, prix de vente ${sell ? eur(sell) : "non renseign\xE9"}, marge brute ${m.grossMargin !== null ? eur(m.grossMargin) : "n/a"} (${m.marginPct ?? "n/a"} %), objectif ${n3(r.targetMarginPct) || 70} %`, `Top ingr\xE9dients : ${top.map((l) => `${l.productName} ${eur(l.cost)}`).join(", ")}`, ...cost.unpriced.length ? [`Sans prix connu : ${cost.unpriced.join(", ")}`] : []);
-          if (cls.intent === "dish_cost") draft = `Ton **${r.name}** te co\xFBte **${eur(cost.total)}** de mati\xE8res par portion${sell ? `, pour un prix de vente de ${eur(sell)} : marge brute **${eur(m.grossMargin)}** (${m.marginPct} %)` : ""}. Les postes principaux : ${top.map((l) => `${l.productName.toLowerCase()} (${eur(l.cost)})`).join(", ")}.${cost.unpriced.length ? ` Attention, ${cost.unpriced.length} ingr\xE9dient${cost.unpriced.length > 1 ? "s" : ""} sans prix connu (${cost.unpriced.slice(0, 3).join(", ")}) : le co\xFBt r\xE9el est un peu plus \xE9lev\xE9.` : ""}`;
-          else draft = !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un co\xFBt mati\xE8re de ${eur(cost.total)} et un objectif de ${n3(r.targetMarginPct) || 70} % de marge, le prix conseill\xE9 serait **${eur(m.suggestedPrice)}**.` : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur(sell)} pour ${eur(cost.total)} de mati\xE8res, soit ${m.marginPct} % de marge, sous ton objectif de ${n3(r.targetMarginPct) || 70} %. **Prix conseill\xE9 : ${eur(m.suggestedPrice)}**. Alternative : r\xE9duire le poste ${top[0].productName.toLowerCase()} (${eur(top[0].cost)}).` : `Pas n\xE9cessaire : \xE0 ${eur(sell)}, ton ${r.name} d\xE9gage ${m.marginPct} % de marge brute (${eur(m.grossMargin)}), au-dessus de ton objectif. Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de co\xFBt.`;
+          facts.push(`${r.name} : co\xFBt mati\xE8re ${eur2(cost.total)}, prix de vente ${sell ? eur2(sell) : "non renseign\xE9"}, marge brute ${m.grossMargin !== null ? eur2(m.grossMargin) : "n/a"} (${m.marginPct ?? "n/a"} %), objectif ${n3(r.targetMarginPct) || 70} %`, `Top ingr\xE9dients : ${top.map((l) => `${l.productName} ${eur2(l.cost)}`).join(", ")}`, ...cost.unpriced.length ? [`Sans prix connu : ${cost.unpriced.join(", ")}`] : []);
+          if (cls.intent === "dish_cost") draft = `Ton **${r.name}** te co\xFBte **${eur2(cost.total)}** de mati\xE8res par portion${sell ? `, pour un prix de vente de ${eur2(sell)} : marge brute **${eur2(m.grossMargin)}** (${m.marginPct} %)` : ""}. Les postes principaux : ${top.map((l) => `${l.productName.toLowerCase()} (${eur2(l.cost)})`).join(", ")}.${cost.unpriced.length ? ` Attention, ${cost.unpriced.length} ingr\xE9dient${cost.unpriced.length > 1 ? "s" : ""} sans prix connu (${cost.unpriced.slice(0, 3).join(", ")}) : le co\xFBt r\xE9el est un peu plus \xE9lev\xE9.` : ""}`;
+          else draft = !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un co\xFBt mati\xE8re de ${eur2(cost.total)} et un objectif de ${n3(r.targetMarginPct) || 70} % de marge, le prix conseill\xE9 serait **${eur2(m.suggestedPrice)}**.` : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur2(sell)} pour ${eur2(cost.total)} de mati\xE8res, soit ${m.marginPct} % de marge, sous ton objectif de ${n3(r.targetMarginPct) || 70} %. **Prix conseill\xE9 : ${eur2(m.suggestedPrice)}**. Alternative : r\xE9duire le poste ${top[0].productName.toLowerCase()} (${eur2(top[0].cost)}).` : `Pas n\xE9cessaire : \xE0 ${eur2(sell)}, ton ${r.name} d\xE9gage ${m.marginPct} % de marge brute (${eur2(m.grossMargin)}), au-dessus de ton objectif. Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de co\xFBt.`;
           actions.push({ label: "Voir les recettes", url: "/app/recettes" });
           break;
         }
@@ -3974,7 +4071,7 @@ var init_intelligence = __esm({
             const id = ctx.offers.find((o) => o.supplierName === name).supplierId;
             return { name, ...ctx.stats.get(id) ?? { delivered: 0, late: 0, discrepancies: 0, spent: 0, reliability: 85 } };
           }).sort((a, b) => b.reliability - a.reliability || b.delivered - a.delivered);
-          facts.push(...rows.map((r) => `- ${r.name} : fiabilit\xE9 ${r.reliability} %, ${r.delivered} livraisons, ${r.late} retards, ${r.discrepancies} \xE9carts, ${eur(r.spent)} d\xE9pens\xE9s`));
+          facts.push(...rows.map((r) => `- ${r.name} : fiabilit\xE9 ${r.reliability} %, ${r.delivered} livraisons, ${r.late} retards, ${r.discrepancies} \xE9carts, ${eur2(r.spent)} d\xE9pens\xE9s`));
           const best = rows.find((r) => r.delivered > 0) ?? rows[0];
           const worst = [...rows].reverse().find((r) => r.delivered > 0);
           draft = `Ton fournisseur le plus fiable est **${best.name}** (${best.reliability} % sur ${best.delivered} livraisons, ${best.late} retard${best.late > 1 ? "s" : ""}, ${best.discrepancies} \xE9cart${best.discrepancies > 1 ? "s" : ""}).${worst && worst.name !== best.name ? ` \xC0 surveiller : ${worst.name} (${worst.reliability} %, ${worst.late} retard${worst.late > 1 ? "s" : ""} et ${worst.discrepancies} \xE9cart${worst.discrepancies > 1 ? "s" : ""} sur ${worst.delivered}).` : ""}`;
@@ -3998,9 +4095,9 @@ var init_intelligence = __esm({
           }
           hikes.sort((x, y) => y.pct - x.pct);
           const evo = n3(sp.prev30) > 0 ? Math.round((n3(sp.last30) - n3(sp.prev30)) / n3(sp.prev30) * 100) : null;
-          facts.push(`D\xE9penses mois en cours ${eur(n3(sp.month))}, 30 derniers jours ${eur(n3(sp.last30))}, 30 j pr\xE9c\xE9dents ${eur(n3(sp.prev30))}, \xE9volution ${evo ?? "n/a"} %`, `Par fournisseur (30 j) : ${bySup.map((b) => `${b.name} ${eur(n3(b.total))}`).join(", ")}`, `Hausses de prix (60 j) : ${hikes.map((h) => `${h.productName} chez ${h.supplierName} +${h.pct} % (${eur(h.from)}\u2192${eur(h.to)}/${h.unit})`).join(" ; ") || "aucune"}`);
-          if (cls.intent === "monthly_spend") draft = `Ce mois-ci, tu as d\xE9pens\xE9 **${eur(n3(sp.month))}** chez tes fournisseurs (${eur(n3(sp.last30))} sur 30 jours glissants${evo !== null ? `, ${evo > 0 ? "+" : ""}${evo} % vs la p\xE9riode pr\xE9c\xE9dente` : ""}). R\xE9partition : ${bySup.slice(0, 4).map((b) => `${b.name} ${eur(n3(b.total))}`).join(", ")}.`;
-          else draft = `${evo !== null ? `Tes achats ont \xE9volu\xE9 de **${evo > 0 ? "+" : ""}${evo} %** sur 30 jours (${eur(n3(sp.last30))} vs ${eur(n3(sp.prev30))}). ` : ""}${hikes.length ? `Les causes identifi\xE9es c\xF4t\xE9 prix : ${hikes.slice(0, 3).map((h) => `**${h.productName}** +${h.pct} % chez ${h.supplierName} (${eur(h.from)} \u2192 ${eur(h.to)}/${h.unit})`).join(", ")}. ` : "Aucune hausse de tarif fournisseur significative : la variation vient des volumes command\xE9s. "}${bySup[0] ? `Ton premier poste est ${bySup[0].name} (${eur(n3(bySup[0].total))} sur 30 j).` : ""}${hikes.length ? " Je peux te proposer des alternatives moins ch\xE8res pour ces produits." : ""}`;
+          facts.push(`D\xE9penses mois en cours ${eur2(n3(sp.month))}, 30 derniers jours ${eur2(n3(sp.last30))}, 30 j pr\xE9c\xE9dents ${eur2(n3(sp.prev30))}, \xE9volution ${evo ?? "n/a"} %`, `Par fournisseur (30 j) : ${bySup.map((b) => `${b.name} ${eur2(n3(b.total))}`).join(", ")}`, `Hausses de prix (60 j) : ${hikes.map((h) => `${h.productName} chez ${h.supplierName} +${h.pct} % (${eur2(h.from)}\u2192${eur2(h.to)}/${h.unit})`).join(" ; ") || "aucune"}`);
+          if (cls.intent === "monthly_spend") draft = `Ce mois-ci, tu as d\xE9pens\xE9 **${eur2(n3(sp.month))}** chez tes fournisseurs (${eur2(n3(sp.last30))} sur 30 jours glissants${evo !== null ? `, ${evo > 0 ? "+" : ""}${evo} % vs la p\xE9riode pr\xE9c\xE9dente` : ""}). R\xE9partition : ${bySup.slice(0, 4).map((b) => `${b.name} ${eur2(n3(b.total))}`).join(", ")}.`;
+          else draft = `${evo !== null ? `Tes achats ont \xE9volu\xE9 de **${evo > 0 ? "+" : ""}${evo} %** sur 30 jours (${eur2(n3(sp.last30))} vs ${eur2(n3(sp.prev30))}). ` : ""}${hikes.length ? `Les causes identifi\xE9es c\xF4t\xE9 prix : ${hikes.slice(0, 3).map((h) => `**${h.productName}** +${h.pct} % chez ${h.supplierName} (${eur2(h.from)} \u2192 ${eur2(h.to)}/${h.unit})`).join(", ")}. ` : "Aucune hausse de tarif fournisseur significative : la variation vient des volumes command\xE9s. "}${bySup[0] ? `Ton premier poste est ${bySup[0].name} (${eur2(n3(bySup[0].total))} sur 30 j).` : ""}${hikes.length ? " Je peux te proposer des alternatives moins ch\xE8res pour ces produits." : ""}`;
           actions.push({ label: "Voir l\u2019analyse", url: "/app/analyse" });
           break;
         }
@@ -4088,7 +4185,7 @@ async function remindPendingVendorOrders(opts = {}) {
   const rows = await db.select({ o: orders, v: vendors, r: restaurants }).from(orders).innerJoin(vendors, eq11(vendors.id, orders.vendorId)).innerJoin(restaurants, eq11(restaurants.id, orders.restaurantId)).where(and9(eq11(orders.status, "envoyee"), isNull5(orders.vendorRemindedAt), lt(orders.sentAt, limit)));
   const out = [];
   for (const { o, v, r } of rows) {
-    const text2 = `AFRISUPPLY \u2014 Rappel : la commande ${o.reference} de ${r.name} (${eur3(Number(o.totalEur))}) attend votre r\xE9ponse depuis ${Math.round((now.getTime() - (o.sentAt ?? o.createdAt).getTime()) / 36e5)} h.
+    const text2 = `AFRISUPPLY \u2014 Rappel : la commande ${o.reference} de ${r.name} (${eur4(Number(o.totalEur))}) attend votre r\xE9ponse depuis ${Math.round((now.getTime() - (o.sentAt ?? o.createdAt).getTime()) / 36e5)} h.
 Confirmer / refuser : ${APP_URL()}/fournisseur/commandes`;
     const phone = v.whatsapp || v.contactPhone;
     let channel = "none";
@@ -4114,7 +4211,7 @@ function maybeRemind() {
   lastRun = t;
   void remindPendingVendorOrders().catch((e) => console.warn("[reminders]", e.message));
 }
-var APP_URL, eur3, lastRun;
+var APP_URL, eur4, lastRun;
 var init_reminders = __esm({
   "apps/api/src/jobs/reminders.ts"() {
     "use strict";
@@ -4122,7 +4219,7 @@ var init_reminders = __esm({
     init_mailer();
     init_sms();
     APP_URL = () => process.env.APP_URL ?? "http://localhost:5173";
-    eur3 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+    eur4 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     lastRun = 0;
   }
 });
@@ -4134,7 +4231,7 @@ function digestHeadline(d) {
     return `${d.stock.urgent.length} produit${d.stock.urgent.length > 1 ? "s" : ""} \xE0 commander aujourd\u2019hui \u2014 ${f.productName} en premier`;
   }
   if (d.priceAlerts.length) return `${d.priceAlerts.length} hausse${d.priceAlerts.length > 1 ? "s" : ""} de prix \xE0 regarder`;
-  if (d.discrepancies.count) return `${eur4(d.discrepancies.openValue)} \xE0 r\xE9cup\xE9rer sur des livraisons incompl\xE8tes`;
+  if (d.discrepancies.count) return `${eur5(d.discrepancies.openValue)} \xE0 r\xE9cup\xE9rer sur des livraisons incompl\xE8tes`;
   return "Tout est sous contr\xF4le \u2014 bonne journ\xE9e en cuisine";
 }
 function buildDigest(d) {
@@ -4151,23 +4248,23 @@ function buildDigest(d) {
   if (d.cart && d.cart.lineCount) sections.push({
     emoji: "\u{1F9FA}",
     title: "Panier de la semaine pr\xEAt",
-    lines: [`${d.cart.lineCount} produit${d.cart.lineCount > 1 ? "s" : ""} chez ${d.cart.supplierCount} fournisseur${d.cart.supplierCount > 1 ? "s" : ""} pour ${eur4(d.cart.total)}${d.cart.saving > 0 ? ` \u2014 ${eur4(d.cart.saving)} d\u2019\xE9conomie vs vos habitudes` : ""}.`],
+    lines: [`${d.cart.lineCount} produit${d.cart.lineCount > 1 ? "s" : ""} chez ${d.cart.supplierCount} fournisseur${d.cart.supplierCount > 1 ? "s" : ""} pour ${eur5(d.cart.total)}${d.cart.saving > 0 ? ` \u2014 ${eur5(d.cart.saving)} d\u2019\xE9conomie vs vos habitudes` : ""}.`],
     cta: { label: "Valider le panier", path: "/app/achats/panier" }
   });
   if (d.autoReorder.length) sections.push({
     emoji: "\u{1F916}",
     title: "Commandes pr\xE9par\xE9es automatiquement (\xE0 valider)",
-    lines: d.autoReorder.map((a) => `${a.productName} chez ${a.supplierName} \u2014 ${eur4(a.total)} (${a.reference})`),
+    lines: d.autoReorder.map((a) => `${a.productName} chez ${a.supplierName} \u2014 ${eur5(a.total)} (${a.reference})`),
     cta: { label: "Voir mes achats", path: "/app/achats" }
   });
   if (d.priceAlerts.length) sections.push({ emoji: "\u{1F4C8}", title: "Prix en hausse", lines: d.priceAlerts.slice(0, 5).map((a) => a.message), cta: { label: "Comparer les fournisseurs", path: "/app/stock" } });
   if (d.opportunities.length) sections.push({ emoji: "\u{1F7E2}", title: "Moins cher ailleurs", lines: d.opportunities.slice(0, 4).map((a) => a.message) });
-  if (d.discrepancies.count) sections.push({ emoji: "\u26A0\uFE0F", title: "\xC9carts de livraison \xE0 r\xE9clamer", lines: [`${d.discrepancies.count} \xE9cart${d.discrepancies.count > 1 ? "s" : ""} ouvert${d.discrepancies.count > 1 ? "s" : ""} \u2014 ${eur4(d.discrepancies.openValue)} \xE0 r\xE9cup\xE9rer.`], cta: { label: "Voir les \xE9carts", path: "/app/achats/ecarts" } });
+  if (d.discrepancies.count) sections.push({ emoji: "\u26A0\uFE0F", title: "\xC9carts de livraison \xE0 r\xE9clamer", lines: [`${d.discrepancies.count} \xE9cart${d.discrepancies.count > 1 ? "s" : ""} ouvert${d.discrepancies.count > 1 ? "s" : ""} \u2014 ${eur5(d.discrepancies.openValue)} \xE0 r\xE9cup\xE9rer.`], cta: { label: "Voir les \xE9carts", path: "/app/achats/ecarts" } });
   if (d.pendingOrders.length) sections.push({ emoji: "\u{1F69A}", title: "Livraisons attendues", lines: d.pendingOrders.slice(0, 5).map((o) => `${o.supplierName} (${o.reference})${o.expectedAt ? ` \u2014 ${dayFr(o.expectedAt)}` : ""}`) });
   const footerFacts = [
     `Stock : ${d.stock.ok} \u{1F7E2} \xB7 ${d.stock.bas} \u{1F7E0} \xB7 ${d.stock.critique} \u{1F534}`,
     d.salesYesterday === null ? "Ventes d\u2019hier non saisies \u2014 30 secondes pour am\xE9liorer la pr\xE9vision" : `${d.salesYesterday} portions saisies hier`,
-    `Achats du mois : ${eur4(d.spend.thisMonth)}${d.spend.evolutionPct !== null ? ` (${d.spend.evolutionPct > 0 ? "+" : ""}${d.spend.evolutionPct} % vs 30 j pr\xE9c\xE9dents)` : ""}`
+    `Achats du mois : ${eur5(d.spend.thisMonth)}${d.spend.evolutionPct !== null ? ` (${d.spend.evolutionPct > 0 ? "+" : ""}${d.spend.evolutionPct} % vs 30 j pr\xE9c\xE9dents)` : ""}`
   ];
   const isEmpty = sections.length === 0;
   const text2 = [
@@ -4211,11 +4308,11 @@ function buildDigest(d) {
   </table></td></tr></table></body></html>`;
   return { subject, text: text2, html, isEmpty };
 }
-var eur4, UNIT_FR, q, days, dayFr, esc;
+var eur5, UNIT_FR, q, days, dayFr, esc;
 var init_digest = __esm({
   "apps/api/src/lib/digest.ts"() {
     "use strict";
-    eur4 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+    eur5 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     UNIT_FR = { piece: "pi\xE8ces", botte: "bottes", sac: "sacs", carton: "cartons" };
     q = (v, u) => {
       const isCount = u in UNIT_FR;
@@ -4354,7 +4451,7 @@ async function invoiceCommissions(period, opts = {}) {
     let via = "mail";
     if (v.stripeCustomerId && stripeConfigured()) {
       try {
-        await stripe("POST", "/invoiceitems", { customer: v.stripeCustomerId, amount: Math.round(amount * 100), currency: "eur", description: `Commission AFRISUPPLY ${period} \u2014 ${r.orders} commande(s), base ${eur5(Number(r.base))}` }, { idempotencyKey: `ci-${v.id}-${period}` });
+        await stripe("POST", "/invoiceitems", { customer: v.stripeCustomerId, amount: Math.round(amount * 100), currency: "eur", description: `Commission AFRISUPPLY ${period} \u2014 ${r.orders} commande(s), base ${eur6(Number(r.base))}` }, { idempotencyKey: `ci-${v.id}-${period}` });
         const inv = await stripe("POST", "/invoices", { customer: v.stripeCustomerId, collection_method: "send_invoice", days_until_due: 15, auto_advance: true, metadata: { vendorId: v.id, period } }, { idempotencyKey: `inv-${v.id}-${period}` });
         await stripe("POST", `/invoices/${inv.id}/finalize`);
         await stripe("POST", `/invoices/${inv.id}/send`);
@@ -4367,16 +4464,16 @@ async function invoiceCommissions(period, opts = {}) {
     if (via === "mail") {
       const [m] = await db.select({ email: users.email }).from(vendorMembers).innerJoin(users, eq13(users.id, vendorMembers.userId)).where(eq13(vendorMembers.vendorId, v.id)).limit(1);
       const to = v.contactEmail ?? m?.email;
-      if (to) await sendMail({ to, subject: `AFRISUPPLY \u2014 relev\xE9 de commission ${period} : ${eur5(amount)}`, text: `Bonjour,
+      if (to) await sendMail({ to, subject: `AFRISUPPLY \u2014 relev\xE9 de commission ${period} : ${eur6(amount)}`, text: `Bonjour,
 
 Relev\xE9 de commission ${period} pour ${v.name} :
-- ${r.orders} commande(s) confirm\xE9e(s), base ${eur5(Number(r.base))}
-- Commission ${Number(v.commissionPct)} % : ${eur5(amount)}
+- ${r.orders} commande(s) confirm\xE9e(s), base ${eur6(Number(r.base))}
+- Commission ${Number(v.commissionPct)} % : ${eur6(amount)}
 
 R\xE8glement sous 15 jours par virement (RIB dans votre espace) \u2014 ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur.
 
 Merci de votre confiance,
-L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Relev\xE9 de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirm\xE9e(s), base ${eur5(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur5(amount)}</b></li></ul><p>R\xE8glement sous 15 jours par virement \u2014 ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur.</p><p>L'\xE9quipe AFRISUPPLY</p>`, tags: { type: "commission" } });
+L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Relev\xE9 de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirm\xE9e(s), base ${eur6(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur6(amount)}</b></li></ul><p>R\xE8glement sous 15 jours par virement \u2014 ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur.</p><p>L'\xE9quipe AFRISUPPLY</p>`, tags: { type: "commission" } });
     }
     await db.insert(commissionInvoices).values({ vendorId: v.id, period, orders: Number(r.orders), baseEur: Number(r.base).toFixed(2), amountEur: amount.toFixed(2), stripeInvoiceId, status: via === "stripe" ? "emise" : "envoyee_par_mail" });
     await db.update(commissions).set({ invoiced: true }).where(and11(eq13(commissions.vendorId, v.id), eq13(commissions.period, period)));
@@ -4384,7 +4481,7 @@ L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Relev\xE9 de commission <b>${p
   }
   return { period, invoices: out, dryRun: !!opts.dryRun };
 }
-var isAdmin, eur5, billingPublicRoutes, billingRoutes, billingAdminRoutes;
+var isAdmin, eur6, billingPublicRoutes, billingRoutes, billingAdminRoutes;
 var init_billing2 = __esm({
   "apps/api/src/routes/billing.ts"() {
     "use strict";
@@ -4395,7 +4492,7 @@ var init_billing2 = __esm({
     init_mailer();
     init_ops();
     isAdmin = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
-    eur5 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+    eur6 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     billingPublicRoutes = new Hono6();
     billingPublicRoutes.post("/billing/webhook", async (c) => {
       const raw = await c.req.text();
@@ -4905,24 +5002,24 @@ async function placeVendorOrder(rid, vid, userId, input) {
     return { productId: o.productId, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n6(o.packQty)).toFixed(3), unitPriceEur: (pp / n6(o.packQty)).toFixed(4), lineTotalEur: (l.packs * pp).toFixed(2) };
   });
   const total = linesData.reduce((a, l) => a + Number(l.lineTotalEur), 0);
-  if (!input.skipMin && total < n6(v.minOrderEur)) return { ok: false, error: `Minimum de commande ${eur6(n6(v.minOrderEur))} chez ${v.name} (panier : ${eur6(total)})`, status: 400 };
+  if (!input.skipMin && total < n6(v.minOrderEur)) return { ok: false, error: `Minimum de commande ${eur7(n6(v.minOrderEur))} chez ${v.name} (panier : ${eur7(total)})`, status: 400 };
   const reference = await nextOrderReference();
   const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: "envoyee", channel: "plateforme", sentAt: /* @__PURE__ */ new Date(), expectedAt: new Date(Date.now() + v.leadTimeHours * 36e5).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? "marketplace", notes: input.notes, createdBy: userId }).returning();
   const priv = await db.select().from(supplierOffers).where(eq17(supplierOffers.supplierId, link.supplier.id));
   await db.insert(orderLines).values(linesData.map((l) => ({ ...l, orderId: order.id, offerId: priv.find((p) => p.productId === l.productId && p.packLabel === l.packLabel)?.id ?? null })));
   const [r] = await db.select({ name: restaurants.name, city: restaurants.city }).from(restaurants).where(eq17(restaurants.id, rid));
-  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject: `Nouvelle commande ${reference} \u2014 ${r.name}${r.city ? ` (${r.city})` : ""} \u2014 ${eur6(total)}`, text: `Bonjour,
+  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject: `Nouvelle commande ${reference} \u2014 ${r.name}${r.city ? ` (${r.city})` : ""} \u2014 ${eur7(total)}`, text: `Bonjour,
 
 ${r.name} vous passe commande via AFRISUPPLY :
-${linesData.map((l) => `\u2022 ${l.packs} \xD7 ${l.packLabel} \u2014 ${eur6(Number(l.lineTotalEur))}`).join("\n")}
-Total : ${eur6(total)}
+${linesData.map((l) => `\u2022 ${l.packs} \xD7 ${l.packLabel} \u2014 ${eur7(Number(l.lineTotalEur))}`).join("\n")}
+Total : ${eur7(total)}
 
 Confirmez ou refusez en un clic : ${APP_URL2()}/fournisseur/commandes
-`, html: `<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${linesData.map((l) => `<li>${l.packs} \xD7 ${l.packLabel} \u2014 ${eur6(Number(l.lineTotalEur))}</li>`).join("")}</ul><p><b>Total : ${eur6(total)}</b></p><p><a href="${APP_URL2()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: "vendor_order" } });
+`, html: `<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${linesData.map((l) => `<li>${l.packs} \xD7 ${l.packLabel} \u2014 ${eur7(Number(l.lineTotalEur))}</li>`).join("")}</ul><p><b>Total : ${eur7(total)}</b></p><p><a href="${APP_URL2()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: "vendor_order" } });
   void logOrderEvent(order.id, "sent", `Commande envoy\xE9e \xE0 ${v.name}${input.source === "recurrente" ? " (commande r\xE9currente)" : input.source === "recommande" ? " (recommande)" : ""}`, "restaurant", { total });
   const phone = v.whatsapp || v.contactPhone;
   if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? "whatsapp" : "sms", kind: "order.new", orderId: order.id, vendorId: vid, restaurantId: rid, body: `AFRISUPPLY \u2014 Nouvelle commande ${reference}
-${r.name}${r.city ? ` (${r.city})` : ""} \u2014 ${eur6(total)}
+${r.name}${r.city ? ` (${r.city})` : ""} \u2014 ${eur7(total)}
 ${linesData.slice(0, 6).map((l) => `\u2022 ${l.packs} \xD7 ${l.packLabel}`).join("\n")}${linesData.length > 6 ? `
 \u2026 +${linesData.length - 6} lignes` : ""}
 Confirmer / refuser : ${APP_URL2()}/fournisseur/commandes` });
@@ -4958,7 +5055,7 @@ async function runRecurringOrders(now = /* @__PURE__ */ new Date()) {
   }
   return { date: today, due: due.length, results: out };
 }
-var marketplaceRoutes, MAX_PACKS_PER_LINE2, MAX_ORDER_LINES, n6, eur6, servesZone, DAYS;
+var marketplaceRoutes, MAX_PACKS_PER_LINE2, MAX_ORDER_LINES, n6, eur7, servesZone, DAYS;
 var init_marketplace = __esm({
   "apps/api/src/routes/marketplace.ts"() {
     "use strict";
@@ -4980,7 +5077,7 @@ var init_marketplace = __esm({
     MAX_ORDER_LINES = 80;
     marketplaceRoutes.use("*", requireAuth, requireRestaurant);
     n6 = (v) => v === null || v === void 0 ? 0 : Number(v);
-    eur6 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+    eur7 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     servesZone = (v, zones) => v.deliveryZones.length === 0 || v.deliveryZones.some((d) => zones.has(d.trim().toLowerCase()) || zones.has(d));
     marketplaceRoutes.get("/marketplace/vendors", async (c) => {
       const rid = c.get("restaurantId");
@@ -5039,7 +5136,7 @@ var init_marketplace = __esm({
       if (!body3.success) return c.json({ error: `Donn\xE9es invalides : chaque ligne attend un nombre de colis entre 1 et ${MAX_PACKS_PER_LINE2} (panier de ${MAX_ORDER_LINES} lignes maximum).` }, 400);
       const res = await placeVendorOrder(rid, vid, user.id, body3.data);
       if (!res.ok) return c.json({ error: res.error }, res.status);
-      return c.json({ order: res.order, message: `Commande ${res.order.reference} envoy\xE9e \xE0 ${res.vendorName} (${eur6(res.total)}). Vous serez pr\xE9venu d\xE8s confirmation.` }, 201);
+      return c.json({ order: res.order, message: `Commande ${res.order.reference} envoy\xE9e \xE0 ${res.vendorName} (${eur7(res.total)}). Vous serez pr\xE9venu d\xE8s confirmation.` }, 201);
     });
     marketplaceRoutes.post("/marketplace/vendors/:id/quote", async (c) => {
       const rid = c.get("restaurantId");
@@ -5092,7 +5189,7 @@ var init_marketplace = __esm({
       if (!lines.length) return c.json({ error: "Aucun produit de cette commande n\u2019est disponible actuellement" }, 400);
       const res = await placeVendorOrder(rid, o.vendorId, user.id, { lines, notes: body3.data.notes ?? o.notes ?? void 0, source: "recommande" });
       if (!res.ok) return c.json({ error: res.error }, res.status);
-      return c.json({ order: res.order, message: `Commande ${res.order.reference} renvoy\xE9e \xE0 ${res.vendorName} (${eur6(res.total)}).` }, 201);
+      return c.json({ order: res.order, message: `Commande ${res.order.reference} renvoy\xE9e \xE0 ${res.vendorName} (${eur7(res.total)}).` }, 201);
     });
     DAYS = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
     marketplaceRoutes.get("/recurring", async (c) => {
@@ -5163,7 +5260,7 @@ var init_marketplace = __esm({
       const res = await placeVendorOrder(rid, r.vendorId, user.id, { lines: r.lines, notes: r.notes ?? void 0, source: "recurrente" });
       if (!res.ok) return c.json({ error: res.error }, res.status);
       await db.update(recurringOrders).set({ lastRunAt: /* @__PURE__ */ new Date(), lastOrderId: res.order.id, nextRunOn: nextRunOn(r.weekdays) }).where(eq17(recurringOrders.id, r.id));
-      return c.json({ order: res.order, message: `Commande ${res.order.reference} envoy\xE9e \xE0 ${res.vendorName} (${eur6(res.total)}).` }, 201);
+      return c.json({ order: res.order, message: `Commande ${res.order.reference} envoy\xE9e \xE0 ${res.vendorName} (${eur7(res.total)}).` }, 201);
     });
     marketplaceRoutes.get("/marketplace/group-buys", async (c) => {
       const rid = c.get("restaurantId");
@@ -5882,7 +5979,7 @@ import { z as z11 } from "zod";
 import { and as and19, eq as eq21, desc as desc10, gte as gte8, inArray as inArray9, sql as sql15 } from "drizzle-orm";
 
 // apps/api/src/lib/messages.ts
-var eur2 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+var eur3 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
 var qty2 = (q2, u) => `${Number.isInteger(q2) ? q2 : q2.toFixed(1).replace(".", ",")} ${u}`;
 var fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) : null;
 function waNumber(raw) {
@@ -5903,7 +6000,7 @@ function buildOrderMessage(i) {
     "",
     lines,
     "",
-    `Total estim\xE9 : ${eur2(i.total)}${i.deliveryFee ? ` (+ ${eur2(i.deliveryFee)} de livraison)` : ""}.`,
+    `Total estim\xE9 : ${eur3(i.total)}${i.deliveryFee ? ` (+ ${eur3(i.deliveryFee)} de livraison)` : ""}.`,
     when ? `Livraison souhait\xE9e : ${when}.` : null,
     i.notes ? `Remarque : ${i.notes}` : null,
     "",
@@ -6264,7 +6361,7 @@ ${xref}
     return Buffer.from(out, "latin1");
   }
 };
-var eur7 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+var eur8 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
 var fd = (d) => d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
 function orderPdf(d) {
   const p = new Pdf();
@@ -6299,17 +6396,17 @@ function orderPdf(d) {
   p.row([{ text: "Produit", x: cols[0].x, w: cols[0].w, bold: true }, { text: "Conditionnement", x: cols[1].x, w: cols[1].w, bold: true }, { text: "Colis", x: cols[2].x, w: cols[2].w, align: "right", bold: true }, { text: "Quantit\xE9", x: cols[3].x, w: cols[3].w, align: "right", bold: true }, { text: "P.U. HT", x: cols[4].x, w: cols[4].w, align: "right", bold: true }, { text: "Total HT", x: cols[5].x, w: cols[5].w, align: "right", bold: true }]);
   for (const l of d.lines) {
     p.down(16);
-    p.row([{ text: l.productName.slice(0, 42), x: cols[0].x, w: cols[0].w }, { text: (l.packLabel ?? "").slice(0, 20), x: cols[1].x, w: cols[1].w }, { text: String(l.packs), x: cols[2].x, w: cols[2].w, align: "right" }, { text: `${Number.isInteger(l.quantity) ? l.quantity : l.quantity.toFixed(2)} ${l.unit}`, x: cols[3].x, w: cols[3].w, align: "right" }, { text: eur7(l.unitPriceEur), x: cols[4].x, w: cols[4].w, align: "right" }, { text: eur7(l.lineTotalEur), x: cols[5].x, w: cols[5].w, align: "right" }]);
+    p.row([{ text: l.productName.slice(0, 42), x: cols[0].x, w: cols[0].w }, { text: (l.packLabel ?? "").slice(0, 20), x: cols[1].x, w: cols[1].w }, { text: String(l.packs), x: cols[2].x, w: cols[2].w, align: "right" }, { text: `${Number.isInteger(l.quantity) ? l.quantity : l.quantity.toFixed(2)} ${l.unit}`, x: cols[3].x, w: cols[3].w, align: "right" }, { text: eur8(l.unitPriceEur), x: cols[4].x, w: cols[4].w, align: "right" }, { text: eur8(l.lineTotalEur), x: cols[5].x, w: cols[5].w, align: "right" }]);
     p.line(m, p.cursor - 5, m + W, p.cursor - 5, 0.9);
   }
   p.down(18);
   if (d.deliveryFeeEur) {
     p.text("Frais de livraison HT", m + 300, 9, { align: "right", width: 160 });
-    p.text(eur7(d.deliveryFeeEur), cols[5].x, 9, { align: "right", width: cols[5].w });
+    p.text(eur8(d.deliveryFeeEur), cols[5].x, 9, { align: "right", width: cols[5].w });
     p.down(14);
   }
   p.text("TOTAL HT", m + 300, 11, { bold: true, align: "right", width: 160 });
-  p.text(eur7(d.totalEur + d.deliveryFeeEur), cols[5].x, 11, { bold: true, align: "right", width: cols[5].w });
+  p.text(eur8(d.totalEur + d.deliveryFeeEur), cols[5].x, 11, { bold: true, align: "right", width: cols[5].w });
   p.down(14);
   p.text("TVA et facture \xE9tablies par le fournisseur. R\xE8glement directement au fournisseur selon ses conditions.", m, 8, { color: "0.4 0.4 0.4" });
   if (d.notes) {
@@ -6488,7 +6585,7 @@ async function extractCatalogFromImage(imageDataUrl) {
 // apps/api/src/routes/vendor.ts
 var vendorRoutes = new Hono10();
 var n8 = (v) => v === null || v === void 0 ? 0 : Number(v);
-var eur8 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+var eur9 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
 var slugify2 = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 var isAdmin4 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 async function requireVendor(c, next) {
@@ -6656,7 +6753,7 @@ vendorRoutes.post("/vendor/orders/:id/confirm", async (c) => {
   const amount = n8(o.totalEur) * n8(v.commissionPct) / 100;
   await db.insert(commissions).values({ vendorId: vid, orderId: o.id, orderTotalEur: o.totalEur, pct: v.commissionPct, amountEur: amount.toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
   void logOrderEvent(o.id, "confirmed", `Confirm\xE9e par ${v.name}${upd.expectedAt ? ` \u2014 livraison pr\xE9vue le ${upd.expectedAt}` : ""}`, "vendor");
-  void notifyRestaurant(o.id, `\u2705 ${v.name} a confirm\xE9 votre commande ${o.reference}`, `${v.name} a confirm\xE9 la commande ${o.reference} (${eur8(n8(o.totalEur))}).
+  void notifyRestaurant(o.id, `\u2705 ${v.name} a confirm\xE9 votre commande ${o.reference}`, `${v.name} a confirm\xE9 la commande ${o.reference} (${eur9(n8(o.totalEur))}).
 Livraison pr\xE9vue le ${upd.expectedAt ?? "\xE0 confirmer"}.${body3.data.note ? `
 Message du fournisseur : ${body3.data.note}` : ""}`);
   return c.json({ order: upd, commission: Math.round(amount * 100) / 100 });
@@ -6706,7 +6803,7 @@ vendorRoutes.post("/vendor/orders/:id/propose", async (c) => {
   void logOrderEvent(o.id, "note", `${v.name} propose une modification \u2014 ${summary}`, "vendor", { newTotalEur });
   void notifyRestaurant(o.id, `\u270F\uFE0F ${v.name} propose une modification de la commande ${o.reference}`, `${v.name} ne peut pas livrer la commande ${o.reference} telle quelle.
 Proposition : ${summary}.
-Nouveau total : ${eur8(newTotalEur)} (au lieu de ${eur8(n8(o.totalEur))}).${body3.data.note ? `
+Nouveau total : ${eur9(newTotalEur)} (au lieu de ${eur9(n8(o.totalEur))}).${body3.data.note ? `
 Message : ${body3.data.note}` : ""}
 
 Acceptez ou refusez en un clic dans Achats.`);
@@ -6827,7 +6924,7 @@ vendorRoutes.put("/vendor/offers/:id/tiers", async (c) => {
   if (!o) return c.json({ error: "Offre introuvable" }, 404);
   const sorted = [...body3.data.tiers].sort((a, b) => a.minPacks - b.minPacks);
   for (let i = 0; i < sorted.length; i++) {
-    if (sorted[i].packPriceEur >= n8(o.packPriceEur)) return c.json({ error: `Le palier ${sorted[i].minPacks}+ doit \xEAtre moins cher que le prix catalogue (${eur8(n8(o.packPriceEur))})` }, 400);
+    if (sorted[i].packPriceEur >= n8(o.packPriceEur)) return c.json({ error: `Le palier ${sorted[i].minPacks}+ doit \xEAtre moins cher que le prix catalogue (${eur9(n8(o.packPriceEur))})` }, 400);
     if (i > 0 && sorted[i].packPriceEur >= sorted[i - 1].packPriceEur) return c.json({ error: "Les prix doivent baisser \xE0 chaque palier" }, 400);
     if (i > 0 && sorted[i].minPacks === sorted[i - 1].minPacks) return c.json({ error: "Deux paliers identiques" }, 400);
   }
@@ -6846,7 +6943,7 @@ vendorRoutes.post("/vendor/customer-prices", async (c) => {
   if (d.vendorOfferId) {
     const [o] = await db.select().from(vendorOffers).where(and18(eq20(vendorOffers.id, d.vendorOfferId), eq20(vendorOffers.vendorId, vid)));
     if (!o) return c.json({ error: "Offre introuvable" }, 404);
-    if (d.packPriceEur && d.packPriceEur >= n8(o.packPriceEur)) return c.json({ error: `Le prix n\xE9goci\xE9 doit \xEAtre inf\xE9rieur au catalogue (${eur8(n8(o.packPriceEur))})` }, 400);
+    if (d.packPriceEur && d.packPriceEur >= n8(o.packPriceEur)) return c.json({ error: `Le prix n\xE9goci\xE9 doit \xEAtre inf\xE9rieur au catalogue (${eur9(n8(o.packPriceEur))})` }, 400);
   }
   const [known] = await db.select({ id: orders.id }).from(orders).where(and18(eq20(orders.vendorId, vid), eq20(orders.restaurantId, d.restaurantId))).limit(1);
   const [linked] = await db.select({ id: suppliers.id }).from(suppliers).where(and18(eq20(suppliers.vendorId, vid), eq20(suppliers.restaurantId, d.restaurantId))).limit(1);
@@ -6915,7 +7012,7 @@ vendorRoutes.post("/vendor/group-buys/:id/close", async (c) => {
     await db.insert(orderLines).values({ orderId: order.id, productId: offer.productId, packLabel: offer.packLabel, packs: p.packs, quantity: (p.packs * n8(offer.packQty)).toFixed(3), unitPriceEur: (packPrice / n8(offer.packQty)).toFixed(4), lineTotalEur: total.toFixed(2) });
     await db.insert(commissions).values({ vendorId: vid, orderId: order.id, orderTotalEur: total.toFixed(2), pct: v.commissionPct, amountEur: (total * n8(v.commissionPct) / 100).toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
     await db.update(groupBuyParticipations).set({ orderId: order.id }).where(eq20(groupBuyParticipations.id, p.id));
-    void notifyRestaurant(order.id, `\u{1F91D} Achat group\xE9 r\xE9ussi : ${gb.title}`, `Le palier est atteint (${committed} colis). Votre commande ${order.reference} de ${p.packs} colis \xE0 ${eur8(packPrice)} le colis (\u2212${n8(gb.discountPct)} %) est confirm\xE9e chez ${v.name}.`);
+    void notifyRestaurant(order.id, `\u{1F91D} Achat group\xE9 r\xE9ussi : ${gb.title}`, `Le palier est atteint (${committed} colis). Votre commande ${order.reference} de ${p.packs} colis \xE0 ${eur9(packPrice)} le colis (\u2212${n8(gb.discountPct)} %) est confirm\xE9e chez ${v.name}.`);
     created++;
   }
   await db.update(groupBuys).set({ status: "cloture" }).where(eq20(groupBuys.id, id));
@@ -7038,7 +7135,7 @@ vendorRoutes.post("/vendor/offers/quick", async (c) => {
     const [so] = await db.update(supplierOffers).set({ ...parsed ? { packPriceEur: parsed.price.toFixed(2) } : {}, ...rupture ? { inStock: false } : {}, ...dispo ? { inStock: true } : {}, lastSeenAt: /* @__PURE__ */ new Date() }).where(and18(eq20(supplierOffers.supplierId, s.id), eq20(supplierOffers.productId, row.product.id), eq20(supplierOffers.packLabel, row.offer.packLabel))).returning();
     if (so && parsed) await db.insert(priceHistory).values({ restaurantId: s.restaurantId, offerId: so.id, unitPriceEur: (parsed.price / n8(row.offer.packQty)).toFixed(4), source: "catalogue" });
   }
-  const what = parsed ? `${eur8(n8(row.offer.packPriceEur))} \u2192 ${eur8(parsed.price)}` : rupture ? "pass\xE9 en rupture" : "de nouveau disponible";
+  const what = parsed ? `${eur9(n8(row.offer.packPriceEur))} \u2192 ${eur9(parsed.price)}` : rupture ? "pass\xE9 en rupture" : "de nouveau disponible";
   return c.json({ offerId: row.offer.id, productName: row.product.name, packLabel: row.offer.packLabel, message: `${row.product.name} (${row.offer.packLabel}) : ${what}${linked.length ? ` \xB7 ${linked.length} restaurant(s) pr\xE9venus` : ""}.` });
 });
 function bestMatchesLocal(label, ents, qty3) {
@@ -7732,7 +7829,7 @@ import { z as z14 } from "zod";
 import { and as and23, desc as desc13, eq as eq25, sql as sql19 } from "drizzle-orm";
 var APP_URL3 = () => process.env.APP_URL ?? "http://localhost:5173";
 var n12 = (v) => v === null || v === void 0 ? 0 : Number(v);
-var eur9 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
+var eur10 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
 var KIND = { manquant: "Manquant", abime: "Ab\xEEm\xE9 / casse", erreur_produit: "Erreur de produit", qualite: "Qualit\xE9 / DLC", autre: "Autre" };
 var isAdmin7 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 async function nextClaimRef() {
@@ -7807,10 +7904,10 @@ claimRoutes.post("/claims", async (c) => {
   const reference = await nextClaimRef();
   const [cl] = await db.insert(claims).values({ restaurantId: rid, vendorId: o.vendorId, orderId: o.id, discrepancyId: d.discrepancyId, reference, productName, kind: d.kind, orderedQty: orderedQty?.toFixed(3), receivedQty: receivedQty?.toFixed(3), claimedEur: claimedEur.toFixed(2), message: d.message, photo: d.photo, createdBy: user.id }).returning();
   const [r] = await db.select({ name: restaurants.name }).from(restaurants).where(eq25(restaurants.id, rid));
-  void logOrderEvent(o.id, "note", `Litige ${reference} ouvert \u2014 ${productName} (${KIND[d.kind]}), ${eur9(claimedEur)} r\xE9clam\xE9s`, "restaurant");
+  void logOrderEvent(o.id, "note", `Litige ${reference} ouvert \u2014 ${productName} (${KIND[d.kind]}), ${eur10(claimedEur)} r\xE9clam\xE9s`, "restaurant");
   void notifyVendor(o.vendorId, `\u26A0\uFE0F Litige ${reference} \u2014 ${r.name} \u2014 commande ${o.reference}`, `${r.name} signale un probl\xE8me sur la commande ${o.reference} :
 \u2022 ${productName} \u2014 ${KIND[d.kind]}${orderedQty !== null ? ` (command\xE9 ${orderedQty}, re\xE7u ${receivedQty})` : ""}
-\u2022 Montant r\xE9clam\xE9 : ${eur9(claimedEur)}${d.message ? `
+\u2022 Montant r\xE9clam\xE9 : ${eur10(claimedEur)}${d.message ? `
 Message : ${d.message}` : ""}
 
 R\xE9pondez sous 48 h : avoir, relivraison ou refus motiv\xE9.`);
@@ -7829,17 +7926,17 @@ claimRoutes.post("/claims/:id/close", async (c) => {
     if (cl.discrepancyId) {
       await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `litige \u2192 ${cl.resolution ?? "clos"}` }).where(eq25(deliveryDiscrepancies.id, cl.discrepancyId));
     }
-    void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} clos \u2014 ${cl.resolution === "avoir" ? `avoir ${eur9(n12(cl.creditEur))}` : cl.resolution ?? ""}`, "restaurant");
+    void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} clos \u2014 ${cl.resolution === "avoir" ? `avoir ${eur10(n12(cl.creditEur))}` : cl.resolution ?? ""}`, "restaurant");
     return c.json({ claim: publicClaim(upd2) });
   }
   const [upd] = await db.update(claims).set({ status: "escalade", message: body3.data.message ? `${cl.message ?? ""}
 [Escalade] ${body3.data.message}`.trim() : cl.message }).where(eq25(claims.id, cl.id)).returning();
   void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} escalad\xE9 \xE0 AFRISUPPLY`, "restaurant");
   const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  for (const to of admins) void sendMail({ to, subject: `\u{1F6A8} Litige escalad\xE9 ${cl.reference} (${eur9(n12(cl.claimedEur))})`, text: `Le restaurant conteste la r\xE9ponse du grossiste.
-Litige : ${cl.reference} \u2014 ${cl.productName} \u2014 r\xE9clam\xE9 ${eur9(n12(cl.claimedEur))}, propos\xE9 ${cl.resolution ?? "\u2014"} ${cl.creditEur ? eur9(n12(cl.creditEur)) : ""}.
+  for (const to of admins) void sendMail({ to, subject: `\u{1F6A8} Litige escalad\xE9 ${cl.reference} (${eur10(n12(cl.claimedEur))})`, text: `Le restaurant conteste la r\xE9ponse du grossiste.
+Litige : ${cl.reference} \u2014 ${cl.productName} \u2014 r\xE9clam\xE9 ${eur10(n12(cl.claimedEur))}, propos\xE9 ${cl.resolution ?? "\u2014"} ${cl.creditEur ? eur10(n12(cl.creditEur)) : ""}.
 Message : ${body3.data.message ?? "\u2014"}
-${APP_URL3()}/app/admin/litiges`, html: `<p>Litige <b>${cl.reference}</b> escalad\xE9 \u2014 ${cl.productName}, r\xE9clam\xE9 ${eur9(n12(cl.claimedEur))}.</p><p><a href="${APP_URL3()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: "claim" } });
+${APP_URL3()}/app/admin/litiges`, html: `<p>Litige <b>${cl.reference}</b> escalad\xE9 \u2014 ${cl.productName}, r\xE9clam\xE9 ${eur10(n12(cl.claimedEur))}.</p><p><a href="${APP_URL3()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: "claim" } });
   return c.json({ claim: publicClaim(upd), message: "AFRISUPPLY a \xE9t\xE9 pr\xE9venu et arbitrera sous 3 jours ouvr\xE9s." });
 });
 var vendorClaimRoutes = new Hono15();
@@ -7877,7 +7974,7 @@ vendorClaimRoutes.post("/vendor/claims/:id/respond", async (c) => {
   const status = d.resolution === "refus" ? "refuse" : full ? "accepte" : "propose";
   const [upd] = await db.update(claims).set({ status, resolution: d.resolution, creditEur: d.resolution === "avoir" ? credit.toFixed(2) : null, vendorMessage: d.message, vendorRespondedAt: /* @__PURE__ */ new Date() }).where(eq25(claims.id, cl.id)).returning();
   const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq25(vendors.id, vid));
-  const label = d.resolution === "avoir" ? `avoir de ${eur9(credit)}${full ? "" : ` (sur ${eur9(n12(cl.claimedEur))} r\xE9clam\xE9s)`}` : d.resolution === "relivraison" ? "relivraison du manquant" : `refus : ${d.message}`;
+  const label = d.resolution === "avoir" ? `avoir de ${eur10(credit)}${full ? "" : ` (sur ${eur10(n12(cl.claimedEur))} r\xE9clam\xE9s)`}` : d.resolution === "relivraison" ? "relivraison du manquant" : `refus : ${d.message}`;
   void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} \u2014 r\xE9ponse de ${v.name} : ${label}`, "vendor");
   void notifyRestaurant2(cl.restaurantId, `${d.resolution === "refus" ? "\u274C" : "\u2705"} Litige ${cl.reference} \u2014 r\xE9ponse de ${v.name}`, `${v.name} r\xE9pond au litige ${cl.reference} (${cl.productName}) : ${label}.${d.message && d.resolution !== "refus" ? `
 Message : ${d.message}` : ""}
@@ -7909,8 +8006,8 @@ adminClaimRoutes.post("/admin/claims/:id/arbitrate", async (c) => {
   const credit = d.resolution === "avoir" ? d.creditEur ?? n12(cl.claimedEur) : 0;
   const [upd] = await db.update(claims).set({ status: "clos", resolution: d.resolution, creditEur: d.resolution === "avoir" ? credit.toFixed(2) : null, vendorMessage: `[Arbitrage AFRISUPPLY] ${d.message}`, closedAt: /* @__PURE__ */ new Date() }).where(eq25(claims.id, cl.id)).returning();
   if (cl.discrepancyId) await db.update(deliveryDiscrepancies).set({ resolved: true, reason: `arbitrage \u2192 ${d.resolution}` }).where(eq25(deliveryDiscrepancies.id, cl.discrepancyId));
-  const txt = `D\xE9cision AFRISUPPLY sur le litige ${cl.reference} (${cl.productName}) : ${d.resolution === "avoir" ? `avoir de ${eur9(credit)}` : d.resolution}. ${d.message}`;
-  void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} arbitr\xE9 par AFRISUPPLY : ${d.resolution}${credit ? ` ${eur9(credit)}` : ""}`, "system");
+  const txt = `D\xE9cision AFRISUPPLY sur le litige ${cl.reference} (${cl.productName}) : ${d.resolution === "avoir" ? `avoir de ${eur10(credit)}` : d.resolution}. ${d.message}`;
+  void logOrderEvent(cl.orderId, "note", `Litige ${cl.reference} arbitr\xE9 par AFRISUPPLY : ${d.resolution}${credit ? ` ${eur10(credit)}` : ""}`, "system");
   void notifyRestaurant2(cl.restaurantId, `\u2696\uFE0F Litige ${cl.reference} \u2014 d\xE9cision AFRISUPPLY`, txt);
   void notifyVendor(cl.vendorId, `\u2696\uFE0F Litige ${cl.reference} \u2014 d\xE9cision AFRISUPPLY`, txt);
   await audit("claim.arbitrate", { actorEmail: c.get("user").email, target: cl.id, meta: { resolution: d.resolution, credit } });
