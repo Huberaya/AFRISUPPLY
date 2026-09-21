@@ -1,14 +1,25 @@
 // Chantier 6 — Facturation : abonnements restaurants (Stripe Checkout + Portal + webhooks) et factures de commission
 // des fournisseurs plateforme. Client Stripe minimal en fetch (pas de SDK : bundle Vercel léger, API stable).
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
-import { getDb, restaurants } from '@afrisupply/db';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { getDb, restaurants, restaurantMembers, subscriptionInvoices, users } from '@afrisupply/db';
 
 export type PlanId = 'starter' | 'pro' | 'business';
 export const PLAN_RANK: Record<string, number> = { trial: 2, starter: 1, pro: 2, business: 3 }; // l'essai donne les fonctions Pro
 export const PLAN_PRICES: Record<PlanId, number> = { starter: 39, pro: 89, business: 199 };
 
 export const stripeConfigured = () => !!process.env.STRIPE_SECRET_KEY;
+
+/**
+ * Chantier 7 de l'audit 2 — base d'API Stripe paramétrable : elle permet de pointer les tests vers un
+ * faux Stripe local (parcours de bout en bout reproductible sans clé réelle) tout en restant
+ * https://api.stripe.com/v1 en production.
+ */
+export const stripeApiBase = () => (process.env.STRIPE_API_BASE ?? 'https://api.stripe.com/v1').replace(/\/$/, '');
+
+/** Nombre de sièges (utilisateurs) inclus par formule. `null` = illimité. */
+export const PLAN_SEATS: Record<string, number | null> = { trial: 5, starter: 3, pro: 5, business: null };
+export const seatsFor = (plan: string) => (plan in PLAN_SEATS ? PLAN_SEATS[plan] : null);
 export const billingEnforced = () => process.env.BILLING_ENFORCE === 'true' || (stripeConfigured() && process.env.BILLING_ENFORCE !== 'false');
 export const priceIdFor = (plan: PlanId) => process.env[`STRIPE_PRICE_${plan.toUpperCase()}`] ?? null;
 const APP = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -23,7 +34,7 @@ export async function stripe<T = Record<string, unknown>>(method: 'GET' | 'POST'
     else body.append(prefix, String(v));
   };
   Object.entries(params).forEach(([k, v]) => enc(k, v));
-  const url = `https://api.stripe.com/v1${path}${method === 'GET' && body.size ? `?${body}` : ''}`;
+  const url = `${stripeApiBase()}${path}${method === 'GET' && body.size ? `?${body}` : ''}`;
   const headers: Record<string, string> = { Authorization: `Bearer ${key}`, 'Stripe-Version': '2024-06-20' };
   if (method !== 'GET') headers['content-type'] = 'application/x-www-form-urlencoded';
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
@@ -111,4 +122,113 @@ export async function sweepTrials(now = new Date()) {
     else if (s.trialDaysLeft !== null && [7, 3, 1].includes(s.trialDaysLeft)) reminders.push({ id: r.id, name: r.name, daysLeft: s.trialDaysLeft });
   }
   return { expired, reminders };
+}
+
+// ---------- Factures d'abonnement AFRISUPPLY (chantier 7 de l'audit 2) ----------
+
+/** Numéro de facture séquentiel : AFR-AAAA-NNNN (même mécanisme que les références de commande). */
+export async function nextInvoiceNumber(now = new Date()): Promise<string> {
+  const db = await getDb();
+  await db.execute(sql`create sequence if not exists subscription_invoice_seq`);
+  const res = await db.execute(sql`select nextval('subscription_invoice_seq') as v`);
+  const rows = (res as unknown as { rows?: { v: string | number }[] }).rows ?? (res as unknown as { v: string | number }[]);
+  const v = Number((Array.isArray(rows) ? rows[0] : rows).v);
+  return `AFR-${now.getFullYear()}-${String(v).padStart(4, '0')}`;
+}
+
+export interface InvoiceInput {
+  restaurantId: string; plan: string; founder?: boolean; amountEur: number; vatRate?: number;
+  periodStart: Date; periodEnd: Date; source?: 'stripe' | 'manuel'; stripeInvoiceId?: string | null;
+  hostedUrl?: string | null; paidAt?: Date | null; status?: 'payee' | 'ouverte' | 'annulee'; createdBy?: string | null;
+  note?: string | null;
+}
+
+/**
+ * Enregistre une facture (une seule fois par facture Stripe : l'unicité de `stripe_invoice_id` protège
+ * d'un rejeu de webhook). Renvoie `{ created: false }` si elle existait déjà.
+ */
+export async function recordSubscriptionInvoice(input: InvoiceInput) {
+  const db = await getDb();
+  if (input.stripeInvoiceId) {
+    const [seen] = await db.select().from(subscriptionInvoices).where(eq(subscriptionInvoices.stripeInvoiceId, input.stripeInvoiceId));
+    if (seen) return { created: false as const, invoice: seen };
+  }
+  const number = await nextInvoiceNumber(input.periodStart);
+  const [row] = await db.insert(subscriptionInvoices).values({
+    restaurantId: input.restaurantId, number, plan: input.plan, founder: !!input.founder,
+    amountEur: input.amountEur.toFixed(2), vatRate: (input.vatRate ?? 20).toFixed(2),
+    periodStart: input.periodStart, periodEnd: input.periodEnd, source: input.source ?? 'stripe',
+    status: input.status ?? 'payee', stripeInvoiceId: input.stripeInvoiceId ?? null, hostedUrl: input.hostedUrl ?? null,
+    paidAt: input.paidAt ?? (input.status && input.status !== 'payee' ? null : new Date()), createdBy: input.createdBy ?? null, note: input.note ?? null,
+  }).returning();
+  return { created: true as const, invoice: row };
+}
+
+/** Destinataire des factures : réglage du restaurant, sinon le propriétaire. */
+export async function billingRecipient(rid: string): Promise<string | null> {
+  const db = await getDb();
+  const [r] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq(restaurants.id, rid));
+  if (r?.settings?.billingEmail) return r.settings.billingEmail;
+  const [owner] = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId))
+    .where(and(eq(restaurantMembers.restaurantId, rid), eq(restaurantMembers.role, 'owner'))).limit(1);
+  return owner?.email ?? null;
+}
+
+/** Tarif mensuel HT d'une formule (prix public, hors remise fondateur). */
+export const planPrice = (plan: string) => PLAN_PRICES[plan as PlanId] ?? 0;
+export const effectivePrice = (plan: string, founder: boolean) => Math.round(planPrice(plan) * (founder ? 0.5 : 1) * 100) / 100;
+
+/**
+ * État de préparation de l'encaissement, sans complaisance : ce qui est configuré, ce qui manque,
+ * et l'URL de webhook à déclarer dans Stripe.
+ */
+export function billingHealth() {
+  const missing: string[] = [];
+  if (!process.env.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
+  if (!process.env.STRIPE_WEBHOOK_SECRET) missing.push('STRIPE_WEBHOOK_SECRET');
+  const prices: Record<string, { id: string | null; ok: boolean }> = {};
+  for (const p of ['starter', 'pro', 'business'] as PlanId[]) {
+    const id = priceIdFor(p);
+    prices[p] = { id, ok: !!id && id.startsWith('price_') };
+    if (!prices[p].ok) missing.push(`STRIPE_PRICE_${p.toUpperCase()}`);
+  }
+  const founderCoupon = process.env.STRIPE_COUPON_FOUNDER ?? null;
+  // Chantier 7 de l'audit 2 : état lisible par un humain, sous-titre honnête (jamais « tout va bien » à tort).
+  const mode = !process.env.STRIPE_SECRET_KEY ? 'manuel' : missing.length ? 'incomplet' : 'en_ligne';
+  const message = mode === 'en_ligne'
+    ? 'Encaissement en ligne opérationnel : carte bancaire, factures PDF automatiques, résiliation en un clic.'
+    : mode === 'incomplet'
+      ? `Encaissement en ligne inachevé : il manque ${missing.join(', ')}. Les clients ne peuvent pas payer par carte ; facturez à la main (virement) en attendant.`
+      : 'Encaissement en ligne désactivé (pas de clé Stripe sur cet environnement) : les formules s’activent à la main, facture AFRISUPPLY par e-mail ou virement.';
+  const publisher = { complete: !!(process.env.INVOICE_SIRET && process.env.INVOICE_VAT), company: process.env.INVOICE_COMPANY ?? null, siret: !!process.env.INVOICE_SIRET, vat: !!process.env.INVOICE_VAT };
+  return {
+    ready: missing.length === 0,
+    ok: missing.length === 0,
+    mode,
+    message,
+    missing,
+    publisher,
+    stripe: stripeConfigured(),
+    webhook: { path: '/api/billing/webhook', url: `${APP()}/api/billing/webhook`, signatureRequired: !!process.env.STRIPE_WEBHOOK_SECRET },
+    webhookReady: !!process.env.STRIPE_WEBHOOK_SECRET,
+    webhookUrl: `${APP()}/api/billing/webhook`,
+    prices,
+    founderCoupon,
+    enforced: billingEnforced(),
+    apiBase: stripeApiBase(),
+    seats: PLAN_SEATS,
+  };
+}
+
+/** MRR estimé (somme des abonnements actifs, remise fondateur appliquée) — admin. */
+export async function mrr() {
+  const db = await getDb();
+  const rows = await db.select({ plan: restaurants.plan, founder: restaurants.founder }).from(restaurants).where(eq(restaurants.subscriptionStatus, 'active'));
+  return { total: Math.round(rows.reduce((a, r) => a + effectivePrice(r.plan, r.founder), 0) * 100) / 100, subscribers: rows.length };
+}
+
+/** Dernières factures émises (admin) — contrôle rapide de ce qui a été encaissé. */
+export async function recentInvoices(limit = 30) {
+  const db = await getDb();
+  return db.select().from(subscriptionInvoices).orderBy(desc(subscriptionInvoices.issuedAt)).limit(limit);
 }

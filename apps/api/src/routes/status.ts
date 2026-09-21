@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { desc, sql } from 'drizzle-orm';
 import { getDb, jobRuns } from '@afrisupply/db';
 import { buildInfo, sentryEnabled } from '../lib/ops.js';
-import { mailerConfig, mailStats } from '../lib/mailer.js';
+import { mailerConfig, mailStats, outboxCount } from '../lib/mailer.js';
 import { smsConfig, smsStats } from '../lib/sms.js';
 
 export const statusRoutes = new Hono();
@@ -37,7 +37,7 @@ statusRoutes.get('/status', async (c) => {
       jobs,
       // Compatibilité : l'ancien champ dailyJob reste exposé (supervision externe existante).
       dailyJob: jobs.daily ?? { state: 'never', lastRun: null },
-      mail: { transport: mc.transport, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', from: mc.from, stats: mailStats() },
+      mail: { transport: mc.transport, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', from: mc.from, stats: mailStats(), outboxCount: mc.transport === 'file' ? await outboxCount() : null },
       sms: { configured: sc.enabled, whatsapp: sc.whatsapp, delivered: sc.enabled, stats: smsStats() },
       errorTracking: { configured: sentryEnabled() },
       cron: { configured: !!process.env.CRON_SECRET, jobs: ['/api/jobs/daily', '/api/jobs/reminders'] },

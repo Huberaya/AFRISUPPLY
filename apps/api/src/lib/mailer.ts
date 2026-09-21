@@ -4,11 +4,12 @@
 // Chantier 6 (audit) — un envoi n'est « réussi » que s'il est réellement parti chez un prestataire.
 // Hors développement (VERCEL / NODE_ENV=production) et sans RESEND_API_KEY, l'envoi est REFUSÉ
 // (ok:false, code mail_not_configured) et une alerte admin est déposée : plus jamais de ok:true qui ne remet rien.
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { alertAdmin } from './ops.js';
 
-export interface Mail { to: string; subject: string; text: string; html: string; tags?: Record<string, string> }
+export interface MailAttachment { filename: string; content: Buffer | string; contentType?: string }
+export interface Mail { to: string; subject: string; text: string; html: string; tags?: Record<string, string>; attachments?: MailAttachment[] }
 export type Transport = 'resend' | 'file' | 'log';
 export type MailResult =
   | { ok: true; id: string; transport: Transport; delivered: boolean }
@@ -48,13 +49,23 @@ const bump = (kind: 'sent' | 'simulated' | 'failed', transport: Transport, error
 export const mailStats = () => ({ ...stats, transport: mailerConfig().transport, deliverable: mailDeliverable() });
 export const _resetMailStats = () => { stats.sent = 0; stats.simulated = 0; stats.failed = 0; stats.lastAt = null; stats.lastTransport = null; stats.lastError = null; };
 
+/** Nombre de messages déposés dans le dossier local (mode fichier) — preuve d'envoi en développement. */
+export async function outboxCount(): Promise<number> {
+  try { return (await readdir(mailerConfig().outbox)).length; } catch { return 0; }
+}
+
 export async function sendMail(m: Mail): Promise<MailResult> {
   const cfg = mailerConfig();
   if (cfg.transport === 'resend') {
     try {
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: cfg.from, to: [m.to], subject: m.subject, text: m.text, html: m.html, tags: m.tags ? Object.entries(m.tags).map(([name, value]) => ({ name, value })) : undefined }),
+        body: JSON.stringify({
+          from: cfg.from, to: [m.to], subject: m.subject, text: m.text, html: m.html,
+          tags: m.tags ? Object.entries(m.tags).map(([name, value]) => ({ name, value })) : undefined,
+          // Chantier 7 de l'audit 2 : factures PDF réellement jointes (Resend accepte le contenu encodé).
+          attachments: m.attachments?.map((a) => ({ filename: a.filename, content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : Buffer.from(a.content).toString('base64') })),
+        }),
         signal: AbortSignal.timeout(10_000),
       });
       const data = (await res.json().catch(() => ({}))) as { id?: string; message?: string };
@@ -81,6 +92,11 @@ export async function sendMail(m: Mail): Promise<MailResult> {
     const id = `${new Date().toISOString().replace(/[:.]/g, '-')}_${m.to.replace(/[^a-z0-9@.]/gi, '_')}`;
     await writeFile(path.join(cfg.outbox, `${id}.html`), m.html, 'utf8');
     await writeFile(path.join(cfg.outbox, `${id}.txt`), `To: ${m.to}\nSubject: ${m.subject}\n\n${m.text}`, 'utf8');
+    // En développement, les pièces jointes sont écrites à côté du message : on peut ouvrir la facture.
+    for (const [i, a] of (m.attachments ?? []).entries()) {
+      const name = `${id}${(m.attachments?.length ?? 0) > 1 ? `-${i + 1}` : ''}-${a.filename.replace(/[^a-z0-9._-]/gi, '_')}`;
+      await writeFile(path.join(cfg.outbox, name), Buffer.isBuffer(a.content) ? a.content : Buffer.from(a.content));
+    }
     bump('sent', 'file');
     return { ok: true, id, transport: 'file', delivered: true };
   } catch (e) { bump('failed', 'file', (e as Error).message); return { ok: false, error: (e as Error).message, transport: 'file', delivered: false, code: 'send_failed' }; }

@@ -141,6 +141,13 @@
       "when": 1789989633954,
       "tag": "0019_canaux_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789991906258,
+      "tag": "0020_factures_abonnement",
+      "breakpoints": true
     }
   ]
 }

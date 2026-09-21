@@ -113,6 +113,7 @@ export type RestaurantSettings = {
   digestRecipients?: string[];      // e-mails ; défaut : membres owner/manager
   closedWeekdays?: number[];        // 0=dimanche… pas de mail ces jours-là
   notifyPhone?: string;             // chantier 18 : WhatsApp/SMS du restaurant pour le suivi de commande
+  billingEmail?: string;            // chantier 7 de l'audit 2 : destinataire des factures (défaut : propriétaire)
 };
 
 export const restaurantMembers = pgTable('restaurant_members', {
@@ -590,6 +591,10 @@ export const billingEvents = pgTable('billing_events', {
   type: text('type').notNull(),
   restaurantId: uuid('restaurant_id'),
   payload: jsonb('payload'),
+  // Chantier 7 de l'audit 2 : l'événement est réclamé AVANT traitement. Un rejeu d'événement traité
+  // est ignoré (« duplicate ») tandis qu'un événement en échec peut être rejoué par Stripe.
+  status: text('status').default('recu').notNull(), // recu | traite | echec
+  error: text('error'),
   processedAt: timestamp('processed_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -604,6 +609,29 @@ export const commissionInvoices = pgTable('commission_invoices', {
   status: text('status').default('emise').notNull(), // emise | payee | envoyee_par_mail
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [uniqueIndex('commission_invoices_vendor_period').on(t.vendorId, t.period)]);
+
+// ---------- Chantier 7 (audit 2) : factures d'abonnement AFRISUPPLY ----------
+// Chaque paiement (Stripe ou encaissement manuel d'un pilote) produit une facture numérotée
+// AFR-AAAA-NNNN, téléchargeable en PDF par le restaurateur — plus besoin d'attendre un envoi manuel.
+export const subscriptionInvoices = pgTable('subscription_invoices', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  number: text('number').notNull().unique(),                  // AFR-2026-0001
+  plan: text('plan').notNull(),                               // starter | pro | business
+  founder: boolean('founder').default(false).notNull(),       // tarif pilote fondateur appliqué
+  amountEur: numeric('amount_eur', { precision: 10, scale: 2 }).notNull(),
+  vatRate: numeric('vat_rate', { precision: 5, scale: 2 }).default('20').notNull(),
+  periodStart: timestamp('period_start', { withTimezone: true }).notNull(),
+  periodEnd: timestamp('period_end', { withTimezone: true }).notNull(),
+  source: text('source').default('stripe').notNull(),         // stripe | manuel
+  status: text('status').default('payee').notNull(),          // payee | ouverte | annulee
+  stripeInvoiceId: text('stripe_invoice_id').unique(),
+  hostedUrl: text('hosted_url'),                              // page de paiement Stripe (si disponible)
+  paidAt: timestamp('paid_at', { withTimezone: true }),
+  issuedAt: timestamp('issued_at', { withTimezone: true }).defaultNow().notNull(),
+  note: text('note'),                                         // geste commercial, virement, précision
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+}, (t) => [index('subscription_invoices_restaurant_idx').on(t.restaurantId, t.issuedAt)]);
 
 // ---------- Chantier 7 : pilotes — retours utilisateurs et usage ----------
 export const feedback = pgTable('feedback', {

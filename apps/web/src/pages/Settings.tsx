@@ -9,7 +9,7 @@ import { Field } from '../components/Modal';
 
 type S = {
   restaurant: { name: string; city: string | null; coversPerDay: number | null; plan: string; trialEndsAt: string | null };
-  settings: { priceIncreaseAlertPct: number; forecastHorizonDays: number; autoReorderEnabled: boolean; dailyDigestEnabled: boolean; immediateAlertEmails: boolean; digestRecipients: string[]; closedWeekdays: number[]; notifyPhone: string };
+  settings: { priceIncreaseAlertPct: number; forecastHorizonDays: number; autoReorderEnabled: boolean; dailyDigestEnabled: boolean; immediateAlertEmails: boolean; digestRecipients: string[]; closedWeekdays: number[]; notifyPhone: string; billingEmail?: string };
   mail: { transport: 'resend' | 'file' | 'log'; from: string; configured: boolean; delivered: boolean };
   sms?: { configured: boolean; whatsapp: boolean; delivered: boolean };
 };
@@ -20,18 +20,18 @@ export default function Settings() {
   const { data, loading, error, reload } = useApi<S>('/settings');
   const { user, refresh } = useAuth();
   const [mailMsg, setMailMsg] = useState<string | null>(null); const [mailDevLink, setMailDevLink] = useState<string | null>(null);
-  const [f, setF] = useState<S['settings'] & { name: string; city: string; coversPerDay: string; recipientsText: string } | null>(null);
+  const [f, setF] = useState<S['settings'] & { name: string; city: string; coversPerDay: string; recipientsText: string; billingEmail: string } | null>(null);
   const [msg, setMsg] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   const [mailTest, setMailTest] = useState<MailTest | null>(null); const [testing, setTesting] = useState(false);
   const [smsMsg, setSmsMsg] = useState<string | null>(null); const [del, setDel] = useState(false); const [delPw, setDelPw] = useState(''); const [delConfirm, setDelConfirm] = useState('');
   const [preview, setPreview] = useState<{ subject: string; text: string; html: string } | null>(null);
-  useEffect(() => { if (data) setF({ ...data.settings, name: data.restaurant.name, city: data.restaurant.city ?? '', coversPerDay: data.restaurant.coversPerDay ? String(data.restaurant.coversPerDay) : '', recipientsText: data.settings.digestRecipients.join(', ') }); }, [data]);
+  useEffect(() => { if (data) setF({ ...data.settings, billingEmail: data.settings.billingEmail ?? '', name: data.restaurant.name, city: data.restaurant.city ?? '', coversPerDay: data.restaurant.coversPerDay ? String(data.restaurant.coversPerDay) : '', recipientsText: data.settings.digestRecipients.join(', ') }); }, [data]);
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data || !f) return null;
   const save = async () => {
     setBusy(true); setMsg(null);
     try {
       const recipients = f.recipientsText.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
-      await api('/settings', { method: 'PUT', json: { name: f.name, city: f.city || null, coversPerDay: f.coversPerDay ? Number(f.coversPerDay) : null, priceIncreaseAlertPct: f.priceIncreaseAlertPct, forecastHorizonDays: f.forecastHorizonDays, autoReorderEnabled: f.autoReorderEnabled, dailyDigestEnabled: f.dailyDigestEnabled, immediateAlertEmails: f.immediateAlertEmails, digestRecipients: recipients, closedWeekdays: f.closedWeekdays, notifyPhone: f.notifyPhone ?? '' } });
+      await api('/settings', { method: 'PUT', json: { name: f.name, city: f.city || null, coversPerDay: f.coversPerDay ? Number(f.coversPerDay) : null, priceIncreaseAlertPct: f.priceIncreaseAlertPct, forecastHorizonDays: f.forecastHorizonDays, autoReorderEnabled: f.autoReorderEnabled, dailyDigestEnabled: f.dailyDigestEnabled, immediateAlertEmails: f.immediateAlertEmails, digestRecipients: recipients, closedWeekdays: f.closedWeekdays, notifyPhone: f.notifyPhone ?? '', billingEmail: f.billingEmail ?? '' } });
       setMsg('Réglages enregistrés.'); await reload();
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
   };
@@ -66,6 +66,13 @@ export default function Settings() {
           <Field label="Couverts / jour"><input className="input" type="number" value={f.coversPerDay} onChange={(e) => setF({ ...f, coversPerDay: e.target.value })} /></Field>
         </div>
         <Field label="Jours de fermeture" hint="Pas de mail du matin ces jours-là"><div className="flex gap-1.5">{DAYS.map((d, i) => <button type="button" key={d} onClick={() => setF({ ...f, closedWeekdays: f.closedWeekdays.includes(i) ? f.closedWeekdays.filter((x) => x !== i) : [...f.closedWeekdays, i] })} className={`pill !px-3 !py-1.5 ${f.closedWeekdays.includes(i) ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-700'}`}>{d}</button>)}</div></Field>
+      </section>
+      <section className="card space-y-3">
+        <h2 className="font-bold">🧾 Facturation</h2>
+        <Field label="Adresse qui reçoit les factures AFRISUPPLY" hint="Laissez vide pour envoyer au propriétaire du compte (votre e-mail de connexion). Votre comptable peut être mis en copie ici.">
+          <input className="input" type="email" placeholder={user?.email ?? 'compta@monrestaurant.fr'} value={f.billingEmail} onChange={(e) => setF({ ...f, billingEmail: e.target.value })} />
+        </Field>
+        <p className="text-xs text-stone-500">Vos factures sont aussi téléchargeables à tout moment dans <Link className="underline" to="/app/abonnement">Mon abonnement</Link>.</p>
       </section>
       <section className="card space-y-3">
         <h2 className="font-bold">Intelligence</h2>

@@ -2,10 +2,16 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, sql, desc } from 'drizzle-orm';
-import { getDb, restaurants, billingEvents, commissions, commissionInvoices, vendors, vendorMembers, users } from '@afrisupply/db';
+import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors, vendorMembers, users } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { PLANS, FOUNDER_OFFER } from './public.js';
-import { accessState, applySubscription, createCheckout, createPortal, stripe, stripeConfigured, verifyStripeSignature, priceIdFor, billingEnforced, type PlanId } from '../lib/billing.js';
+import {
+  accessState, applySubscription, createCheckout, createPortal, stripe, stripeConfigured, verifyStripeSignature,
+  priceIdFor, billingEnforced, billingHealth, seatsFor, planPrice, billingRecipient, effectivePrice, mrr, recentInvoices,
+  recordSubscriptionInvoice, type PlanId,
+} from '../lib/billing.js';
+import { invoicePdf, emitterComplete } from '../lib/pdf.js';
+import { recordJobRun } from '../lib/job-runs.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 
@@ -13,31 +19,120 @@ const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').m
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
 
 // ---------- Webhook Stripe (public, signé) ----------
+// Chantier 7 de l'audit 2 : l'événement est RÉCLAMÉ avant traitement (clé primaire = id Stripe).
+//  • déjà traité → { received, duplicate: true } sans effet ;
+//  • en échec → retraité au prochain envoi de Stripe (tous les traitements sont idempotents) ;
+//  • signature invalide → 400.
+interface StripeInvoice {
+  id: string; customer?: string; subscription?: string; number?: string | null; hosted_invoice_url?: string | null;
+  total?: number; tax?: number; subtotal?: number; amount_paid?: number; currency?: string; status?: string;
+  period_start?: number; period_end?: number; paid?: boolean; lines?: { data?: { price?: { id?: string }; period?: { start?: number; end?: number } }[] };
+  metadata?: Record<string, string>;
+}
+
+async function handleStripeInvoicePaid(db: Awaited<ReturnType<typeof getDb>>, inv: StripeInvoice) {
+  // 1. l'abonnement passe actif
+  if (typeof inv.customer === 'string') await db.update(restaurants).set({ subscriptionStatus: 'active' }).where(eq(restaurants.stripeCustomerId, inv.customer));
+  // Le restaurant peut être connu par son abonnement OU par son client Stripe : on tente les deux
+  // (le premier paiement arrive parfois avant que l'identifiant d'abonnement soit enregistré).
+  let [r] = inv.subscription ? await db.select().from(restaurants).where(eq(restaurants.stripeSubscriptionId, inv.subscription)) : [];
+  if (!r && inv.customer) [r] = await db.select().from(restaurants).where(eq(restaurants.stripeCustomerId, inv.customer));
+  if (!r) return { recorded: false as const, reason: 'restaurant inconnu pour ce client Stripe' };
+  // On retient l'identifiant d'abonnement : indispensable pour le portail et la résiliation.
+  if (inv.subscription && !r.stripeSubscriptionId) { await db.update(restaurants).set({ stripeSubscriptionId: inv.subscription }).where(eq(restaurants.id, r.id)); r = { ...r, stripeSubscriptionId: inv.subscription }; }
+  // La formule payée est appliquée sans attendre : le prix de la ligne identifie la formule.
+  const planFromLine = (['starter', 'pro', 'business'] as PlanId[]).find((p) => priceIdFor(p) === inv.lines?.data?.[0]?.price?.id);
+  if (planFromLine && r.plan !== planFromLine) { await db.update(restaurants).set({ plan: planFromLine }).where(eq(restaurants.id, r.id)); r = { ...r, plan: planFromLine }; }
+  else if (!planFromLine && inv.subscription) {
+    // À défaut, on interroge l'abonnement — sans jamais faire échouer l'encaissement si Stripe ne répond pas.
+    try { await applySubscription(await stripe<Parameters<typeof applySubscription>[0]>('GET', `/subscriptions/${inv.subscription}`)); const [fresh] = await db.select().from(restaurants).where(eq(restaurants.id, r.id)); if (fresh) r = fresh; } catch { /* l'événement customer.subscription.* fera le travail */ }
+  }
+  // 2. la facture AFRISUPPLY est enregistrée (HT = total − TVA ; à défaut on retire 20 %)
+  const totalCents = inv.total ?? inv.amount_paid ?? 0;
+  const taxCents = inv.tax ?? 0;
+  const ht = taxCents ? (totalCents - taxCents) / 100 : Math.round((totalCents / 1.2)) / 100;
+  const vatRate = ht > 0 && taxCents ? Math.round((taxCents / 100 / ht) * 10000) / 100 : 20;
+  const start = inv.period_start ?? inv.lines?.data?.[0]?.period?.start ?? Math.floor(Date.now() / 1000);
+  const end = inv.period_end ?? inv.lines?.data?.[0]?.period?.end ?? start + 30 * 86_400;
+  const res = await recordSubscriptionInvoice({
+    restaurantId: r.id, plan: r.plan, founder: r.founder, amountEur: ht, vatRate,
+    periodStart: new Date(start * 1000), periodEnd: new Date(end * 1000),
+    source: 'stripe', stripeInvoiceId: inv.id, hostedUrl: inv.hosted_invoice_url ?? null,
+    paidAt: inv.paid === false ? null : new Date(), status: inv.paid === false ? 'ouverte' : 'payee',
+  });
+  if (res.created) await mailInvoice(res.invoice, r.name);
+  return { recorded: res.created, number: res.invoice.number };
+}
+
+/** Envoie la facture au restaurant (PDF joint) — et trace l'envoi comme tout autre message. */
+async function mailInvoice(invoice: typeof subscriptionInvoices.$inferSelect, restaurantName: string) {
+  const startedAt = new Date();
+  const to = await billingRecipient(invoice.restaurantId);
+  const ttc = Math.round(Number(invoice.amountEur) * (1 + Number(invoice.vatRate) / 100) * 100) / 100;
+  const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
+  if (!to) { await recordJobRun({ job: 'invoice-mail', startedAt, status: 'error', summary: { invoice: invoice.number }, error: 'aucun destinataire de facturation' }); return { sent: false, reason: 'aucun destinataire' }; }
+  const pdf = invoicePdf({
+    number: invoice.number, issuedAt: invoice.issuedAt, paidAt: invoice.paidAt, status: invoice.status as 'payee' | 'ouverte' | 'annulee',
+    restaurant: { name: restaurantName }, plan: invoice.plan, founder: invoice.founder,
+    periodStart: invoice.periodStart, periodEnd: invoice.periodEnd, amountHt: Number(invoice.amountEur), vatRate: Number(invoice.vatRate),
+    source: invoice.source as 'stripe' | 'manuel',
+  });
+  const res = await sendMail({
+    to, subject: `Votre facture AFRISUPPLY ${invoice.number} — ${eur(ttc)} TTC`,
+    text: `Bonjour,\n\nVoici votre facture ${invoice.number} pour ${restaurantName} :\n• Formule ${invoice.plan}${invoice.founder ? ' (tarif pilote fondateur −50 %)' : ''}\n• Période : du ${invoice.periodStart.toLocaleDateString('fr-FR')} au ${invoice.periodEnd.toLocaleDateString('fr-FR')}\n• Montant : ${eur(Number(invoice.amountEur))} HT — ${eur(ttc)} TTC\n\nLa facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.\n\nMerci de votre confiance,\nL'équipe AFRISUPPLY`,
+    html: `<p>Bonjour,</p><p>Voici votre facture <b>${invoice.number}</b> pour <b>${restaurantName}</b> :</p><ul><li>Formule ${invoice.plan}${invoice.founder ? ' (tarif pilote fondateur −50 %)' : ''}</li><li>Période : du ${invoice.periodStart.toLocaleDateString('fr-FR')} au ${invoice.periodEnd.toLocaleDateString('fr-FR')}</li><li>Montant : ${eur(Number(invoice.amountEur))} HT — <b>${eur(ttc)} TTC</b></li></ul><p>La facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.</p><p>Merci de votre confiance,<br>L'équipe AFRISUPPLY</p>`,
+    tags: { type: 'subscription_invoice', restaurant: invoice.restaurantId }, attachments: [{ filename: `${invoice.number}.pdf`, content: pdf, contentType: 'application/pdf' }],
+  });
+  await recordJobRun({
+    job: 'invoice-mail', startedAt, status: res.ok && res.delivered ? 'ok' : 'error',
+    summary: { invoice: invoice.number, to, transport: res.transport, delivered: res.delivered },
+    error: res.ok ? null : res.error,
+  });
+  return { sent: res.ok && res.delivered, reason: res.ok ? undefined : res.error };
+}
+
 export const billingPublicRoutes = new Hono<Env>();
+
+/** Diagnostic public de l'état d'encaissement : aucune donnée client, aucun secret (supervision, page Statut). */
+billingPublicRoutes.get('/billing/health', async (c) => c.json(await billingHealth()));
+
 billingPublicRoutes.post('/billing/webhook', async (c) => {
   const raw = await c.req.text();
   if (!verifyStripeSignature(raw, c.req.header('stripe-signature'))) return c.json({ error: 'Signature invalide' }, 400);
-  const evt = JSON.parse(raw) as { id: string; type: string; data: { object: Record<string, unknown> } };
+  let evt: { id?: string; type?: string; data?: { object?: Record<string, unknown> } };
+  try { evt = JSON.parse(raw); } catch { return c.json({ error: 'Charge utile illisible' }, 400); }
+  if (!evt.id || !evt.type) return c.json({ error: 'Événement incomplet' }, 400);
   const db = await getDb();
-  const [seen] = await db.select({ id: billingEvents.id }).from(billingEvents).where(eq(billingEvents.id, evt.id)); if (seen) return c.json({ received: true, duplicate: true });
+  const [known] = await db.select().from(billingEvents).where(eq(billingEvents.id, evt.id));
+  if (known?.status === 'traite') return c.json({ received: true, duplicate: true, type: known.type });
+  if (!known) await db.insert(billingEvents).values({ id: evt.id, type: evt.type, payload: { object: (evt.data?.object as { id?: string } | undefined)?.id } }).onConflictDoNothing();
+
+  const o = (evt.data?.object ?? {}) as Record<string, unknown>;
   let rid: string | undefined;
   try {
-    const o = evt.data.object;
     if (evt.type === 'checkout.session.completed' && o.mode === 'subscription' && typeof o.subscription === 'string') {
       const sub = await stripe<Parameters<typeof applySubscription>[0]>('GET', `/subscriptions/${o.subscription}`); rid = (await applySubscription(sub)).rid;
     } else if (evt.type.startsWith('customer.subscription.')) {
       rid = (await applySubscription(o as unknown as Parameters<typeof applySubscription>[0])).rid;
+    } else if ((evt.type === 'invoice.paid' || evt.type === 'invoice.payment_succeeded') && o.id) {
+      const res = await handleStripeInvoicePaid(db, o as unknown as StripeInvoice);
+      if (typeof o.customer === 'string') { const [rr] = await db.select({ id: restaurants.id }).from(restaurants).where(eq(restaurants.stripeCustomerId, o.customer)); rid = rr?.id; }
+      await db.update(commissionInvoices).set({ status: 'payee' }).where(eq(commissionInvoices.stripeInvoiceId, String(o.id)));
+      void res;
     } else if (evt.type === 'invoice.payment_failed' && typeof o.customer === 'string') {
       await db.update(restaurants).set({ subscriptionStatus: 'past_due' }).where(eq(restaurants.stripeCustomerId, o.customer));
-    } else if (evt.type === 'invoice.paid' && typeof o.customer === 'string' && o.subscription) {
-      await db.update(restaurants).set({ subscriptionStatus: 'active' }).where(eq(restaurants.stripeCustomerId, o.customer));
-      const [ci] = await db.select().from(commissionInvoices).where(eq(commissionInvoices.stripeInvoiceId, String(o.id))); if (ci) await db.update(commissionInvoices).set({ status: 'payee' }).where(eq(commissionInvoices.id, ci.id));
     } else if (evt.type === 'invoice.paid' && typeof o.id === 'string') {
       await db.update(commissionInvoices).set({ status: 'payee' }).where(eq(commissionInvoices.stripeInvoiceId, o.id));
     }
-    await db.insert(billingEvents).values({ id: evt.id, type: evt.type, restaurantId: rid ?? null, payload: { object: (o as { id?: string }).id } });
-    return c.json({ received: true });
-  } catch (e) { console.error('[stripe webhook]', e); return c.json({ error: 'Traitement échoué' }, 500); }
+    await db.update(billingEvents).set({ status: 'traite', restaurantId: rid ?? null, error: null }).where(eq(billingEvents.id, evt.id));
+    return c.json({ received: true, type: evt.type });
+  } catch (e) {
+    const message = (e as Error).message.slice(0, 400);
+    await db.update(billingEvents).set({ status: 'echec', error: message }).where(eq(billingEvents.id, evt.id));
+    console.error('[stripe webhook]', message);
+    // 500 → Stripe réessaiera ; le rejeu retraitera l'événement (statut « echec »), sans doublon.
+    return c.json({ error: 'Traitement échoué, réessai attendu', detail: message }, 500);
+  }
 });
 
 // ---------- Côté restaurant ----------
@@ -55,9 +150,54 @@ billingRoutes.get('/billing', async (c) => {
   return c.json({
     plan: r.plan, founder: r.founder, subscriptionStatus: r.subscriptionStatus, trialEndsAt: r.trialEndsAt, currentPeriodEnd: r.currentPeriodEnd, ...s, enforced: billingEnforced(),
     stripe: stripeConfigured(), hasSubscription: !!r.stripeSubscriptionId,
+    // Chantier 7 de l'audit 2 : état réel et lisible du guichet (clé, webhook, prix, expéditeur).
+    health: await billingHealth(),
+    // Pendant l'essai, la formule de référence est Pro (celle qu'on offre) : le prix affiché n'est jamais 0 € par accident.
+    price: (() => { const basis = r.plan === 'trial' ? 'pro' : r.plan; return { basis, monthly: effectivePrice(basis, r.founder), list: planPrice(basis) }; })(),
+    seats: seatsFor(r.plan),
     plans: PLANS.map((p) => ({ ...p, priceMonthly: p.priceMonthly, founderPrice: Math.round(p.priceMonthly * (1 - FOUNDER_OFFER.discountPct / 100)), available: !!priceIdFor(p.id as PlanId) })), founderOffer: FOUNDER_OFFER,
   });
 });
+
+/** Factures d'abonnement AFRISUPPLY du restaurant (Stripe ou saisie manuelle). */
+billingRoutes.get('/billing/invoices', async (c) => {
+  const db = await getDb();
+  const rows = await db.select().from(subscriptionInvoices).where(eq(subscriptionInvoices.restaurantId, c.get('restaurantId'))).orderBy(desc(subscriptionInvoices.issuedAt));
+  const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.get('restaurantId')));
+  return c.json({
+    invoices: rows.map((i) => ({ id: i.id, number: i.number, plan: i.plan, founder: i.founder, amountEur: Number(i.amountEur), vatRate: Number(i.vatRate), periodStart: i.periodStart, periodEnd: i.periodEnd, status: i.status, source: i.source, hostedUrl: i.hostedUrl, paidAt: i.paidAt, issuedAt: i.issuedAt })),
+    billingEmail: r?.settings?.billingEmail ?? c.get('user').email,
+    emitterComplete: emitterComplete(),
+    stripe: stripeConfigured(),
+  });
+});
+
+/** Téléchargement de la facture PDF (propriétaire de la facture uniquement). */
+billingRoutes.get('/billing/invoices/:id/pdf', async (c) => {
+  const db = await getDb();
+  const [i] = await db.select().from(subscriptionInvoices).where(and(eq(subscriptionInvoices.id, c.req.param('id')), eq(subscriptionInvoices.restaurantId, c.get('restaurantId'))));
+  if (!i) return c.json({ error: 'Facture introuvable' }, 404);
+  const [r] = await db.select().from(restaurants).where(eq(restaurants.id, i.restaurantId));
+  const pdf = invoicePdf({
+    number: i.number, issuedAt: i.issuedAt, paidAt: i.paidAt, status: i.status as 'payee' | 'ouverte' | 'annulee',
+    restaurant: { name: r?.name ?? 'Restaurant', city: r?.city, address: r?.address, email: r?.settings?.billingEmail ?? null },
+    plan: i.plan, founder: i.founder, periodStart: i.periodStart, periodEnd: i.periodEnd,
+    amountHt: Number(i.amountEur), vatRate: Number(i.vatRate), source: i.source as 'stripe' | 'manuel',
+  });
+  return new Response(new Uint8Array(pdf), { headers: { 'content-type': 'application/pdf', 'content-disposition': `inline; filename="${i.number}.pdf"` } });
+});
+
+/** Renvoie la facture par e-mail (au destinataire de facturation du restaurant). */
+billingRoutes.post('/billing/invoices/:id/send', async (c) => {
+  const db = await getDb();
+  const [i] = await db.select().from(subscriptionInvoices).where(and(eq(subscriptionInvoices.id, c.req.param('id')), eq(subscriptionInvoices.restaurantId, c.get('restaurantId'))));
+  if (!i) return c.json({ error: 'Facture introuvable' }, 404);
+  const [r] = await db.select().from(restaurants).where(eq(restaurants.id, i.restaurantId));
+  const res = await mailInvoice(i, r?.name ?? 'Restaurant');
+  return c.json(res, res.sent ? 200 : 424);
+});
+
+// (déplacé dans billingPublicRoutes : l'état du guichet est utile à la supervision, sans authentification)
 
 billingRoutes.post('/billing/checkout', async (c) => {
   const { plan } = z.object({ plan: z.enum(['starter', 'pro', 'business']) }).parse(await c.req.json());
@@ -93,9 +233,43 @@ billingAdminRoutes.get('/admin/billing', async (c) => {
   const db = await getDb();
   const rows = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city, plan: restaurants.plan, founder: restaurants.founder, subscriptionStatus: restaurants.subscriptionStatus, trialEndsAt: restaurants.trialEndsAt, currentPeriodEnd: restaurants.currentPeriodEnd, createdAt: restaurants.createdAt }).from(restaurants).orderBy(desc(restaurants.createdAt));
   const founders = rows.filter((r) => r.founder).length;
-  const mrr = rows.filter((r) => r.subscriptionStatus === 'active').reduce((a, r) => a + (({ starter: 39, pro: 89, business: 199 } as Record<string, number>)[r.plan] ?? 0) * (r.founder ? 0.5 : 1), 0);
+  const legacyMrr = rows.filter((r) => r.subscriptionStatus === 'active').reduce((a, r) => a + (({ starter: 39, pro: 89, business: 199 } as Record<string, number>)[r.plan] ?? 0) * (r.founder ? 0.5 : 1), 0);
   const invoices = await db.select().from(commissionInvoices).orderBy(desc(commissionInvoices.createdAt)).limit(50);
-  return c.json({ restaurants: rows.map((r) => ({ ...r, ...accessState(r) })), founders, founderSeatsLeft: Math.max(0, FOUNDER_OFFER.seats - founders), mrr, invoices, stripe: stripeConfigured(), enforced: billingEnforced() });
+  const [subs, health] = [await recentInvoices(50), await billingHealth()];
+  return c.json({
+    restaurants: rows.map((r) => ({ ...r, ...accessState(r), seats: seatsFor(r.plan) })), founders, founderSeatsLeft: Math.max(0, FOUNDER_OFFER.seats - founders),
+    // MRR calculée sur les abonnements actifs (source unique : lib/billing.ts) ; les commissions fournisseurs restent à part.
+    mrr: await mrr(), legacyMrr, subscriptions: subs, commissions: invoices, invoices, stripe: stripeConfigured(), enforced: billingEnforced(), health,
+  });
+});
+
+/** Émet une facture d'abonnement à la main (paiement par virement, geste commercial) et l'envoie. */
+billingAdminRoutes.post('/admin/billing/restaurants/:id/invoice', async (c) => {
+  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  const b = z.object({ amountEur: z.number().positive().max(100000).optional(), vatRate: z.number().min(0).max(20).optional(), months: z.number().int().min(1).max(12).default(1), send: z.boolean().default(true), note: z.string().max(300).optional() }).parse(await c.req.json().catch(() => ({})));
+  const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.req.param('id')));
+  if (!r) return c.json({ error: 'Restaurant introuvable' }, 404);
+  const start = new Date(); const end = new Date(start.getTime() + b.months * 30 * 86_400_000);
+  const amount = b.amountEur ?? Math.round(effectivePrice(r.plan === 'trial' ? 'starter' : r.plan, r.founder) * b.months * 100) / 100;
+  const { invoice } = await recordSubscriptionInvoice({
+    restaurantId: r.id, plan: r.plan, founder: r.founder, amountEur: amount, vatRate: b.vatRate ?? 20,
+    periodStart: start, periodEnd: end, source: 'manuel', createdBy: c.get('user').id, note: b.note ?? null,
+    status: 'ouverte',
+  });
+  const mail = b.send ? await mailInvoice(invoice, r.name) : { sent: false, reason: 'envoi non demandé' };
+  await audit('billing.admin.invoice', { actorEmail: c.get('user').email, target: r.id, meta: { number: invoice.number, amount, mail: mail.sent } });
+  return c.json({ invoice, mail }, 201);
+});
+
+/** Marque une facture d'abonnement payée (virement reçu) ou annulée. */
+billingAdminRoutes.put('/admin/billing/invoices/:id', async (c) => {
+  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  const b = z.object({ status: z.enum(['payee', 'ouverte', 'annulee']) }).parse(await c.req.json());
+  const db = await getDb();
+  const [upd] = await db.update(subscriptionInvoices).set({ status: b.status, paidAt: b.status === 'payee' ? new Date() : null }).where(eq(subscriptionInvoices.id, c.req.param('id'))).returning();
+  if (!upd) return c.json({ error: 'Facture introuvable' }, 404);
+  await audit('billing.admin.invoice.status', { actorEmail: c.get('user').email, target: upd.id, meta: { status: b.status } });
+  return c.json({ invoice: upd });
 });
 
 /** Marque un restaurant « pilote fondateur » (−50 % à vie), prolonge l'essai si demandé. */

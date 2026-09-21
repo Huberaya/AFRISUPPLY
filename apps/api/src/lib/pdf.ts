@@ -58,3 +58,61 @@ export function orderPdf(d: OrderDoc): Buffer {
   p.cursor = 30; p.text(`Document généré par AFRISUPPLY le ${fd(new Date())} — ${d.reference}. AFRISUPPLY est un intermédiaire technique : la vente est conclue entre le fournisseur et le restaurant.`, m, 7, { color: '0.5 0.5 0.5' });
   return p.build();
 }
+
+// ---------- Facture d'abonnement AFRISUPPLY (chantier 7 de l'audit 2) ----------
+export type InvoiceDoc = {
+  number: string; issuedAt: Date; paidAt?: Date | null; status: 'payee' | 'ouverte' | 'annulee';
+  restaurant: { name: string; city?: string | null; address?: string | null; email?: string | null };
+  plan: string; founder: boolean; periodStart: Date; periodEnd: Date;
+  amountHt: number; vatRate: number; source: 'stripe' | 'manuel';
+  vatNumber?: string | null; note?: string | null;
+};
+
+/** Coordonnées de l'émetteur : renseignées par variables d'environnement (mentions légales obligatoires). */
+export const emitter = () => ({
+  company: process.env.INVOICE_COMPANY ?? 'AFRISUPPLY SAS',
+  address: process.env.INVOICE_ADDRESS ?? '1 rue des Halles, 44000 Nantes',
+  siret: process.env.INVOICE_SIRET ?? '',
+  vat: process.env.INVOICE_VAT ?? '',
+  email: process.env.INVOICE_EMAIL ?? 'bonjour@afrisupply.fr',
+  iban: process.env.INVOICE_IBAN ?? '',
+});
+/** Les mentions obligatoires sont-elles complètes ? Sinon la facture le dit explicitement. */
+export const emitterComplete = () => { const e = emitter(); return !!(e.siret && e.vat); };
+
+const PLAN_LABEL: Record<string, string> = { starter: 'Starter', pro: 'Pro', business: 'Business' };
+
+export function invoicePdf(d: InvoiceDoc): Buffer {
+  const p = new Pdf(); const m = p.margin; const W = p.w - 2 * m; const e = emitter();
+  const ttc = Math.round(d.amountHt * (1 + d.vatRate / 100) * 100) / 100;
+  const vat = Math.round((ttc - d.amountHt) * 100) / 100;
+  p.rect(0, 812, p.w, 30, 0.93); p.cursor = 822; p.text('AFRISUPPLY', m, 14, { bold: true, color: '0.76 0.25 0.05' }); p.text('Assistant d’approvisionnement des restaurants africains', m + 110, 9, { color: '0.4 0.4 0.4' });
+  p.cursor = 780; p.text('FACTURE', m, 18, { bold: true }); p.text(d.number, m, 18, { bold: true, align: 'right', width: W });
+  p.down(15); p.text(`Émise le ${fd(d.issuedAt)}${d.paidAt ? ` · payée le ${fd(d.paidAt)}` : ''} · Statut : ${d.status === 'payee' ? 'payée' : d.status}`, m, 9, { color: '0.35 0.35 0.35' });
+  p.down(26); const top = p.cursor;
+  p.text('ÉMETTEUR', m, 8, { bold: true, color: '0.5 0.5 0.5' }); p.text('CLIENT', m + W / 2, 8, { bold: true, color: '0.5 0.5 0.5' });
+  p.down(13); p.text(e.company, m, 11, { bold: true }); p.text(d.restaurant.name, m + W / 2, 11, { bold: true });
+  const left = [e.address, e.siret ? `SIRET ${e.siret}` : 'SIRET non renseigné (INVOICE_SIRET)', e.vat ? `TVA ${e.vat}` : 'N° TVA non renseigné (INVOICE_VAT)', e.email];
+  const right = [d.restaurant.address, d.restaurant.city, d.restaurant.email, d.vatNumber ? `TVA ${d.vatNumber}` : null].filter(Boolean) as string[];
+  for (let i = 0; i < Math.max(left.length, right.length); i++) { p.down(12); if (left[i]) p.text(left[i], m, 9); if (right[i]) p.text(right[i], m + W / 2, 9); }
+  p.cursor = Math.min(p.cursor, top - 60) - 26;
+  p.rect(m, p.cursor - 5, W, 16, 0.92);
+  p.row([{ text: 'Désignation', x: m + 5, w: 240, bold: true }, { text: 'Période', x: m + 250, w: 110, bold: true }, { text: 'Montant HT', x: m + 370, w: 70, align: 'right', bold: true }, { text: 'TVA', x: m + 450, w: 40, align: 'right', bold: true }, { text: 'Total TTC', x: m + 495, w: 60, align: 'right', bold: true }]);
+  p.down(17);
+  const label = `Abonnement AFRISUPPLY ${PLAN_LABEL[d.plan] ?? d.plan}${d.founder ? ' (tarif pilote fondateur −50 %)' : ''}`;
+  p.row([{ text: label, x: m + 5, w: 240 }, { text: `${fd(d.periodStart)} → ${fd(d.periodEnd)}`, x: m + 250, w: 110 }, { text: eur(d.amountHt), x: m + 370, w: 70, align: 'right' }, { text: `${d.vatRate.toFixed(0)} %`, x: m + 450, w: 40, align: 'right' }, { text: eur(ttc), x: m + 495, w: 60, align: 'right' }]);
+  p.line(m, p.cursor - 5, m + W, p.cursor - 5, 0.9);
+  p.down(20); p.text('Total HT', m + 370, 10, { align: 'right', width: 70 }); p.text(eur(d.amountHt), m + 495, 10, { align: 'right', width: 60 });
+  p.down(14); p.text(`TVA ${d.vatRate.toFixed(0)} %`, m + 370, 10, { align: 'right', width: 70 }); p.text(eur(vat), m + 495, 10, { align: 'right', width: 60 });
+  p.down(16); p.text('TOTAL À PAYER TTC', m + 340, 12, { bold: true, align: 'right', width: 100 }); p.text(eur(ttc), m + 495, 12, { bold: true, align: 'right', width: 60 });
+  p.down(22);
+  p.text(d.source === 'stripe'
+    ? 'Règlement par carte bancaire via Stripe (prélèvement automatique mensuel). Aucun virement à effectuer.'
+    : `Règlement par virement : ${e.iban || 'IBAN communiqué sur demande (INVOICE_IBAN)'} — merci d’indiquer la référence ${d.number}.`, m, 9, { color: '0.3 0.3 0.3' });
+  p.down(14); p.text('TVA sur les encaissements. En cas de retard de paiement : pénalités au taux légal + indemnité forfaitaire de recouvrement de 40 € (art. L441-10 du Code de commerce).', m, 8, { color: '0.35 0.35 0.35' });
+  p.down(12); p.text('Prestation de service numérique — autoliquidation non applicable. Facture émise par AFRISUPPLY, éditeur de la solution.', m, 8, { color: '0.35 0.35 0.35' });
+  if (!emitterComplete()) { p.down(14); p.rect(m, p.cursor - 4, W, 22, 0.95); p.text('⚠ Mentions légales incomplètes : renseignez INVOICE_SIRET et INVOICE_VAT pour une facture conforme.', m + 5, 8, { bold: true, color: '0.6 0.3 0.05' }); }
+  if (d.note) { p.down(16); p.text(`Note : ${d.note.slice(0, 160)}`, m, 8, { color: '0.35 0.35 0.35' }); }
+  p.cursor = 30; p.text(`Facture ${d.number} — générée par AFRISUPPLY le ${fd(new Date())}. Service client : ${e.email}.`, m, 7, { color: '0.5 0.5 0.5' });
+  return p.build();
+}

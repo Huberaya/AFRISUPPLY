@@ -61,7 +61,8 @@ describe('abonnement (API)', () => {
     const db = await getDb(); await db.update(restaurants).set({ stripeCustomerId: 'cus_test' }).where(eq(restaurants.id, R.rid));
     const evt = JSON.stringify({ id: 'evt_1', type: 'customer.subscription.updated', data: { object: { id: 'sub_1', customer: 'cus_test', status: 'active', current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400, items: { data: [{ price: { id: 'price_pro_test' } }] }, metadata: { restaurantId: R.rid } } } });
     expect((await call('POST', '/api/billing/webhook', evt, { 'stripe-signature': 't=1,v1=bad' })).status).toBe(400);
-    expect((await call('POST', '/api/billing/webhook', evt, { 'stripe-signature': sign(evt) })).json).toEqual({ received: true });
+    // Chantier 7 : la réponse du webhook précise désormais le type traité (toMatchObject, pas d'égalité stricte).
+    expect((await call('POST', '/api/billing/webhook', evt, { 'stripe-signature': sign(evt) })).json).toMatchObject({ received: true });
     let b = await call('GET', '/api/billing', undefined, R.h); expect(b.json).toMatchObject({ plan: 'pro', state: 'active', hasSubscription: true });
     expect((await call('POST', '/api/sales', { lines: [] }, R.h)).status).not.toBe(402);
     expect((await call('POST', '/api/billing/webhook', evt, { 'stripe-signature': sign(evt) })).json.duplicate).toBe(true);

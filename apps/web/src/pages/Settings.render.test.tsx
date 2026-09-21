@@ -37,6 +37,17 @@ const monter = async (data: unknown) => {
   return container;
 };
 
+describe('chantier 7 — adresse de facturation', () => {
+  it('le restaurateur peut régler où arrivent ses factures AFRISUPPLY', async () => {
+    const el = await monter(base({ settings: { ...base().settings, billingEmail: 'compta@chezawa.fr' } }));
+    const txt = el.textContent ?? '';
+    expect(txt).toContain('Facturation');
+    expect(txt).toContain('Adresse qui reçoit les factures AFRISUPPLY');
+    const input = el.querySelector('input[type="email"]') as HTMLInputElement;
+    expect(input?.value).toBe('compta@chezawa.fr');
+  });
+});
+
 describe('chantier 6 — page Paramètres : ce qui est dit sur les canaux', () => {
   beforeEach(() => { vi.stubGlobal('fetch', vi.fn()); });
   afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ''; });
