@@ -209,3 +209,39 @@ describe('chantier 27 — avis & fiabilité grossiste', () => {
     const fiche = await call('GET', `/api/marketplace/vendors/${vid}`, undefined, R); expect(fiche.json.reliability.onTimePct).toBe(100); expect(fiche.json.reliability.rating).toBe(4);
   });
 });
+
+describe('chantier 19 — tournées & créneaux', () => {
+  it('tournées CRUD, créneaux proposés selon zone et heure limite, capacité, commande sur créneau', async () => {
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Sac 5 kg', packQty: 5, packPrice: 12 }, V)).json.offer;
+    // sans tournée : pas de créneaux, commande classique (délai leadTime)
+    const s0 = await call('GET', `/api/marketplace/vendors/${vid}/slots`, undefined, R); expect(s0.json.hasRoutes).toBe(false);
+    expect((await call('POST', '/api/vendor/routes', { name: 'X', weekday: 9 }, V)).status).toBe(400);
+    // tournée quotidienne toutes zones, heure limite J-0 23:59, capacité 1
+    const days = [0, 1, 2, 3, 4, 5, 6];
+    const created: string[] = [];
+    for (const d of days) { const r = await call('POST', '/api/vendor/routes', { name: `Tournée ${d}`, weekday: d, slots: ['6h–8h', '8h–10h'], cutoffDaysBefore: 0, cutoffTime: '23:59', capacity: 1 }, V); expect(r.status).toBe(201); created.push(r.json.route.id); }
+    // tournée hors zone (code postal 99999) → jamais proposée
+    const far = await call('POST', '/api/vendor/routes', { name: 'Lointaine', weekday: 1, zones: ['99999'], cutoffDaysBefore: 0, cutoffTime: '23:59' }, V); expect(far.status).toBe(201);
+    const s1 = await call('GET', `/api/marketplace/vendors/${vid}/slots`, undefined, R); expect(s1.json.hasRoutes).toBe(true);
+    expect(s1.json.slots.some((s: Json) => s.routeName === 'Lointaine')).toBe(false); expect(s1.json.slots.length).toBeGreaterThanOrEqual(14);
+    const first = s1.json.slots[0]; expect(first.remaining).toBe(1); expect(first.slots).toEqual(['6h–8h', '8h–10h']);
+    // mauvais créneau horaire → 400 ; bon → 201 avec date & créneau
+    expect((await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }], routeId: first.routeId, expectedAt: first.date, deliverySlot: '22h–23h' }, R)).status).toBe(400);
+    const o1 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }], routeId: first.routeId, expectedAt: first.date, deliverySlot: '8h–10h' }, R);
+    expect(o1.status).toBe(201); expect(o1.json.order.expectedAt).toBe(first.date); expect(o1.json.order.deliverySlot).toBe('8h–10h'); expect(o1.json.order.routeId).toBe(first.routeId);
+    // capacité atteinte → 409 ; la liste marque la date complète
+    expect((await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }], routeId: first.routeId, expectedAt: first.date }, R)).status).toBe(409);
+    const s2 = await call('GET', `/api/marketplace/vendors/${vid}/slots`, undefined, R); expect(s2.json.slots.find((s: Json) => s.date === first.date && s.routeId === first.routeId).full).toBe(true);
+    // sans choix explicite → premier créneau libre (le suivant)
+    const o2 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }] }, R); expect(o2.status).toBe(201); expect(o2.json.order.expectedAt > first.date).toBe(true);
+    // heure limite dépassée : J-1 à 00:00 → la date de demain n'est plus proposée
+    for (const id of created) expect((await call('PUT', `/api/vendor/routes/${id}`, { cutoffDaysBefore: 1, cutoffTime: '00:00' }, V)).status).toBe(200);
+    const s3 = await call('GET', `/api/marketplace/vendors/${vid}/slots`, undefined, R); const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    expect(s3.json.slots.some((s: Json) => s.date <= tomorrow)).toBe(false);
+    const list = await call('GET', '/api/vendor/routes', undefined, V); expect(list.json.routes.length).toBe(8); expect(list.json.upcoming.length).toBeGreaterThanOrEqual(1);
+    expect((await call('DELETE', `/api/vendor/routes/${far.json.route.id}`, undefined, V)).json.ok).toBe(true);
+    for (const id of created) await call('DELETE', `/api/vendor/routes/${id}`, undefined, V);
+  });
+});

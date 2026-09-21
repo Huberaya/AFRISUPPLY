@@ -5,6 +5,7 @@ import { api, CATEGORY_LABEL } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
 import { ReliabilityBadge, type Reliability } from '../components/Reliability';
+import { SlotPicker, type SlotChoice } from '../components/SlotPicker';
 
 type Vendor = { reliability?: Reliability; id: string; name: string; description: string | null; city: string | null; deliveryZones: string[]; categories: string[]; leadTimeHours: number; minOrderEur: string; deliveryFeeEur: string; offerCount: number; coversMyProducts: number; myProductCount: number; linkedSupplierId: string | null };
 type Tier = { minPacks: number; packPriceEur: number };
@@ -64,13 +65,14 @@ function GroupBuys({ list, reload }: { list: GB[]; reload: () => void }) {
 function VendorDetail({ id, back }: { id: string; back: () => void }) {
   const { data, loading, error, reload } = useApi<{ vendor: Vendor; reliability?: Reliability; offers: Offer[]; linkedSupplierId: string | null }>(`/marketplace/vendors/${id}`);
   const [cart, setCart] = useState<Record<string, number>>({}); const [msg, setMsg] = useState<string | null>(null); const [busy, setBusy] = useState(false); const [onlyMine, setOnlyMine] = useState(true); const [quote, setQuote] = useState<Quote | null>(null);
+  const [slot, setSlot] = useState<SlotChoice>(null); const [hasRoutes, setHasRoutes] = useState(false);
   useEffect(() => { setCart({}); setQuote(null); }, [id]);
   useEffect(() => { const lines = Object.entries(cart).filter(([, p]) => p > 0).map(([vendorOfferId, packs]) => ({ vendorOfferId, packs })); if (!lines.length) { setQuote(null); return; } const t = setTimeout(() => api<Quote>(`/marketplace/vendors/${id}/quote`, { method: 'POST', json: { lines } }).then(setQuote).catch(() => setQuote(null)), 250); return () => clearTimeout(t); }, [cart, id]);
   if (loading) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
   const v = data.vendor; const offers = data.offers.filter((o) => !onlyMine || o.tracked);
   const total = quote?.total ?? data.offers.reduce((a, o) => a + (cart[o.id] ?? 0) * Number(o.packPriceEur), 0); const nb = Object.values(cart).filter((x) => x > 0).length;
   const link = async () => { setBusy(true); try { const r = await api<{ message: string }>(`/marketplace/vendors/${id}/link`, { method: 'POST' }); setMsg(r.message); reload(); } finally { setBusy(false); } };
-  const order = async () => { setBusy(true); setMsg(null); try { const r = await api<{ message: string }>(`/marketplace/vendors/${id}/orders`, { method: 'POST', json: { lines: Object.entries(cart).filter(([, p]) => p > 0).map(([vendorOfferId, packs]) => ({ vendorOfferId, packs })) } }); setMsg(r.message); setCart({}); } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); } };
+  const order = async () => { setBusy(true); setMsg(null); try { const r = await api<{ message: string }>(`/marketplace/vendors/${id}/orders`, { method: 'POST', json: { lines: Object.entries(cart).filter(([, p]) => p > 0).map(([vendorOfferId, packs]) => ({ vendorOfferId, packs })), ...(slot ?? {}) } }); setMsg(r.message); setCart({}); } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); } };
   return (
     <div className="animate-fade-up space-y-4 pb-28">
       <button className="btn-ghost" onClick={back}><ArrowLeft size={16} /> Marketplace</button>
@@ -88,7 +90,8 @@ function VendorDetail({ id, back }: { id: string; back: () => void }) {
               <td className="p-3 text-right"><input type="number" min={0} className="input w-20 text-right" disabled={!o.inStock} value={cart[o.id] ?? ''} onChange={(e) => setCart({ ...cart, [o.id]: Number(e.target.value) })} /></td>
             </tr>))}</tbody></table>
       </div>
-      {nb > 0 && <div className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 p-4 backdrop-blur lg:left-64"><div className="mx-auto flex max-w-4xl items-center justify-between gap-4"><p className="text-sm"><b>{nb}</b> produit{nb > 1 ? 's' : ''} · <b>{eur(total)}</b>{quote && quote.saved > 0 && <span className="ml-1 text-emerald-700">(−{eur(String(quote.saved))} paliers/négocié)</span>}{total < Number(v.minOrderEur) && <span className="ml-2 text-amber-700">minimum {eur(v.minOrderEur)}</span>}</p><button className="btn-primary" disabled={busy || total < Number(v.minOrderEur)} onClick={() => void order()}><ShoppingCart size={16} /> Commander chez {v.name}</button></div></div>}
+      {nb > 0 && <SlotPicker vendorId={id} value={slot} onChange={(v, h) => { setSlot(v); setHasRoutes(h); }} />}
+      {nb > 0 && <div className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 p-4 backdrop-blur lg:left-64"><div className="mx-auto flex max-w-4xl items-center justify-between gap-4"><p className="text-sm"><b>{nb}</b> produit{nb > 1 ? 's' : ''} · <b>{eur(total)}</b>{quote && quote.saved > 0 && <span className="ml-1 text-emerald-700">(−{eur(String(quote.saved))} paliers/négocié)</span>}{total < Number(v.minOrderEur) && <span className="ml-2 text-amber-700">minimum {eur(v.minOrderEur)}</span>}</p><button className="btn-primary" disabled={busy || total < Number(v.minOrderEur) || (hasRoutes && !slot)} onClick={() => void order()}><ShoppingCart size={16} /> Commander chez {v.name}</button></div></div>}
       {!offers.length && <Empty><Store className="mx-auto mb-2" />Aucun produit dans cette sélection.</Empty>}
     </div>
   );

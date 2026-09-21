@@ -3,7 +3,7 @@
 import { Hono, type Context, type Next } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { getDb, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
+import { getDb, vendorRoutes as vendorRoutesTable, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
 import { similarity } from '../lib/quick.js';
 import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, type Env } from '../lib/auth.js';
@@ -513,4 +513,25 @@ vendorRoutes.get('/vendor/orders/:id/pdf', async (c) => {
   const kind = c.req.query('type') === 'livraison' ? 'bon_livraison' : 'bon_commande';
   const r = await buildOrderDoc(c.req.param('id'), kind); if (!r || r.order.vendorId !== c.get('vendorId')) return c.json({ error: 'Commande introuvable' }, 404);
   return new Response(new Uint8Array(r.doc), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${r.order.reference}-${kind}.pdf"` } });
+});
+
+// ---- Chantier 19 : tournées de livraison ----
+const routeSchema = z.object({ name: z.string().min(2).max(60), weekday: z.number().int().min(0).max(6), zones: z.array(z.string().min(1).max(40)).max(50).default([]), slots: z.array(z.string().min(2).max(20)).max(8).default([]), cutoffDaysBefore: z.number().int().min(0).max(7).default(1), cutoffTime: z.string().regex(/^\d{2}:\d{2}$/).default('14:00'), capacity: z.number().int().positive().max(500).nullable().optional(), active: z.boolean().default(true) });
+vendorRoutes.get('/vendor/routes', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const rows = await db.select().from(vendorRoutesTable).where(eq(vendorRoutesTable.vendorId, vid)).orderBy(vendorRoutesTable.weekday, vendorRoutesTable.name);
+  const since = new Date().toISOString().slice(0, 10);
+  const load = await db.select({ routeId: orders.routeId, date: orders.expectedAt, count: sql<number>`count(*)` }).from(orders).where(and(eq(orders.vendorId, vid), sql`${orders.routeId} is not null`, sql`${orders.expectedAt} >= ${since}`, sql`${orders.status} not in ('annulee')`)).groupBy(orders.routeId, orders.expectedAt);
+  return c.json({ routes: rows, upcoming: load.map((l) => ({ ...l, count: n(l.count) })) });
+});
+vendorRoutes.post('/vendor/routes', async (c) => {
+  const body = routeSchema.safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Tournée invalide (nom, jour 0–6, heure limite HH:MM)' }, 400);
+  const db = await getDb(); const [r] = await db.insert(vendorRoutesTable).values({ ...body.data, capacity: body.data.capacity ?? null, vendorId: c.get('vendorId') }).returning(); return c.json({ route: r }, 201);
+});
+vendorRoutes.put('/vendor/routes/:id', async (c) => {
+  const body = routeSchema.partial().safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Tournée invalide' }, 400);
+  const db = await getDb(); const [r] = await db.update(vendorRoutesTable).set(body.data).where(and(eq(vendorRoutesTable.id, c.req.param('id')), eq(vendorRoutesTable.vendorId, c.get('vendorId')))).returning(); if (!r) return c.json({ error: 'Tournée introuvable' }, 404); return c.json({ route: r });
+});
+vendorRoutes.delete('/vendor/routes/:id', async (c) => {
+  const db = await getDb(); const [r] = await db.delete(vendorRoutesTable).where(and(eq(vendorRoutesTable.id, c.req.param('id')), eq(vendorRoutesTable.vendorId, c.get('vendorId')))).returning(); if (!r) return c.json({ error: 'Tournée introuvable' }, 404); return c.json({ ok: true });
 });

@@ -13,6 +13,7 @@ import { logOrderEvent } from '../lib/order-events.js';
 import { assertPlausibleQuantity } from './restaurant.js';
 import { APP_URL } from '../jobs/daily.js';
 import { loadPricing, priceFor } from '../lib/pricing.js';
+import { nextSlots, WEEKDAYS_FR } from '../lib/routes.js';
 import { reliabilityFor, emptyReliability } from '../lib/reliability.js';
 
 export const marketplaceRoutes = new Hono<Env>();
@@ -93,7 +94,7 @@ marketplaceRoutes.post('/marketplace/vendors/:id/link', async (c) => {
 
 /** Commande plateforme : passe par le fournisseur privé lié, statut « envoyee » immédiat, le fournisseur confirme dans son espace. */
 /** Cœur de la commande plateforme (utilisé par le panier, « Recommander » et les commandes récurrentes). */
-export async function placeVendorOrder(rid: string, vid: string, userId: string | null, input: { lines: { vendorOfferId: string; packs: number }[]; notes?: string; source?: string; skipMin?: boolean; override?: boolean }): Promise<{ ok: true; order: typeof orders.$inferSelect; total: number; vendorName: string } | { ok: false; error: string; status: number }> {
+export async function placeVendorOrder(rid: string, vid: string, userId: string | null, input: { lines: { vendorOfferId: string; packs: number }[]; notes?: string; source?: string; skipMin?: boolean; override?: boolean; routeId?: string; expectedAt?: string; deliverySlot?: string }): Promise<{ ok: true; order: typeof orders.$inferSelect; total: number; vendorName: string } | { ok: false; error: string; status: number }> {
   const db = await getDb();
   const link = await linkVendor(rid, vid); if (!link) return { ok: false, error: 'Fournisseur introuvable', status: 404 };
   const [v] = await db.select().from(vendors).where(eq(vendors.id, vid)); if (v.status !== 'actif') return { ok: false, error: `${v.name} n'est plus actif sur la plateforme`, status: 400 };
@@ -118,8 +119,21 @@ export async function placeVendorOrder(rid: string, vid: string, userId: string 
   const linesData = input.lines.map((l) => { const o = vo.find((x) => x.id === l.vendorOfferId)!; const pp = priceFor(o, l.packs, pricing).packPriceEur; return { productId: o.productId, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n(o.packQty)).toFixed(3), unitPriceEur: (pp / n(o.packQty)).toFixed(4), lineTotalEur: (l.packs * pp).toFixed(2) }; });
   const total = linesData.reduce((a, l) => a + Number(l.lineTotalEur), 0);
   if (!input.skipMin && total < n(v.minOrderEur)) return { ok: false, error: `Minimum de commande ${eur(n(v.minOrderEur))} chez ${v.name} (panier : ${eur(total)})`, status: 400 };
+  // Chantier 19 : créneau de tournée choisi (ou imposé si le grossiste a des tournées)
+  const [rz] = await db.select({ city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants).where(eq(restaurants.id, rid));
+  const slots = await nextSlots(vid, rz); let expectedAt = new Date(Date.now() + v.leadTimeHours * 3_600_000).toISOString().slice(0, 10); let routeId: string | null = null; let deliverySlot: string | null = null;
+  if (input.routeId || input.expectedAt) {
+    const opt = slots.find((s) => (!input.routeId || s.routeId === input.routeId) && (!input.expectedAt || s.date === input.expectedAt));
+    if (!opt) return { ok: false, error: 'Ce créneau de livraison n\'est plus disponible (heure limite dépassée ou tournée modifiée). Choisissez une autre date.', status: 400 };
+    if (opt.full) return { ok: false, error: `Tournée complète le ${opt.date} : choisissez une autre date.`, status: 409 };
+    if (input.deliverySlot && opt.slots.length && !opt.slots.includes(input.deliverySlot)) return { ok: false, error: 'Créneau horaire invalide pour cette tournée', status: 400 };
+    expectedAt = opt.date; routeId = opt.routeId; deliverySlot = input.deliverySlot ?? opt.slots[0] ?? null;
+  } else if (slots.length && input.source !== 'recurrente') {
+    const first = slots.find((s) => !s.full); if (!first) return { ok: false, error: `${v.name} n'a plus de tournée disponible dans les 14 prochains jours pour votre zone.`, status: 409 };
+    expectedAt = first.date; routeId = first.routeId; deliverySlot = first.slots[0] ?? null; // créneau le plus proche par défaut
+  }
   const reference = await nextOrderReference();
-  const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: 'envoyee', channel: 'plateforme', sentAt: new Date(), expectedAt: new Date(Date.now() + v.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? 'marketplace', notes: input.notes, createdBy: userId }).returning();
+  const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: 'envoyee', channel: 'plateforme', sentAt: new Date(), routeId, deliverySlot, expectedAt, totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? 'marketplace', notes: input.notes, createdBy: userId }).returning();
   const priv = await db.select().from(supplierOffers).where(eq(supplierOffers.supplierId, link.supplier.id));
   await db.insert(orderLines).values(linesData.map((l) => ({ ...l, orderId: order.id, offerId: priv.find((p) => p.productId === l.productId && p.packLabel === l.packLabel)?.id ?? null })));
   const [r] = await db.select({ name: restaurants.name, city: restaurants.city }).from(restaurants).where(eq(restaurants.id, rid));
@@ -135,12 +149,21 @@ marketplaceRoutes.post('/marketplace/vendors/:id/orders', async (c) => {
   const body = z.object({
     lines: z.array(z.object({ vendorOfferId: z.string().uuid(), packs: z.number().int().positive().max(MAX_PACKS_PER_LINE) })).min(1).max(MAX_ORDER_LINES),
     notes: z.string().max(300).optional(), source: z.string().optional(),
+    routeId: z.string().uuid().optional(), expectedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), deliverySlot: z.string().max(20).optional(),
     /** Confirmation explicite : autorise un volume au-delà de votre plafond habituel. */
     override: z.boolean().optional(),
   }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: `Données invalides : chaque ligne attend un nombre de colis entre 1 et ${MAX_PACKS_PER_LINE} (panier de ${MAX_ORDER_LINES} lignes maximum).` }, 400);
   const res = await placeVendorOrder(rid, vid, user.id, body.data); if (!res.ok) return c.json({ error: res.error }, res.status as 400);
-  return c.json({ order: res.order, message: `Commande ${res.order.reference} envoyée à ${res.vendorName} (${eur(res.total)}). Vous serez prévenu dès confirmation.` }, 201);
+  return c.json({ order: res.order, message: `Commande ${res.order.reference} envoyée à ${res.vendorName} (${eur(res.total)})${res.order.routeId ? ` — livraison prévue le ${new Date(`${res.order.expectedAt}T12:00:00Z`).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}${res.order.deliverySlot ? ` (${res.order.deliverySlot})` : ''}` : ''}. Vous serez prévenu dès confirmation.` }, 201);
+});
+
+/** Chantier 19 : prochaines dates/créneaux de livraison de ce grossiste pour mon restaurant. */
+marketplaceRoutes.get('/marketplace/vendors/:id/slots', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const [r] = await db.select({ city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants).where(eq(restaurants.id, rid));
+  const slots = await nextSlots(c.req.param('id'), r);
+  return c.json({ slots: slots.map((s) => ({ ...s, weekdayLabel: WEEKDAYS_FR[s.weekday] })), hasRoutes: slots.length > 0 });
 });
 
 /** Chantier 28 : prix effectif d'un panier (paliers, négocié) avant commande. */
