@@ -234,6 +234,12 @@ export const orders = pgTable('orders', {
   proofSignature: text('proof_signature'),              // data URL png
   proofNote: text('proof_note'),
   routeId: uuid('route_id'),                            // chantier 19 : tournée choisie (vendor_routes.id)
+  // chantier 29 : encours & conditions de paiement (commandes plateforme)
+  paymentDays: integer('payment_days'),                 // 0 = comptant à la livraison, 30 = 30 jours…
+  dueAt: date('due_at'),                                // échéance (livraison + paymentDays)
+  paidAt: timestamp('paid_at', { withTimezone: true }),
+  paidAmountEur: numeric('paid_amount_eur', { precision: 10, scale: 2 }),
+  paymentMethod: text('payment_method'),                // virement | cb | especes | cheque | prelevement | avoir
   // chantier 21 : proposition de modification du grossiste (ruptures / substitutions) en attente du restaurant
   proposal: jsonb('proposal').$type<OrderProposal>(),
   proposalAt: timestamp('proposal_at', { withTimezone: true }),
@@ -760,3 +766,18 @@ export const vendorRoutes = pgTable('vendor_routes', {
   active: boolean('active').default(true).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('vendor_routes_vendor_idx').on(t.vendorId, t.weekday)]);
+
+// -------------------------------------------------------------
+// Chantier 29 — Conditions de paiement & encours accordés par un grossiste à un restaurant
+// -------------------------------------------------------------
+export const vendorCreditTerms = pgTable('vendor_credit_terms', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  paymentDays: integer('payment_days').default(0).notNull(),                          // 0 comptant, 15, 30, 45, 60
+  creditLimitEur: numeric('credit_limit_eur', { precision: 10, scale: 2 }),            // null = pas de plafond
+  blocked: boolean('blocked').default(false).notNull(),                                // compte bloqué (impayé) : plus de commande à crédit
+  note: text('note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex('credit_terms_unique').on(t.vendorId, t.restaurantId)]);

@@ -14,6 +14,7 @@ import { assertPlausibleQuantity } from './restaurant.js';
 import { APP_URL } from '../jobs/daily.js';
 import { loadPricing, priceFor } from '../lib/pricing.js';
 import { nextSlots, WEEKDAYS_FR } from '../lib/routes.js';
+import { checkCredit, exposureFor, termsFor } from '../lib/credit.js';
 import { reliabilityFor, emptyReliability } from '../lib/reliability.js';
 
 export const marketplaceRoutes = new Hono<Env>();
@@ -119,6 +120,9 @@ export async function placeVendorOrder(rid: string, vid: string, userId: string 
   const linesData = input.lines.map((l) => { const o = vo.find((x) => x.id === l.vendorOfferId)!; const pp = priceFor(o, l.packs, pricing).packPriceEur; return { productId: o.productId, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n(o.packQty)).toFixed(3), unitPriceEur: (pp / n(o.packQty)).toFixed(4), lineTotalEur: (l.packs * pp).toFixed(2) }; });
   const total = linesData.reduce((a, l) => a + Number(l.lineTotalEur), 0);
   if (!input.skipMin && total < n(v.minOrderEur)) return { ok: false, error: `Minimum de commande ${eur(n(v.minOrderEur))} chez ${v.name} (panier : ${eur(total)})`, status: 400 };
+  // Chantier 29 : encours / compte bloqué / retards de paiement
+  const credit = await checkCredit(vid, rid, total + n(v.deliveryFeeEur), v.name); if (!credit.ok) return { ok: false, error: credit.error, status: credit.status as 400 };
+  const paymentDays = credit.terms?.paymentDays ?? 0;
   // Chantier 19 : créneau de tournée choisi (ou imposé si le grossiste a des tournées)
   const [rz] = await db.select({ city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants).where(eq(restaurants.id, rid));
   const slots = await nextSlots(vid, rz); let expectedAt = new Date(Date.now() + v.leadTimeHours * 3_600_000).toISOString().slice(0, 10); let routeId: string | null = null; let deliverySlot: string | null = null;
@@ -133,7 +137,7 @@ export async function placeVendorOrder(rid: string, vid: string, userId: string 
     expectedAt = first.date; routeId = first.routeId; deliverySlot = first.slots[0] ?? null; // créneau le plus proche par défaut
   }
   const reference = await nextOrderReference();
-  const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: input.draft ? 'preparee' : 'envoyee', channel: 'plateforme', sentAt: input.draft ? null : new Date(), routeId, deliverySlot, expectedAt, totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? 'marketplace', notes: input.notes, createdBy: userId }).returning();
+  const [order] = await db.insert(orders).values({ restaurantId: rid, supplierId: link.supplier.id, vendorId: vid, reference, status: input.draft ? 'preparee' : 'envoyee', channel: 'plateforme', sentAt: input.draft ? null : new Date(), paymentDays, routeId, deliverySlot, expectedAt, totalEur: total.toFixed(2), deliveryFeeEur: v.deliveryFeeEur, source: input.source ?? 'marketplace', notes: input.notes, createdBy: userId }).returning();
   const priv = await db.select().from(supplierOffers).where(eq(supplierOffers.supplierId, link.supplier.id));
   await db.insert(orderLines).values(linesData.map((l) => ({ ...l, orderId: order.id, offerId: priv.find((p) => p.productId === l.productId && p.packLabel === l.packLabel)?.id ?? null })));
   if (input.draft) { void logOrderEvent(order.id, 'note', `Commande préparée (récurrente « à valider ») — en attente de votre validation`, 'restaurant', { total }); return { ok: true, order, total, vendorName: v.name }; }
@@ -176,6 +180,21 @@ marketplaceRoutes.post('/marketplace/orders/:id/send', async (c) => {
   const [upd] = await db.update(orders).set({ status: 'envoyee', sentAt: new Date() }).where(and(eq(orders.id, o.id), eq(orders.status, 'preparee'))).returning(); if (!upd) return c.json({ error: 'Commande déjà envoyée' }, 409);
   await notifyVendorNewOrder(upd, ls.map((l) => ({ packs: n(l.packs), packLabel: l.packLabel, lineTotalEur: String(l.lineTotalEur) })), v, rid, n(upd.totalEur), 'recurrente');
   return c.json({ order: upd, message: `Commande ${upd.reference} envoyée à ${v.name}.` });
+});
+
+/** Chantier 29 : mes conditions de paiement et mon encours chez ce grossiste. */
+marketplaceRoutes.get('/marketplace/vendors/:id/credit', async (c) => {
+  const rid = c.get('restaurantId'); const vid = c.req.param('id');
+  const terms = await termsFor(vid, rid); const exposure = (await exposureFor(vid, [rid])).get(rid)!;
+  return c.json({ terms: terms ? { paymentDays: terms.paymentDays, creditLimitEur: terms.creditLimitEur === null ? null : n(terms.creditLimitEur), blocked: terms.blocked } : { paymentDays: 0, creditLimitEur: null, blocked: false }, exposure });
+});
+/** Chantier 29 : mes factures plateforme à régler (toutes enseignes). */
+marketplaceRoutes.get('/marketplace/payables', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb(); const t = new Date().toISOString().slice(0, 10);
+  const rows = await db.select({ id: orders.id, reference: orders.reference, vendorId: orders.vendorId, vendorName: vendors.name, totalEur: orders.totalEur, feeEur: orders.deliveryFeeEur, paidAmountEur: orders.paidAmountEur, paidAt: orders.paidAt, dueAt: orders.dueAt, paymentDays: orders.paymentDays, status: orders.status, deliveredAt: sql<string | null>`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})` })
+    .from(orders).innerJoin(vendors, eq(vendors.id, orders.vendorId)).where(and(eq(orders.restaurantId, rid), sql`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql`${orders.paidAt} is null`)).orderBy(orders.dueAt);
+  const items = rows.map((r) => { const due = Math.round((n(r.totalEur) + n(r.feeEur) - n(r.paidAmountEur)) * 100) / 100; return { ...r, dueEur: due, overdue: !!r.dueAt && r.dueAt < t }; }).filter((r) => r.dueEur > 0);
+  return c.json({ items, totalEur: Math.round(items.reduce((a, r) => a + r.dueEur, 0) * 100) / 100, overdueEur: Math.round(items.filter((r) => r.overdue).reduce((a, r) => a + r.dueEur, 0) * 100) / 100 });
 });
 
 /** Chantier 19 : prochaines dates/créneaux de livraison de ce grossiste pour mon restaurant. */

@@ -2,7 +2,7 @@
 // Volontairement simple et autonome : un grossiste doit pouvoir confirmer une commande depuis son téléphone en 2 taps.
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, LogOut, BarChart3, FileText, Scale, Tag, Star, Route } from 'lucide-react';
+import { Store, Package, Inbox, Users, Receipt, Check, X, Truck, LogOut, BarChart3, FileText, Scale, Tag, Star, Route, Wallet } from 'lucide-react';
 import { api, tokenStore, CATEGORY_LABEL, openPdf } from '../../lib/api';
 import { Field } from '../../components/Modal';
 import { CatalogImport, QuickPrice } from './CatalogImport';
@@ -12,11 +12,12 @@ import { Fulfillment } from './Fulfillment';
 import { Propose } from './Propose';
 import { VendorClaims } from './VendorClaims';
 import { Pricing } from './Pricing';
+import { Credit } from './Credit';
 import VendorReviews from './VendorReviews';
 import { VendorRoutes } from './Routes';
 
 type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; cgvUpToDate?: boolean; cgvVersion?: string | null; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
-type Tab = 'dashboard' | 'offers' | 'pricing' | 'reviews' | 'routes' | 'orders' | 'fulfillment' | 'claims' | 'groupbuys' | 'commissions' | 'analytics';
+type Tab = 'dashboard' | 'offers' | 'pricing' | 'credit' | 'reviews' | 'routes' | 'orders' | 'fulfillment' | 'claims' | 'groupbuys' | 'commissions' | 'analytics';
 const eur = (v: number | string) => `${Number(v).toFixed(2).replace('.', ',')} €`;
 const STATUS: Record<string, string> = { envoyee: '🕒 À confirmer', confirmee: '✅ Confirmée', livree: '📦 Livrée', livree_partiel: '📦 Livrée (écarts)', annulee: '❌ Refusée/annulée' };
 
@@ -35,9 +36,9 @@ export default function VendorSpace() {
       {v.cgvUpToDate === false && <div className="mb-4 rounded-2xl border border-brand-200 bg-brand-50 p-4 text-sm text-brand-900"><p className="font-bold">📜 Nouvelles conditions générales fournisseur</p><p className="mt-1">Pour continuer à publier des offres et traiter des commandes, merci de lire et d’accepter la nouvelle version des <Link className="underline" to="/cgv-fournisseur" target="_blank">conditions fournisseur</Link>.</p><button className="btn-primary mt-2" onClick={async () => { await api('/vendor/accept-cgv', { method: 'POST', json: {} }); await load(); }}>J’accepte les conditions</button></div>}
       {v.status !== 'actif' && <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{v.status === 'en_attente' ? <>⏳ <b>Espace en cours de validation.</b> Vous pouvez déjà préparer votre catalogue ; les restaurants vous verront dès l’activation (sous 24 h ouvrées).</> : <>⛔ Espace suspendu — contactez bonjour@afrisupply.fr.</>}</div>}
       <nav className="mb-5 flex gap-1 overflow-x-auto rounded-2xl bg-stone-100 p-1 text-sm font-semibold">
-        {([['orders', Inbox, 'Commandes'], ['fulfillment', Truck, 'Préparation & livraison'], ['routes', Route, 'Tournées'], ['offers', Package, 'Catalogue'], ['pricing', Tag, 'Tarifs'], ['claims', Scale, 'Litiges'], ['reviews', Star, 'Avis'], ['analytics', BarChart3, 'Analyses'], ['groupbuys', Users, 'Achats groupés'], ['commissions', Receipt, 'Commissions'], ['dashboard', Store, 'Ma fiche']] as const).map(([k, Icon, l]) => <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2 ${tab === k ? 'bg-white text-brand-800 shadow-sm' : 'text-stone-600'}`}><Icon size={16} /> {l}</button>)}
+        {([['orders', Inbox, 'Commandes'], ['fulfillment', Truck, 'Préparation & livraison'], ['routes', Route, 'Tournées'], ['offers', Package, 'Catalogue'], ['pricing', Tag, 'Tarifs'], ['credit', Wallet, 'Encours'], ['claims', Scale, 'Litiges'], ['reviews', Star, 'Avis'], ['analytics', BarChart3, 'Analyses'], ['groupbuys', Users, 'Achats groupés'], ['commissions', Receipt, 'Commissions'], ['dashboard', Store, 'Ma fiche']] as const).map(([k, Icon, l]) => <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2 ${tab === k ? 'bg-white text-brand-800 shadow-sm' : 'text-stone-600'}`}><Icon size={16} /> {l}</button>)}
       </nav>
-      {tab === 'orders' && <Orders />}{tab === 'fulfillment' && <Fulfillment />}{tab === 'claims' && <VendorClaims />}{tab === 'pricing' && <Pricing />}{tab === 'reviews' && <VendorReviews />}{tab === 'routes' && <VendorRoutes />}{tab === 'offers' && <Offers />}{tab === 'analytics' && <Analytics onAddOffer={(_id, name) => { sessionStorage.setItem('afs_vendor_prefill', name); setTab('offers'); }} />}{tab === 'groupbuys' && <GroupBuys />}{tab === 'commissions' && <Commissions />}{tab === 'dashboard' && <Dashboard />}
+      {tab === 'orders' && <Orders />}{tab === 'fulfillment' && <Fulfillment />}{tab === 'claims' && <VendorClaims />}{tab === 'pricing' && <Pricing />}{tab === 'credit' && <Credit />}{tab === 'reviews' && <VendorReviews />}{tab === 'routes' && <VendorRoutes />}{tab === 'offers' && <Offers />}{tab === 'analytics' && <Analytics onAddOffer={(_id, name) => { sessionStorage.setItem('afs_vendor_prefill', name); setTab('offers'); }} />}{tab === 'groupbuys' && <GroupBuys />}{tab === 'commissions' && <Commissions />}{tab === 'dashboard' && <Dashboard />}
     </Shell>
   );
 }

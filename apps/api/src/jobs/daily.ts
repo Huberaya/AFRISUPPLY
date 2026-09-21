@@ -14,6 +14,7 @@ import { invoiceCommissions } from '../routes/billing.js';
 import { buildWeeklyPilotReport } from '../routes/pilots.js';
 import { remindPendingVendorOrders } from './reminders.js';
 import { runRecurringOrders } from '../routes/marketplace.js';
+import { remindPayments } from '../lib/credit.js';
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -131,6 +132,7 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
   }
   for (const e of errors) void captureException(new Error(`daily digest failed: ${e.error}`), { route: '/api/jobs/daily', restaurantId: e.restaurantId });
   try { if (!opts.dryRun) (summary as Record<string, unknown>).recurring = (await runRecurringOrders(opts.now)).results.length; } catch (e) { await captureException(e, { route: 'jobs/recurring' }); }
+  try { if (!opts.dryRun) (summary as Record<string, unknown>).payments = (await remindPayments(opts.now)).reminded; } catch (e) { await captureException(e, { route: 'jobs/payments' }); }
   try { (summary as Record<string, unknown>).reminders = opts.dryRun ? 'skipped' : (await remindPendingVendorOrders({ now: opts.now })).reminded; } catch (e) { await captureException(e, { route: 'jobs/reminders' }); }
   return summary;
 }

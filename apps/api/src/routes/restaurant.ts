@@ -564,6 +564,8 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
       const now = new Date();
       await tx.update(orders).set({
         status: allReceived ? 'livree' : 'livree_partiel', deliveredAt: now, receivedAt: now,
+        // chantier 29 : échéance de paiement = réception + délai accordé (si pas déjà posée par la livraison grossiste)
+        dueAt: order.dueAt ?? (order.vendorId ? new Date(now.getTime() + (order.paymentDays ?? 0) * 86_400_000).toISOString().slice(0, 10) : null),
       }).where(eq(orders.id, order.id));
     });
   } catch (e) {
