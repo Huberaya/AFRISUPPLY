@@ -1,11 +1,11 @@
-process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://notif'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr'; process.env.VENDOR_AUTO_APPROVE = 'true'; process.env.CRON_SECRET = 'cron';
+process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://notif'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr'; process.env.VENDOR_AUTO_APPROVE = 'true'; process.env.CRON_SECRET = 'cron'; process.env.STRIPE_WEBHOOK_SECRET = 'whsec_notif';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { runMigrations, getDb, notifications, orders } from '@afrisupply/db';
 import { eq } from 'drizzle-orm';
 import { app } from '../app.js';
 import { normalizePhone, waLink } from '../lib/sms.js';
 type Json = Record<string, any>;
-const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, json: (await r.clone().json().catch(() => ({}))) as Json }; };
+const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined }); return { status: r.status, json: (await r.clone().json().catch(() => ({}))) as Json }; };
 const reg = async (email: string, name: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'Test', restaurantName: name, city: 'Nantes' }); return { h: { Authorization: `Bearer ${r.json.token}` } }; };
 let V: Record<string, string>; let R: Record<string, string>; let orderId = '';
 beforeAll(async () => { await runMigrations(); V = (await reg('gros@n.fr', 'Gros')).h; R = (await reg('resto@n.fr', 'Resto N')).h; }, 60_000);
@@ -207,5 +207,138 @@ describe('chantier 27 — avis & fiabilité grossiste', () => {
     const pub = await call('GET', `/api/public/vendors/${vid}/reviews`); expect(pub.status).toBe(200); expect(pub.json.reviews[0].vendorReply).toBe('Merci !'); expect(pub.json.reviews[0].restaurantId).toBeUndefined(); expect(pub.json.reliability.reviews).toBeGreaterThanOrEqual(1);
     const mk = await call('GET', '/api/marketplace/vendors', undefined, R); expect(mk.json.vendors.every((x: Json) => x.reliability?.badge)).toBe(true); // annuaire enrichi
     const fiche = await call('GET', `/api/marketplace/vendors/${vid}`, undefined, R); expect(fiche.json.reliability.onTimePct).toBe(100); expect(fiche.json.reliability.rating).toBe(4);
+  });
+});
+
+describe('chantier 19 — tournées & créneaux', () => {
+  it('tournées CRUD, créneaux proposés selon zone et heure limite, capacité, commande sur créneau', async () => {
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Sac 5 kg', packQty: 5, packPrice: 12 }, V)).json.offer;
+    // sans tournée : pas de créneaux, commande classique (délai leadTime)
+    const s0 = await call('GET', `/api/marketplace/vendors/${vid}/slots`, undefined, R); expect(s0.json.hasRoutes).toBe(false);
+    expect((await call('POST', '/api/vendor/routes', { name: 'X', weekday: 9 }, V)).status).toBe(400);
+    // tournée quotidienne toutes zones, heure limite J-0 23:59, capacité 1
+    const days = [0, 1, 2, 3, 4, 5, 6];
+    const created: string[] = [];
+    for (const d of days) { const r = await call('POST', '/api/vendor/routes', { name: `Tournée ${d}`, weekday: d, slots: ['6h–8h', '8h–10h'], cutoffDaysBefore: 0, cutoffTime: '23:59', capacity: 1 }, V); expect(r.status).toBe(201); created.push(r.json.route.id); }
+    // tournée hors zone (code postal 99999) → jamais proposée
+    const far = await call('POST', '/api/vendor/routes', { name: 'Lointaine', weekday: 1, zones: ['99999'], cutoffDaysBefore: 0, cutoffTime: '23:59' }, V); expect(far.status).toBe(201);
+    const s1 = await call('GET', `/api/marketplace/vendors/${vid}/slots`, undefined, R); expect(s1.json.hasRoutes).toBe(true);
+    expect(s1.json.slots.some((s: Json) => s.routeName === 'Lointaine')).toBe(false); expect(s1.json.slots.length).toBeGreaterThanOrEqual(14);
+    const first = s1.json.slots[0]; expect(first.remaining).toBe(1); expect(first.slots).toEqual(['6h–8h', '8h–10h']);
+    // mauvais créneau horaire → 400 ; bon → 201 avec date & créneau
+    expect((await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }], routeId: first.routeId, expectedAt: first.date, deliverySlot: '22h–23h' }, R)).status).toBe(400);
+    const o1 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }], routeId: first.routeId, expectedAt: first.date, deliverySlot: '8h–10h' }, R);
+    expect(o1.status).toBe(201); expect(o1.json.order.expectedAt).toBe(first.date); expect(o1.json.order.deliverySlot).toBe('8h–10h'); expect(o1.json.order.routeId).toBe(first.routeId);
+    // capacité atteinte → 409 ; la liste marque la date complète
+    expect((await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }], routeId: first.routeId, expectedAt: first.date }, R)).status).toBe(409);
+    const s2 = await call('GET', `/api/marketplace/vendors/${vid}/slots`, undefined, R); expect(s2.json.slots.find((s: Json) => s.date === first.date && s.routeId === first.routeId).full).toBe(true);
+    // sans choix explicite → premier créneau libre (le suivant)
+    const o2 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }] }, R); expect(o2.status).toBe(201); expect(o2.json.order.expectedAt > first.date).toBe(true);
+    // heure limite dépassée : J-1 à 00:00 → la date de demain n'est plus proposée
+    for (const id of created) expect((await call('PUT', `/api/vendor/routes/${id}`, { cutoffDaysBefore: 1, cutoffTime: '00:00' }, V)).status).toBe(200);
+    const s3 = await call('GET', `/api/marketplace/vendors/${vid}/slots`, undefined, R); const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    expect(s3.json.slots.some((s: Json) => s.date <= tomorrow)).toBe(false);
+    const list = await call('GET', '/api/vendor/routes', undefined, V); expect(list.json.routes.length).toBe(8); expect(list.json.upcoming.length).toBeGreaterThanOrEqual(1);
+    expect((await call('DELETE', `/api/vendor/routes/${far.json.route.id}`, undefined, V)).json.ok).toBe(true);
+    for (const id of created) await call('DELETE', `/api/vendor/routes/${id}`, undefined, V);
+  });
+});
+
+describe('chantier 24 bis — récurrente « me demander avant »', () => {
+  it('le job crée un brouillon préparé, le restaurant valide en 1 clic, le grossiste ne voit la commande qu’après', async () => {
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Bidon 5 L', packQty: 5, packPrice: 20 }, V)).json.offer;
+    const exp = new Date(Date.now() + 86_400_000); const wd = exp.getUTCDay();
+    const rec = await call('POST', '/api/recurring', { vendorId: vid, name: 'Huile du mardi', weekdays: [wd], mode: 'confirm', lines: [{ vendorOfferId: off.id, packs: 2 }] }, R); expect(rec.status).toBe(201);
+    const { runRecurringOrders } = await import('../routes/marketplace.js');
+    const run = await runRecurringOrders(exp); const mine = run.results.find((x) => x.name === 'Huile du mardi'); expect(mine?.ok).toBe(true);
+    const after = (await call('GET', '/api/recurring', undefined, R)).json.recurring.find((x: Json) => x.name === 'Huile du mardi');
+    const ord = (await call('GET', '/api/orders', undefined, R)).json.orders.find((o: Json) => o.id === after.lastOrderId); expect(ord.status).toBe('preparee'); expect(ord.sentAt).toBeNull();
+    const before = (await call('GET', '/api/vendor/orders', undefined, V)).json.orders ?? []; expect(before.some((o: Json) => o.id === ord.id)).toBe(false); // le grossiste ne la voit pas encore
+    const snd = await call('POST', `/api/marketplace/orders/${ord.id}/send`, {}, R); expect(snd.status).toBe(200); expect(snd.json.order.status).toBe('envoyee');
+    expect((await call('POST', `/api/marketplace/orders/${ord.id}/send`, {}, R)).status).toBe(409);
+    const vo = (await call('GET', '/api/vendor/orders', undefined, V)).json.orders; expect(vo.some((o: Json) => o.id === ord.id)).toBe(true);
+    await call('DELETE', `/api/recurring/${after.id}`, undefined, R);
+  });
+});
+
+describe('chantier 29 — encours & conditions de paiement', () => {
+  it('délai accordé → échéance à la livraison, plafond d’encours 402, encaissement partiel puis solde, retard bloque, compte bloqué', async () => {
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id; const rid = (await call('GET', '/api/settings', undefined, R)).json.restaurant.id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Caisse 10 kg', packQty: 10, packPrice: 100 }, V)).json.offer;
+    // encours déjà engagé par les tests précédents + prix effectif (remise client du chantier 28 possible)
+    const base = (await call('GET', `/api/marketplace/vendors/${vid}/credit`, undefined, R)).json.exposure.outstandingEur as number;
+    const unit = (await call('POST', `/api/marketplace/vendors/${vid}/quote`, { lines: [{ vendorOfferId: off.id, packs: 1 }] }, R)).json.lines[0].packPriceEur as number;
+    const limit = Math.round((base + unit * 2.5) * 100) / 100; // 2 caisses passent, la 3e non
+    expect((await call('PUT', `/api/vendor/credit/${rid}`, { paymentDays: 120 }, V)).status).toBe(400);
+    const tm = await call('PUT', `/api/vendor/credit/${rid}`, { paymentDays: 30, creditLimitEur: limit }, V); expect(tm.status).toBe(200); expect(tm.json.terms.paymentDays).toBe(30);
+    const my = await call('GET', `/api/marketplace/vendors/${vid}/credit`, undefined, R); expect(my.json.terms.paymentDays).toBe(30); expect(my.json.terms.creditLimitEur).toBe(limit);
+    // 2 caisses = 200 € OK ; puis 1 caisse = 100 € → 300 > 250 → 402
+    const o1 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 2 }] }, R); expect(o1.status).toBe(201); expect(o1.json.order.paymentDays).toBe(30);
+    const o2 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }] }, R); expect(o2.status).toBe(402); expect(o2.json.error).toMatch(/Plafond/);
+    // livraison → dueAt = +30 j ; encaissement impossible avant livraison
+    expect((await call('POST', `/api/vendor/orders/${o1.json.order.id}/payment`, {}, V)).status).toBe(400);
+    expect((await call('POST', `/api/vendor/orders/${o1.json.order.id}/confirm`, {}, V)).status).toBe(200);
+    for (const step of [{ step: 'en_preparation' }, { step: 'en_livraison' }, { step: 'livree', receiverName: 'Awa' }]) expect((await call('POST', `/api/vendor/orders/${o1.json.order.id}/fulfillment`, step, V)).status).toBe(200);
+    const cr = await call('GET', '/api/vendor/credit', undefined, V); const rec = cr.json.receivables.find((x: Json) => x.id === o1.json.order.id); const o1total = Math.round((Number(o1.json.order.totalEur) + Number(o1.json.order.deliveryFeeEur)) * 100) / 100; expect(rec.dueEur).toBe(o1total); expect(rec.overdue).toBe(false);
+    const expectedDue = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10); expect(rec.dueAt).toBe(expectedDue);
+    const cl = cr.json.clients.find((x: Json) => x.restaurantId === rid); expect(cl.outstandingEur).toBeGreaterThanOrEqual(unit * 2);
+    const pay = await call('GET', '/api/marketplace/payables', undefined, R); expect(pay.json.items.some((x: Json) => x.id === o1.json.order.id)).toBe(true);
+    // acompte 50 → reste 150 ; plafond : 150 + 100 = 250 → OK maintenant
+    const p1 = await call('POST', `/api/vendor/orders/${o1.json.order.id}/payment`, { amountEur: unit * 0.5, method: 'especes' }, V); expect(p1.json.settled).toBe(false); expect(p1.json.remainingEur).toBe(Math.round((o1total - unit * 0.5) * 100) / 100);
+    expect((await call('POST', `/api/vendor/orders/${o1.json.order.id}/payment`, { amountEur: unit * 5 }, V)).status).toBe(400);
+    const o3 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }] }, R); expect(o3.status).toBe(201);
+    const p2 = await call('POST', `/api/vendor/orders/${o1.json.order.id}/payment`, { method: 'virement' }, V); expect(p2.json.settled).toBe(true);
+    expect((await call('POST', `/api/vendor/orders/${o1.json.order.id}/payment`, {}, V)).status).toBe(409);
+    // retard : on force une échéance passée sur o3 après livraison → nouvelle commande refusée 402
+    for (const step of [{}, { step: 'en_preparation' }, { step: 'en_livraison' }, { step: 'livree', receiverName: 'Awa' }]) await call('POST', `/api/vendor/orders/${o3.json.order.id}/${'step' in step ? 'fulfillment' : 'confirm'}`, step, V);
+    const { getDb, orders } = await import('@afrisupply/db'); const { eq } = await import('drizzle-orm');
+    await (await getDb()).update(orders).set({ dueAt: '2020-01-01' }).where(eq(orders.id, o3.json.order.id));
+    const o4 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }] }, R); expect(o4.status).toBe(402); expect(o4.json.error).toMatch(/retard/);
+    const cr2 = await call('GET', '/api/vendor/credit', undefined, V); expect(cr2.json.overdueEur).toBeGreaterThanOrEqual(unit);
+    // compte bloqué explicitement
+    await call('POST', `/api/vendor/orders/${o3.json.order.id}/payment`, {}, V);
+    expect((await call('PUT', `/api/vendor/credit/${rid}`, { blocked: true }, V)).json.terms.blocked).toBe(true);
+    expect((await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 1 }] }, R)).json.error).toMatch(/bloqué/);
+    await call('PUT', `/api/vendor/credit/${rid}`, { blocked: false, paymentDays: 0, creditLimitEur: null }, V);
+    // rappels : rien à J-2 aujourd'hui (tout soldé)
+    const { remindPayments } = await import('../lib/credit.js'); expect((await remindPayments()).reminded).toBe(0);
+  });
+});
+
+describe('chantier 25 — paiement en ligne des commandes (Stripe Connect)', () => {
+  it('sans Stripe : messages clairs ; webhook signé → commande soldée, idempotent, SEPA en attente ignoré', async () => {
+    const { createHmac } = await import('node:crypto');
+    const sign = (body: string, t = Math.floor(Date.now() / 1000)) => `t=${t},v1=${createHmac('sha256', 'whsec_notif').update(`${t}.${body}`).digest('hex')}`;
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id; const rid = (await call('GET', '/api/settings', undefined, R)).json.restaurant.id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Pot 1 kg', packQty: 1, packPrice: 8 }, V)).json.offer;
+    const o = (await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 3 }] }, R)).json.order; expect(o?.id).toBeTruthy();
+    // Stripe non configuré
+    const vp = await call('GET', '/api/vendor/payments', undefined, V); expect(vp.json.configured).toBe(false);
+    expect((await call('POST', '/api/vendor/payments/onboard', {}, V)).status).toBe(503);
+    const st = await call('GET', `/api/orders/${o.id}/payment`, undefined, R); expect(st.json.available).toBe(false); expect(st.json.reason).toBe('stripe_off'); expect(st.json.remainingEur).toBe(Number(o.totalEur) + Number(o.deliveryFeeEur));
+    expect((await call('POST', `/api/orders/${o.id}/pay`, {}, R)).status).toBe(400);
+    // webhook : SEPA en attente → rien
+    const total = Math.round((Number(o.totalEur) + Number(o.deliveryFeeEur)) * 100);
+    const mk = (id: string, type: string, extra: Record<string, unknown>) => JSON.stringify({ id, type, data: { object: { id: 'cs_1', object: 'checkout.session', mode: 'payment', amount_total: total, payment_intent: 'pi_1', metadata: { kind: 'order_payment', orderId: o.id, vendorId: vid, restaurantId: rid }, ...extra } } });
+    let body = mk('evt_p1', 'checkout.session.completed', { payment_status: 'unpaid' });
+    expect((await call('POST', '/api/billing/webhook', body, { 'stripe-signature': sign(body) })).status).toBe(200);
+    expect((await call('GET', `/api/orders/${o.id}/payment`, undefined, R)).json.paidAt).toBeNull();
+    // puis paiement effectif
+    body = mk('evt_p2', 'checkout.session.async_payment_succeeded', { payment_status: 'paid' });
+    expect((await call('POST', '/api/billing/webhook', body, { 'stripe-signature': sign(body) })).status).toBe(200);
+    const paid = await call('GET', `/api/orders/${o.id}/payment`, undefined, R); expect(paid.json.paidAt).toBeTruthy(); expect(paid.json.paymentMethod).toBe('en_ligne'); expect(paid.json.remainingEur).toBe(0); expect(paid.json.reason).toBe('already_paid');
+    // rejoué → dupliqué, pas de double comptage
+    expect((await call('POST', '/api/billing/webhook', body, { 'stripe-signature': sign(body) })).json.duplicate).toBe(true);
+    expect((await call('GET', `/api/orders/${o.id}/payment`, undefined, R)).json.paidAmountEur).toBe(total / 100);
+    // signature invalide
+    expect((await call('POST', '/api/billing/webhook', body, { 'stripe-signature': 't=1,v1=bad' })).status).toBe(400);
+    // le grossiste voit la commande soldée dans son encours (plus dans les factures ouvertes)
+    const cr = await call('GET', '/api/vendor/credit', undefined, V); expect(cr.json.receivables.some((x: Json) => x.id === o.id)).toBe(false);
   });
 });

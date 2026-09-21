@@ -131,29 +131,50 @@
     {
       "idx": 18,
       "version": "7",
-      "when": 1789988524369,
-      "tag": "0018_verification_email",
+      "when": 1789988945108,
+      "tag": "0018_routes",
       "breakpoints": true
     },
     {
       "idx": 19,
       "version": "7",
-      "when": 1789989633954,
-      "tag": "0019_canaux_notifications",
+      "when": 1789991444069,
+      "tag": "0019_credit",
       "breakpoints": true
     },
     {
       "idx": 20,
       "version": "7",
-      "when": 1789991906258,
-      "tag": "0020_factures_abonnement",
+      "when": 1789993728178,
+      "tag": "0020_online_payment",
       "breakpoints": true
     },
     {
       "idx": 21,
       "version": "7",
-      "when": 1789993707419,
-      "tag": "0021_facturation_fournisseur",
+      "when": 1789994028178,
+      "tag": "0021_verification_email",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789994328178,
+      "tag": "0022_canaux_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789994628178,
+      "tag": "0023_factures_abonnement",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789994928178,
+      "tag": "0024_facturation_fournisseur",
       "breakpoints": true
     }
   ]

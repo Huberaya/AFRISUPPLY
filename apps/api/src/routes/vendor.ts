@@ -3,7 +3,7 @@
 import { Hono, type Context, type Next } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { getDb, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, commissionInvoices, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
+import { getDb, vendorCreditTerms, vendorRoutes as vendorRoutesTable, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, commissionInvoices, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
 import { similarity } from '../lib/quick.js';
 import { insertWithFreshReference } from '../lib/reference.js';
 import { requireAuth, type Env } from '../lib/auth.js';
@@ -13,6 +13,8 @@ import { sendMessage, waLink } from '../lib/sms.js';
 import { maybeRemind } from '../jobs/reminders.js';
 import { VENDOR_CGV_VERSION } from '../lib/cgv.js';
 import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
+import { exposureFor } from '../lib/credit.js';
+import { connectOnboardingLink, syncConnectAccount } from '../lib/payments.js';
 import { vendorPriceTiers, vendorCustomerPrices } from '@afrisupply/db';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
@@ -155,7 +157,7 @@ vendorRoutes.get('/vendor/orders', async (c) => {
   const db = await getDb(); const vid = c.get('vendorId'); const status = c.req.query('status');
   const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings })
     .from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId))
-    .where(status ? and(eq(orders.vendorId, vid), eq(orders.status, status as typeof orders.status.enumValues[number])) : eq(orders.vendorId, vid)).orderBy(desc(orders.createdAt)).limit(100);
+    .where(and(eq(orders.vendorId, vid), sql`${orders.status} not in ('brouillon','preparee')`, status ? eq(orders.status, status as typeof orders.status.enumValues[number]) : undefined)).orderBy(desc(orders.createdAt)).limit(100); // brouillons « à valider » invisibles côté grossiste
   const ids = rows.map((r) => r.order.id);
   const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq(products.id, orderLines.productId)).where(inArray(orderLines.orderId, ids)) : [];
   return c.json({ orders: rows.map((r) => ({ ...r.order, proofPhoto: undefined, proofSignature: undefined, restaurantName: r.restaurantName, city: r.city, address: r.address, restaurantPhone: r.settings?.notifyPhone ?? null, whatsappLink: waLink(r.settings?.notifyPhone, `Bonjour ${r.restaurantName}, au sujet de votre commande ${r.order.reference} via AFRISUPPLY : `), lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
@@ -263,7 +265,7 @@ vendorRoutes.post('/vendor/orders/:id/fulfillment', async (c) => {
   const patch: Partial<typeof orders.$inferInsert> = { fulfillment: d.step, deliverySlot: d.deliverySlot ?? o.deliverySlot, driverName: d.driverName ?? o.driverName };
   if (d.step === 'en_preparation') patch.preparedAt = now;
   if (d.step === 'en_livraison') { patch.shippedAt = now; patch.preparedAt = o.preparedAt ?? now; }
-  if (d.step === 'livree') { patch.vendorDeliveredAt = now; patch.shippedAt = o.shippedAt ?? now; patch.preparedAt = o.preparedAt ?? now; patch.proofReceiverName = d.receiverName; patch.proofPhoto = d.photo; patch.proofSignature = d.signature; patch.proofNote = d.note; }
+  if (d.step === 'livree') { patch.vendorDeliveredAt = now; patch.dueAt = new Date(now.getTime() + (o.paymentDays ?? 0) * 86_400_000).toISOString().slice(0, 10); patch.shippedAt = o.shippedAt ?? now; patch.preparedAt = o.preparedAt ?? now; patch.proofReceiverName = d.receiverName; patch.proofPhoto = d.photo; patch.proofSignature = d.signature; patch.proofNote = d.note; }
   const [upd] = await db.update(orders).set(patch).where(eq(orders.id, o.id)).returning();
   const [v] = await db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, vid));
   if (d.step === 'en_preparation') { void logOrderEvent(o.id, 'preparing', `${v.name} prépare votre commande${d.deliverySlot ? ` — livraison ${d.deliverySlot}` : ''}`, 'vendor'); }
@@ -578,4 +580,76 @@ vendorRoutes.get('/vendor/orders/:id/pdf', async (c) => {
   const kind = c.req.query('type') === 'livraison' ? 'bon_livraison' : 'bon_commande';
   const r = await buildOrderDoc(c.req.param('id'), kind); if (!r || r.order.vendorId !== c.get('vendorId')) return c.json({ error: 'Commande introuvable' }, 404);
   return new Response(new Uint8Array(r.doc), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${r.order.reference}-${kind}.pdf"` } });
+});
+
+// ---- Chantier 19 : tournées de livraison ----
+const routeSchema = z.object({ name: z.string().min(2).max(60), weekday: z.number().int().min(0).max(6), zones: z.array(z.string().min(1).max(40)).max(50).default([]), slots: z.array(z.string().min(2).max(20)).max(8).default([]), cutoffDaysBefore: z.number().int().min(0).max(7).default(1), cutoffTime: z.string().regex(/^\d{2}:\d{2}$/).default('14:00'), capacity: z.number().int().positive().max(500).nullable().optional(), active: z.boolean().default(true) });
+vendorRoutes.get('/vendor/routes', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const rows = await db.select().from(vendorRoutesTable).where(eq(vendorRoutesTable.vendorId, vid)).orderBy(vendorRoutesTable.weekday, vendorRoutesTable.name);
+  const since = new Date().toISOString().slice(0, 10);
+  const load = await db.select({ routeId: orders.routeId, date: orders.expectedAt, count: sql<number>`count(*)` }).from(orders).where(and(eq(orders.vendorId, vid), sql`${orders.routeId} is not null`, sql`${orders.expectedAt} >= ${since}`, sql`${orders.status} not in ('annulee')`)).groupBy(orders.routeId, orders.expectedAt);
+  return c.json({ routes: rows, upcoming: load.map((l) => ({ ...l, count: n(l.count) })) });
+});
+vendorRoutes.post('/vendor/routes', async (c) => {
+  const body = routeSchema.safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Tournée invalide (nom, jour 0–6, heure limite HH:MM)' }, 400);
+  const db = await getDb(); const [r] = await db.insert(vendorRoutesTable).values({ ...body.data, capacity: body.data.capacity ?? null, vendorId: c.get('vendorId') }).returning(); return c.json({ route: r }, 201);
+});
+vendorRoutes.put('/vendor/routes/:id', async (c) => {
+  const body = routeSchema.partial().safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Tournée invalide' }, 400);
+  const db = await getDb(); const [r] = await db.update(vendorRoutesTable).set(body.data).where(and(eq(vendorRoutesTable.id, c.req.param('id')), eq(vendorRoutesTable.vendorId, c.get('vendorId')))).returning(); if (!r) return c.json({ error: 'Tournée introuvable' }, 404); return c.json({ route: r });
+});
+vendorRoutes.delete('/vendor/routes/:id', async (c) => {
+  const db = await getDb(); const [r] = await db.delete(vendorRoutesTable).where(and(eq(vendorRoutesTable.id, c.req.param('id')), eq(vendorRoutesTable.vendorId, c.get('vendorId')))).returning(); if (!r) return c.json({ error: 'Tournée introuvable' }, 404); return c.json({ ok: true });
+});
+
+// ---- Chantier 29 : conditions de paiement, encours, encaissements ----
+vendorRoutes.get('/vendor/credit', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId'); const t = new Date().toISOString().slice(0, 10);
+  const clients = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city }).from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId)).where(eq(orders.vendorId, vid)).groupBy(restaurants.id, restaurants.name, restaurants.city);
+  const terms = await db.select().from(vendorCreditTerms).where(eq(vendorCreditTerms.vendorId, vid));
+  const ids = [...new Set([...clients.map((x) => x.id), ...terms.map((x) => x.restaurantId)])];
+  const exp = await exposureFor(vid, ids);
+  const names = new Map(clients.map((x) => [x.id, x]));
+  const extra = ids.filter((id) => !names.has(id)); if (extra.length) for (const r of await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city }).from(restaurants).where(inArray(restaurants.id, extra))) names.set(r.id, r);
+  const rows = ids.map((id) => { const tm = terms.find((x) => x.restaurantId === id); const r = names.get(id)!; return { restaurantId: id, name: r.name, city: r.city, paymentDays: tm?.paymentDays ?? 0, creditLimitEur: tm?.creditLimitEur === null || tm?.creditLimitEur === undefined ? null : n(tm.creditLimitEur), blocked: tm?.blocked ?? false, note: tm?.note ?? null, ...exp.get(id)! }; }).sort((a, b) => b.outstandingEur - a.outstandingEur);
+  const receivables = await db.select({ id: orders.id, reference: orders.reference, restaurantId: orders.restaurantId, restaurantName: restaurants.name, totalEur: orders.totalEur, feeEur: orders.deliveryFeeEur, paidAmountEur: orders.paidAmountEur, dueAt: orders.dueAt, paymentDays: orders.paymentDays, status: orders.status, deliveredAt: sql<string | null>`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})` })
+    .from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId)).where(and(eq(orders.vendorId, vid), sql`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql`${orders.paidAt} is null`)).orderBy(orders.dueAt);
+  const items = receivables.map((r) => ({ ...r, dueEur: Math.round((n(r.totalEur) + n(r.feeEur) - n(r.paidAmountEur)) * 100) / 100, overdue: !!r.dueAt && r.dueAt < t })).filter((r) => r.dueEur > 0);
+  return c.json({ clients: rows, receivables: items, totalEur: Math.round(items.reduce((a, r) => a + r.dueEur, 0) * 100) / 100, overdueEur: Math.round(items.filter((r) => r.overdue).reduce((a, r) => a + r.dueEur, 0) * 100) / 100 });
+});
+vendorRoutes.put('/vendor/credit/:restaurantId', async (c) => {
+  const body = z.object({ paymentDays: z.number().int().min(0).max(90).optional(), creditLimitEur: z.number().min(0).max(1_000_000).nullable().optional(), blocked: z.boolean().optional(), note: z.string().max(300).nullable().optional() }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Conditions invalides (délai 0–90 jours)' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId'); const rid = c.req.param('restaurantId');
+  const [r] = await db.select({ id: restaurants.id }).from(restaurants).where(eq(restaurants.id, rid)); if (!r) return c.json({ error: 'Restaurant introuvable' }, 404);
+  const vals = { ...body.data, creditLimitEur: body.data.creditLimitEur === undefined ? undefined : body.data.creditLimitEur === null ? null : body.data.creditLimitEur.toFixed(2), updatedAt: new Date() };
+  const [row] = await db.insert(vendorCreditTerms).values({ vendorId: vid, restaurantId: rid, ...vals }).onConflictDoUpdate({ target: [vendorCreditTerms.vendorId, vendorCreditTerms.restaurantId], set: vals }).returning();
+  return c.json({ terms: row });
+});
+/** Encaissement (total ou partiel) d'une commande livrée. */
+vendorRoutes.post('/vendor/orders/:id/payment', async (c) => {
+  const body = z.object({ amountEur: z.number().positive().max(1_000_000).optional(), method: z.enum(['virement', 'cb', 'especes', 'cheque', 'prelevement', 'avoir']).default('virement'), paidAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).safeParse(await c.req.json().catch(() => ({}))); if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid))); if (!o) return c.json({ error: 'Commande introuvable' }, 404);
+  if (!['livree', 'livree_partiel'].includes(o.status) && !o.vendorDeliveredAt) return c.json({ error: 'Seule une commande livrée peut être encaissée' }, 400);
+  if (o.paidAt) return c.json({ error: 'Commande déjà soldée' }, 409);
+  const total = Math.round((n(o.totalEur) + n(o.deliveryFeeEur)) * 100) / 100; const already = n(o.paidAmountEur); const amt = body.data.amountEur ?? Math.max(0, total - already);
+  if (already + amt > total + 0.005) return c.json({ error: `Montant supérieur au reste dû (${(total - already).toFixed(2)} €)` }, 400);
+  const newPaid = Math.round((already + amt) * 100) / 100; const settled = newPaid >= total - 0.005;
+  const [upd] = await db.update(orders).set({ paidAmountEur: newPaid.toFixed(2), paidAt: settled ? (body.data.paidAt ? new Date(`${body.data.paidAt}T12:00:00Z`) : new Date()) : null, paymentMethod: body.data.method }).where(eq(orders.id, o.id)).returning();
+  void logOrderEvent(o.id, 'note', settled ? `Paiement reçu (${body.data.method}) — commande soldée` : `Acompte reçu : ${amt.toFixed(2)} € (${body.data.method}) — reste ${(total - newPaid).toFixed(2)} €`, 'vendor');
+  return c.json({ order: upd, settled, remainingEur: Math.round((total - newPaid) * 100) / 100 });
+});
+
+// ---- Chantier 25 : paiement en ligne (Stripe Connect) ----
+vendorRoutes.get('/vendor/payments', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId'); const [v] = await db.select({ acct: vendors.stripeAccountId, enabled: vendors.stripePayoutsEnabled, commissionPct: vendors.commissionPct }).from(vendors).where(eq(vendors.id, vid));
+  if (!stripeConfigured()) return c.json({ configured: false, accountId: v.acct, payoutsEnabled: false, chargesEnabled: false, requirements: [], commissionPct: n(v.commissionPct) });
+  const st = v.acct ? await syncConnectAccount(vid).catch(() => ({ accountId: v.acct, payoutsEnabled: v.enabled, chargesEnabled: v.enabled, requirements: [] as string[] })) : { accountId: null, payoutsEnabled: false, chargesEnabled: false, requirements: [] as string[] };
+  const online = await db.select({ count: sql<number>`count(*)`, sum: sql<number>`coalesce(sum(${orders.paidAmountEur}),0)` }).from(orders).where(and(eq(orders.vendorId, vid), eq(orders.paymentMethod, 'en_ligne')));
+  return c.json({ configured: true, ...st, commissionPct: n(v.commissionPct), onlinePayments: n(online[0]?.count), onlineEur: n(online[0]?.sum) });
+});
+vendorRoutes.post('/vendor/payments/onboard', async (c) => {
+  if (!stripeConfigured()) return c.json({ error: 'Paiement en ligne non configuré sur la plateforme' }, 503);
+  try { return c.json(await connectOnboardingLink(c.get('vendorId'), c.get('user').email)); } catch (e) { return c.json({ error: (e as Error).message }, 502); }
 });

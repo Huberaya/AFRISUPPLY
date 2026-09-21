@@ -19,6 +19,7 @@ import { notifyCriticalAlerts, pendingImmediateAlerts, markAlertsNotified } from
 import { backupAllRestaurants } from '../lib/backup.js';
 import { recordJobRun, statusFrom } from '../lib/job-runs.js';
 import { watchdog } from '../lib/ops-health.js';
+import { remindPayments } from '../lib/credit.js';
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -201,6 +202,9 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
   for (const e of errors) void captureException(new Error(`daily digest failed: ${e.error}`), { route: '/api/jobs/daily', restaurantId: e.restaurantId });
   try { if (!opts.dryRun) (summary as Record<string, unknown>).recurring = (await runRecurringOrders(opts.now)).results.length; } catch (e) { await captureException(e, { route: 'jobs/recurring' }); }
   try { (summary as Record<string, unknown>).reminders = opts.dryRun ? 'skipped' : (await remindPendingVendorOrders({ now: opts.now })).reminded; } catch (e) { await captureException(e, { route: 'jobs/reminders' }); }
+  // Chantier 29 (leur apport) : rappel des encours/retards de paiement — résultat consigné dans le
+  // résumé de la passe, donc visible dans la supervision (job_runs) et non seulement dans les journaux.
+  try { if (!opts.dryRun) (summary as Record<string, unknown>).payments = (await remindPayments(opts.now)).reminded; } catch (e) { await captureException(e, { route: 'jobs/payments' }); }
   // Chantier 12 : sauvegarde quotidienne de chaque restaurant (fichier vérifiable + rotation).
   // Une sauvegarde n'est utile que si elle existe vraiment : on l'écrit, on note sa taille, et
   // l'échec d'écriture est signalé (jamais avalé).

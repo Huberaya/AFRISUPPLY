@@ -2,8 +2,9 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, sql, desc } from 'drizzle-orm';
-import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors } from '@afrisupply/db';
+import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors, orders } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
+import { applyOrderPayment, createOrderCheckout, paymentAvailability } from '../lib/payments.js';
 import { PLANS, FOUNDER_OFFER } from './public.js';
 import { SUPPORT } from '../lib/ops-health.js';
 import {
@@ -112,7 +113,9 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
   const o = (evt.data?.object ?? {}) as Record<string, unknown>;
   let rid: string | undefined;
   try {
-    if (evt.type === 'checkout.session.completed' && o.mode === 'subscription' && typeof o.subscription === 'string') {
+    if ((evt.type === 'checkout.session.completed' || evt.type === 'checkout.session.async_payment_succeeded') && o.mode === 'payment' && (o.metadata as Record<string, string> | undefined)?.kind === 'order_payment') {
+      await applyOrderPayment(o as Parameters<typeof applyOrderPayment>[0]); rid = (o.metadata as Record<string, string>).restaurantId; // chantier 25
+    } else if (evt.type === 'checkout.session.completed' && o.mode === 'subscription' && typeof o.subscription === 'string') {
       const sub = await stripe<Parameters<typeof applySubscription>[0]>('GET', `/subscriptions/${o.subscription}`); rid = (await applySubscription(sub)).rid;
     } else if (evt.type === 'checkout.session.completed' && o.mode === 'setup') {
       // Chantier 8 : un fournisseur vient d'enregistrer sa carte pour les commissions.
@@ -144,11 +147,25 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
 // ---------- Côté restaurant ----------
 export const billingRoutes = new Hono<Env>();
 
-// Chantier 2 (audit) — souscrire, payer ou résilier : propriétaire uniquement.
 billingRoutes.on(['POST'], '/billing/checkout', requireMinRole('owner'));
 billingRoutes.on(['POST'], '/billing/portal', requireMinRole('owner'));
 billingRoutes.on(['POST'], '/billing/sync', requireMinRole('owner'));
 billingRoutes.use('*', requireAuth, requireRestaurant);
+
+// Chantier 25 : payer une commande marketplace en ligne (CB / SEPA) — responsable ou propriétaire.
+billingRoutes.on(['POST'], '/orders/:id/pay', requireMinRole('manager'));
+billingRoutes.post('/orders/:id/pay', async (c) => {
+  try { const r = await createOrderCheckout(c.req.param('id'), c.get('restaurantId'), c.get('user').email); return c.json(r); }
+  catch (e) { const err = e as Error & { status?: number }; return c.json({ error: err.message }, (err.status ?? 500) as 400); }
+});
+billingRoutes.get('/orders/:id/payment', async (c) => {
+  const db = await getDb(); const [o] = await db.select().from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.restaurantId, c.get('restaurantId')))); if (!o?.vendorId) return c.json({ error: 'Introuvable' }, 404);
+  const [v] = await db.select({ stripeAccountId: vendors.stripeAccountId, stripePayoutsEnabled: vendors.stripePayoutsEnabled }).from(vendors).where(eq(vendors.id, o.vendorId));
+  const av = await paymentAvailability(o, v); const total = Number(o.totalEur) + Number(o.deliveryFeeEur);
+  return c.json({ ...av, totalEur: Math.round(total * 100) / 100, paidAmountEur: Number(o.paidAmountEur ?? 0), remainingEur: Math.max(0, Math.round((total - Number(o.paidAmountEur ?? 0)) * 100) / 100), paidAt: o.paidAt, paymentMethod: o.paymentMethod, dueAt: o.dueAt });
+});
+
+// Chantier 2 (audit) — souscrire, payer ou résilier : propriétaire uniquement.
 
 billingRoutes.get('/billing', async (c) => {
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.get('restaurantId')));

@@ -172,9 +172,12 @@ l'application fonctionne, mais plusieurs promesses n'étaient pas tenues. Les ch
 | 9 | Prévision robuste (audit 2) : cascade de sources, relances, saisonnalité | ✅ livré | `31caa76` |
 | 10 | Qualité, CI et dette : rendre le dépôt fiable et vérifiable | ✅ livré | `f042307` |
 | 11 | UX : navigation par tâches, dialogues intégrés, parcours guidé, mobile | ✅ livré | voir `git log` |
-| — | Exploitation : sauvegardes, supervision, support | ⏳ à venir | — |
+| 12 | Exploitation : sauvegardes vérifiées, restauration prouvée, supervision, support | ✅ livré | voir `git log` |
 
 Les rapports détaillés (fichiers, fonctionnalités, tests, ce qui reste) accompagnent l'audit hors dépôt.
+
+Rapports de chantier : `docs/RAPPORT_CHANTIER_4_ANALYSE.md` → `docs/RAPPORT_CHANTIER_12_EXPLOITATION.md`
+(même dossier que l'audit), plus le protocole de recette terrain `docs/CHANTIER_12_RECETTE_TERRAIN.md`.
 
 ## Modules livrés avant l'audit
 
@@ -191,3 +194,8 @@ WhatsApp/SMS (`CHANTIER_18_WHATSAPP_SMS.md`), préparation & livraison (`CHANTIE
 ruptures partielles (`CHANTIER_21_RUPTURES_SUBSTITUTIONS.md`), CGV fournisseur (`CHANTIER_22_CGV_FOURNISSEUR.md`),
 recommandation récurrente (`CHANTIER_24_RECOMMANDER_RECURRENT.md`), litiges & avoirs (`CHANTIER_26_LITIGES_AVOIRS.md`),
 avis & fiabilité (`CHANTIER_27_AVIS_FIABILITE.md`), tarifs par volume (`CHANTIER_28_TARIFS_VOLUME_NEGOCIES.md`).
+
+- Chantier 19 — Tournées & créneaux de livraison (jours/zones/heure limite/capacité côté grossiste, choix de la date côté restaurant) : `docs/CHANTIER_19_TOURNEES_CRENEAUX.md`
+- Chantier 24 bis — Récurrentes « me demander avant » (brouillon + validation en 1 clic) : `docs/CHANTIER_24_BIS_RECURRENTES_A_VALIDER.md`
+- Chantier 29 — Encours & conditions de paiement (délais/plafonds par client, encaissements, rappels) : `docs/CHANTIER_29_ENCOURS_PAIEMENT.md`
+- Chantier 25 — Paiement en ligne des commandes (Stripe Connect, commission à la source) : `docs/CHANTIER_25_PAIEMENT_EN_LIGNE.md`

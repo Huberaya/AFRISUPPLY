@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Send, PackageCheck, Copy, MessageCircle, Mail, Pencil, XCircle, AlertTriangle } from 'lucide-react';
 import { api, ApiError, fmtEur, fmtQty, fmtDate, STATUS_LABEL, openPdf } from '../lib/api';
 import { useApi } from '../lib/useApi';
@@ -49,8 +49,12 @@ export default function Orders() {
   const confirmer = useConfirm();
   const toast = useToast();
   // Chantier 1 (audit) : anti double-clic + affichage des refus serveur (déjà réceptionnée, quantité invraisemblable)
-  const [recvBusy, setRecvBusy] = useState(false);
+  const [recvBusy, setRecvBusy] = useState(false); const [busy, setBusy] = useState(false);
   const [recvErr, setRecvErr] = useState<{ message: string; code?: string } | null>(null);
+  const payables = useApi<{ items: { id: string; reference: string; vendorName: string; dueEur: number; dueAt: string | null; overdue: boolean }[]; totalEur: number; overdueEur: number }>('/marketplace/payables');
+  const [sp, setSp] = useSearchParams(); const validateId = sp.get('validate'); const paidId = sp.get('paid');
+  const payOnline = async (id: string) => { setBusy(true); try { const r = await api<{ url: string }>(`/orders/${id}/pay`, { method: 'POST' }); window.location.href = r.url; } catch (e) { setFlash((e as Error).message); setBusy(false); } };
+  const sendPlatform = async (o: O) => { setBusy(true); try { const r = await api<{ message: string }>(`/marketplace/orders/${o.id}/send`, { method: 'POST' }); setFlash(r.message); if (validateId) setSp({}); await reload(); } catch (e) { setFlash((e as Error).message); } finally { setBusy(false); } };
   const openSend = async (o: O) => { const msg = await api<Msg>(`/orders/${o.id}/message`); setSending({ o, msg }); setCopied(false); };
   const markSent = async (o: O) => {
     try {
@@ -163,7 +167,10 @@ export default function Orders() {
         </div>}
         {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <Timeline o={o} />}
         <div className="mt-3 flex flex-wrap gap-2">
-          {o.status === 'preparee' && <><button onClick={() => void openSend(o)} className="btn-primary !py-1.5"><Send size={14} /> Envoyer au fournisseur</button><button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button></>}
+          {o.status === 'preparee' && o.vendorId && validateId === o.id && <span className="pill bg-amber-100 text-amber-800">⏳ En attente de votre validation</span>}
+          {o.status === 'preparee' && o.vendorId && <button onClick={() => void sendPlatform(o)} disabled={busy} className="btn-primary !py-1.5"><Send size={14} /> Valider et envoyer à {o.supplierName}</button>}
+          {o.status === 'preparee' && !o.vendorId && <><button onClick={() => void openSend(o)} className="btn-primary !py-1.5"><Send size={14} /> Envoyer au fournisseur</button><button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button></>}
+          {o.status === 'preparee' && o.vendorId && <button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button>}
           {['envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void openSend(o)} className="btn-ghost !py-1.5"><Copy size={14} /> Revoir le message</button>}
           {!['brouillon', 'annulee'].includes(o.status) && <button onClick={() => void openPdf(`/orders/${o.id}/pdf`)} className="btn-ghost !py-1.5">📄 PDF</button>}
           {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <button onClick={() => setReorder(o.id)} className="btn-ghost !py-1.5 text-brand-800">🔁 Recommander</button>}
@@ -180,6 +187,8 @@ export default function Orders() {
         action={<div className="flex gap-2"><Link to="/app/achats/ecarts" className={`btn-ghost ${disc.data?.items.length ? '!bg-orange-50 !text-orange-800' : ''}`}><AlertTriangle size={16} /> Écarts{disc.data?.items.length ? ` (${disc.data.items.length} · ${fmtEur(disc.data.openValue, 0)})` : ''}</Link><Link to="/app/achats/panier" className="btn-primary">🧺 Panier intelligent</Link></div>} />
       <Steps steps={FLOW_STEPS} current={2} title="Où en suis-je ?" />
       {flash && <p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{flash}</p>}
+      {paidId && <p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">✅ Paiement transmis. La commande sera marquée réglée dès confirmation de la banque (immédiat par carte, 2 à 5 jours par prélèvement SEPA). <button className="underline" onClick={() => setSp({})}>Fermer</button></p>}
+      {payables.data && payables.data.items.length > 0 && <div className={`card ${payables.data.overdueEur > 0 ? 'border-red-200 bg-red-50/40' : ''}`}><p className="font-bold">💳 Factures fournisseurs à régler : {payables.data.totalEur.toFixed(2).replace('.', ',')} €{payables.data.overdueEur > 0 && <span className="ml-2 text-red-700">dont {payables.data.overdueEur.toFixed(2).replace('.', ',')} € en retard</span>}</p><ul className="mt-1 text-sm text-stone-700">{payables.data.items.slice(0, 5).map((p) => <li key={p.id}>{p.reference} · {p.vendorName} · <b>{p.dueEur.toFixed(2).replace('.', ',')} €</b> · {p.dueAt ? <span className={p.overdue ? 'font-semibold text-red-700' : ''}>échéance {new Date(p.dueAt).toLocaleDateString('fr-FR')}{p.overdue ? ' — en retard' : ''}</span> : 'comptant'} <button className="btn-ghost !px-2 !py-0.5 text-xs text-brand-800" disabled={busy} onClick={() => void payOnline(p.id)}>💳 Payer en ligne</button></li>)}</ul>{payables.data.overdueEur > 0 && <p className="mt-1 text-xs text-red-700">Une facture en retard bloque les nouvelles commandes à crédit chez ce fournisseur.</p>}</div>}
       {review && <ReviewModal orderId={review.id} vendorName={review.supplierName} onClose={() => setReview(null)} onDone={(m) => { setReview(null); setFlash(m); void pend.reload(); }} />}
       {reorder && <ReorderModal orderId={reorder} onClose={() => setReorder(null)} onDone={(m) => { setReorder(null); setFlash(m); void reload(); }} />}
       <RecurringList onChanged={() => void reload()} />

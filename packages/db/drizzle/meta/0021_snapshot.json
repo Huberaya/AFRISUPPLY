@@ -1,6 +1,6 @@
 {
-  "id": "9b43f7dd-f2a7-4b85-a113-dc09fa3f70b1",
-  "prevId": "24828b18-52d9-46f4-8b73-81567305e25f",
+  "id": "f20b480e-ce63-46e5-948e-7c4b5e3174a1",
+  "prevId": "86738378-28a5-4d82-ba9e-e91b03c935e5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -83,12 +83,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "notified_at": {
-          "name": "notified_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -260,19 +254,6 @@
         "payload": {
           "name": "payload",
           "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'recu'"
-        },
-        "error": {
-          "name": "error",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -2495,6 +2476,54 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "route_id": {
+          "name": "route_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payment_days": {
+          "name": "payment_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "due_at": {
+          "name": "due_at",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "paid_at": {
+          "name": "paid_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "paid_amount_eur": {
+          "name": "paid_amount_eur",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payment_method": {
+          "name": "payment_method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stripe_checkout_id": {
+          "name": "stripe_checkout_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stripe_payment_intent_id": {
+          "name": "stripe_payment_intent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4041,191 +4070,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.subscription_invoices": {
-      "name": "subscription_invoices",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "restaurant_id": {
-          "name": "restaurant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "number": {
-          "name": "number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "plan": {
-          "name": "plan",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "founder": {
-          "name": "founder",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "amount_eur": {
-          "name": "amount_eur",
-          "type": "numeric(10, 2)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "vat_rate": {
-          "name": "vat_rate",
-          "type": "numeric(5, 2)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'20'"
-        },
-        "period_start": {
-          "name": "period_start",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "period_end": {
-          "name": "period_end",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source": {
-          "name": "source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'stripe'"
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'payee'"
-        },
-        "stripe_invoice_id": {
-          "name": "stripe_invoice_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "hosted_url": {
-          "name": "hosted_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "paid_at": {
-          "name": "paid_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "issued_at": {
-          "name": "issued_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by": {
-          "name": "created_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "subscription_invoices_restaurant_idx": {
-          "name": "subscription_invoices_restaurant_idx",
-          "columns": [
-            {
-              "expression": "restaurant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "issued_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "subscription_invoices_restaurant_id_restaurants_id_fk": {
-          "name": "subscription_invoices_restaurant_id_restaurants_id_fk",
-          "tableFrom": "subscription_invoices",
-          "tableTo": "restaurants",
-          "columnsFrom": [
-            "restaurant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "subscription_invoices_created_by_users_id_fk": {
-          "name": "subscription_invoices_created_by_users_id_fk",
-          "tableFrom": "subscription_invoices",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "subscription_invoices_number_unique": {
-          "name": "subscription_invoices_number_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "number"
-          ]
-        },
-        "subscription_invoices_stripe_invoice_id_unique": {
-          "name": "subscription_invoices_stripe_invoice_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "stripe_invoice_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.supplier_offers": {
       "name": "supplier_offers",
       "schema": "",
@@ -5471,18 +5315,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "stripe_default_payment_method": {
-          "name": "stripe_default_payment_method",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "billing_email": {
-          "name": "billing_email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "contact_email": {
           "name": "contact_email",
           "type": "text",
@@ -5515,6 +5347,19 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "stripe_account_id": {
+          "name": "stripe_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stripe_payouts_enabled": {
+          "name": "stripe_payouts_enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         }
       },
       "indexes": {},
@@ -5532,6 +5377,249 @@
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
+    },
+    "public.vendor_credit_terms": {
+      "name": "vendor_credit_terms",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "vendor_id": {
+          "name": "vendor_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payment_days": {
+          "name": "payment_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "credit_limit_eur": {
+          "name": "credit_limit_eur",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "blocked": {
+          "name": "blocked",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "credit_terms_unique": {
+          "name": "credit_terms_unique",
+          "columns": [
+            {
+              "expression": "vendor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "vendor_credit_terms_vendor_id_vendors_id_fk": {
+          "name": "vendor_credit_terms_vendor_id_vendors_id_fk",
+          "tableFrom": "vendor_credit_terms",
+          "tableTo": "vendors",
+          "columnsFrom": [
+            "vendor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "vendor_credit_terms_restaurant_id_restaurants_id_fk": {
+          "name": "vendor_credit_terms_restaurant_id_restaurants_id_fk",
+          "tableFrom": "vendor_credit_terms",
+          "tableTo": "restaurants",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.vendor_routes": {
+      "name": "vendor_routes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "vendor_id": {
+          "name": "vendor_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "weekday": {
+          "name": "weekday",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "zones": {
+          "name": "zones",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "slots": {
+          "name": "slots",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "cutoff_days_before": {
+          "name": "cutoff_days_before",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "cutoff_time": {
+          "name": "cutoff_time",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'14:00'"
+        },
+        "capacity": {
+          "name": "capacity",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "vendor_routes_vendor_idx": {
+          "name": "vendor_routes_vendor_idx",
+          "columns": [
+            {
+              "expression": "vendor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "weekday",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "vendor_routes_vendor_id_vendors_id_fk": {
+          "name": "vendor_routes_vendor_id_vendors_id_fk",
+          "tableFrom": "vendor_routes",
+          "tableTo": "vendors",
+          "columnsFrom": [
+            "vendor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
   "enums": {
@@ -5544,8 +5632,7 @@
         "hausse_prix",
         "opportunite",
         "fournisseur",
-        "ecart_livraison",
-        "saisie"
+        "ecart_livraison"
       ]
     },
     "public.alert_severity": {

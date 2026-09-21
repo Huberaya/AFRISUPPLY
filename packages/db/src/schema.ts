@@ -255,6 +255,15 @@ export const orders = pgTable('orders', {
   proofPhoto: text('proof_photo'),                      // data URL jpeg compressée (≤ 400 Ko)
   proofSignature: text('proof_signature'),              // data URL png
   proofNote: text('proof_note'),
+  routeId: uuid('route_id'),                            // chantier 19 : tournée choisie (vendor_routes.id)
+  // chantier 29 : encours & conditions de paiement (commandes plateforme)
+  paymentDays: integer('payment_days'),                 // 0 = comptant à la livraison, 30 = 30 jours…
+  dueAt: date('due_at'),                                // échéance (livraison + paymentDays)
+  paidAt: timestamp('paid_at', { withTimezone: true }),
+  paidAmountEur: numeric('paid_amount_eur', { precision: 10, scale: 2 }),
+  paymentMethod: text('payment_method'),                // virement | cb | especes | cheque | prelevement | avoir
+  stripeCheckoutId: text('stripe_checkout_id'),         // chantier 25 : session Checkout du paiement en ligne (cs_…)
+  stripePaymentIntentId: text('stripe_payment_intent_id'),
   // chantier 21 : proposition de modification du grossiste (ruptures / substitutions) en attente du restaurant
   proposal: jsonb('proposal').$type<OrderProposal>(),
   proposalAt: timestamp('proposal_at', { withTimezone: true }),
@@ -524,6 +533,8 @@ export const vendors = pgTable('vendors', {
   stripeCustomerId: text('stripe_customer_id'),           // facturation mensuelle des commissions
   stripeDefaultPaymentMethod: text('stripe_default_payment_method'), // chantier 8 : carte enregistrée → prélèvement
   billingEmail: text('billing_email'),                    // chantier 8 : destinataire des factures de commission
+  stripeAccountId: text('stripe_account_id'),             // chantier 25 : compte Stripe Connect (Express) pour recevoir les paiements en ligne
+  stripePayoutsEnabled: boolean('stripe_payouts_enabled').default(false).notNull(),
   contactEmail: text('contact_email'),
   contactPhone: text('contact_phone'),
   whatsapp: text('whatsapp'),
@@ -795,3 +806,35 @@ export const vendorReviews = pgTable('vendor_reviews', {
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('vendor_reviews_vendor_idx').on(t.vendorId), uniqueIndex('vendor_reviews_order_unique').on(t.orderId)]);
+
+// -------------------------------------------------------------
+// Chantier 19 — Tournées de livraison du grossiste (jour, zones, créneaux, heure limite, capacité)
+// -------------------------------------------------------------
+export const vendorRoutes = pgTable('vendor_routes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),                                            // « Tournée Est 93/94 »
+  weekday: integer('weekday').notNull(),                                   // 0 = dimanche … 6 = samedi
+  zones: text('zones').array().default(sql`'{}'::text[]`).notNull(),       // codes postaux (2 ou 5 chiffres) / villes ; vide = toutes les zones du grossiste
+  slots: text('slots').array().default(sql`'{}'::text[]`).notNull(),       // « 6h–8h », « 8h–10h » ; vide = journée
+  cutoffDaysBefore: integer('cutoff_days_before').default(1).notNull(),    // commande au plus tard J-1…
+  cutoffTime: text('cutoff_time').default('14:00').notNull(),              // … avant 14:00 (heure de Paris)
+  capacity: integer('capacity'),                                           // nb max de commandes par tournée (null = illimité)
+  active: boolean('active').default(true).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('vendor_routes_vendor_idx').on(t.vendorId, t.weekday)]);
+
+// -------------------------------------------------------------
+// Chantier 29 — Conditions de paiement & encours accordés par un grossiste à un restaurant
+// -------------------------------------------------------------
+export const vendorCreditTerms = pgTable('vendor_credit_terms', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  paymentDays: integer('payment_days').default(0).notNull(),                          // 0 comptant, 15, 30, 45, 60
+  creditLimitEur: numeric('credit_limit_eur', { precision: 10, scale: 2 }),            // null = pas de plafond
+  blocked: boolean('blocked').default(false).notNull(),                                // compte bloqué (impayé) : plus de commande à crédit
+  note: text('note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex('credit_terms_unique').on(t.vendorId, t.restaurantId)]);
