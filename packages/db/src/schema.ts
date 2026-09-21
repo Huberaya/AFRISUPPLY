@@ -683,3 +683,24 @@ export const claims = pgTable('claims', {
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('claims_vendor_idx').on(t.vendorId), index('claims_restaurant_idx').on(t.restaurantId)]);
+
+// ---------- Chantier 28 : tarifs par volume & prix négociés ----------
+export const vendorPriceTiers = pgTable('vendor_price_tiers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorOfferId: uuid('vendor_offer_id').notNull().references(() => vendorOffers.id, { onDelete: 'cascade' }),
+  minPacks: integer('min_packs').notNull(),                                   // à partir de N colis
+  packPriceEur: numeric('pack_price_eur', { precision: 10, scale: 2 }).notNull(),
+}, (t) => [index('price_tiers_offer_idx').on(t.vendorOfferId), uniqueIndex('price_tiers_unique').on(t.vendorOfferId, t.minPacks)]);
+
+export const vendorCustomerPrices = pgTable('vendor_customer_prices', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  vendorOfferId: uuid('vendor_offer_id').references(() => vendorOffers.id, { onDelete: 'cascade' }), // null = remise globale sur tout le catalogue
+  packPriceEur: numeric('pack_price_eur', { precision: 10, scale: 2 }),       // prix négocié ferme (si offre)
+  discountPct: numeric('discount_pct', { precision: 5, scale: 2 }),           // ou remise % (offre ou globale)
+  validUntil: date('valid_until'),
+  note: text('note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('customer_prices_vendor_idx').on(t.vendorId), index('customer_prices_restaurant_idx').on(t.restaurantId)]);

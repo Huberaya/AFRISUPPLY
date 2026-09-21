@@ -11,6 +11,7 @@ import { sendMail } from '../lib/mailer.js';
 import { sendMessage } from '../lib/sms.js';
 import { logOrderEvent } from '../lib/order-events.js';
 import { APP_URL } from '../jobs/daily.js';
+import { loadPricing, priceFor } from '../lib/pricing.js';
 
 export const marketplaceRoutes = new Hono<Env>();
 marketplaceRoutes.use('*', requireAuth, requireRestaurant);
@@ -50,7 +51,8 @@ marketplaceRoutes.get('/marketplace/vendors/:id', async (c) => {
   for (const o of await db.select({ productId: supplierOffers.productId, unit: sql<number>`min(${supplierOffers.packPriceEur} / ${supplierOffers.packQty})` }).from(supplierOffers).where(eq(supplierOffers.restaurantId, rid)).groupBy(supplierOffers.productId)) myBest.set(o.productId, n(o.unit));
   const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq(inventoryItems.restaurantId, rid))).map((x) => x.productId));
   const [link] = await db.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.restaurantId, rid), eq(suppliers.vendorId, vid)));
-  const offers = rows.map(({ offer, product }) => { const unit = n(offer.packPriceEur) / n(offer.packQty); const best = myBest.get(product.id); return { ...offer, productName: product.name, category: product.category, unit: product.baseUnit, unitPrice: Math.round(unit * 10000) / 10000, myBestUnitPrice: best ?? null, savingPct: best ? Math.round(((best - unit) / best) * 1000) / 10 : null, tracked: mine.has(product.id) }; });
+  const pricing = await loadPricing(rows.map((r) => r.offer), rid);
+  const offers = rows.map(({ offer, product }) => { const pi = priceFor(offer, 1, pricing); const unit = pi.packPriceEur / n(offer.packQty); const best = myBest.get(product.id); return { ...offer, listPriceEur: pi.listPriceEur, packPriceEur: pi.packPriceEur.toFixed(2), negotiated: pi.negotiated, priceSource: pi.source, tiers: pi.tiers, productName: product.name, category: product.category, unit: product.baseUnit, unitPrice: Math.round(unit * 10000) / 10000, myBestUnitPrice: best ?? null, savingPct: best ? Math.round(((best - unit) / best) * 1000) / 10 : null, tracked: mine.has(product.id) }; });
   const gbs = await db.select().from(groupBuys).where(and(eq(groupBuys.vendorId, vid), eq(groupBuys.status, 'ouvert'), gte(groupBuys.closesAt, new Date())));
   return c.json({ vendor: v, offers, linkedSupplierId: link?.id ?? null, groupBuys: gbs });
 });
@@ -86,7 +88,8 @@ export async function placeVendorOrder(rid: string, vid: string, userId: string 
   const vo = await db.select().from(vendorOffers).where(and(eq(vendorOffers.vendorId, vid), inArray(vendorOffers.id, input.lines.map((l) => l.vendorOfferId))));
   if (vo.length !== input.lines.length) return { ok: false, error: 'Offre invalide', status: 400 };
   const out = vo.filter((o) => !o.inStock); if (out.length) return { ok: false, error: `Plus disponible chez ${v.name} : ${out.map((o) => o.packLabel).join(', ')}`, status: 400 };
-  const linesData = input.lines.map((l) => { const o = vo.find((x) => x.id === l.vendorOfferId)!; return { productId: o.productId, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n(o.packQty)).toFixed(3), unitPriceEur: (n(o.packPriceEur) / n(o.packQty)).toFixed(4), lineTotalEur: (l.packs * n(o.packPriceEur)).toFixed(2) }; });
+  const pricing = await loadPricing(vo, rid);
+  const linesData = input.lines.map((l) => { const o = vo.find((x) => x.id === l.vendorOfferId)!; const pp = priceFor(o, l.packs, pricing).packPriceEur; return { productId: o.productId, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n(o.packQty)).toFixed(3), unitPriceEur: (pp / n(o.packQty)).toFixed(4), lineTotalEur: (l.packs * pp).toFixed(2) }; });
   const total = linesData.reduce((a, l) => a + Number(l.lineTotalEur), 0);
   if (!input.skipMin && total < n(v.minOrderEur)) return { ok: false, error: `Minimum de commande ${eur(n(v.minOrderEur))} chez ${v.name} (panier : ${eur(total)})`, status: 400 };
   const reference = await nextOrderReference();
@@ -107,6 +110,16 @@ marketplaceRoutes.post('/marketplace/vendors/:id/orders', async (c) => {
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const res = await placeVendorOrder(rid, vid, user.id, body.data); if (!res.ok) return c.json({ error: res.error }, res.status as 400);
   return c.json({ order: res.order, message: `Commande ${res.order.reference} envoyée à ${res.vendorName} (${eur(res.total)}). Vous serez prévenu dès confirmation.` }, 201);
+});
+
+/** Chantier 28 : prix effectif d'un panier (paliers, négocié) avant commande. */
+marketplaceRoutes.post('/marketplace/vendors/:id/quote', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb(); const vid = c.req.param('id');
+  const body = z.object({ lines: z.array(z.object({ vendorOfferId: z.string().uuid(), packs: z.number().int().positive() })).min(1) }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const vo = await db.select().from(vendorOffers).where(and(eq(vendorOffers.vendorId, vid), inArray(vendorOffers.id, body.data.lines.map((l) => l.vendorOfferId))));
+  const pricing = await loadPricing(vo, rid);
+  const lines = body.data.lines.map((l) => { const o = vo.find((x) => x.id === l.vendorOfferId); if (!o) return null; const pi = priceFor(o, l.packs, pricing); return { vendorOfferId: o.id, packLabel: o.packLabel, packs: l.packs, listPriceEur: pi.listPriceEur, packPriceEur: pi.packPriceEur, source: pi.source, lineTotalEur: Math.round(l.packs * pi.packPriceEur * 100) / 100, savedEur: Math.round(l.packs * (pi.listPriceEur - pi.packPriceEur) * 100) / 100, nextTier: pi.nextTier ? { ...pi.nextTier, missingPacks: pi.nextTier.minPacks - l.packs, extraSavingEur: Math.round(pi.nextTier.minPacks * (pi.packPriceEur - pi.nextTier.packPriceEur) * 100) / 100 } : null }; }).filter((x): x is NonNullable<typeof x> => !!x);
+  return c.json({ lines, total: Math.round(lines.reduce((a, l) => a + l.lineTotalEur, 0) * 100) / 100, saved: Math.round(lines.reduce((a, l) => a + l.savedEur, 0) * 100) / 100 });
 });
 
 // ---------------- Chantier 24 : recommander en 1 clic + commandes récurrentes ----------------

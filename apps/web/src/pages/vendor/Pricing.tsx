@@ -1,0 +1,47 @@
+// Chantier 28 — Grossiste : paliers de volume par offre + prix négociés par client.
+import { useEffect, useState } from 'react';
+import { Tag, Users, Trash2, Plus } from 'lucide-react';
+import { api } from '../../lib/api';
+import { Field } from '../../components/Modal';
+
+type Offer = { id: string; productName: string; packLabel: string; packPriceEur: string; inStock: boolean };
+type Tier = { id?: string; vendorOfferId: string; minPacks: number; packPriceEur: string | number };
+type CP = { id: string; restaurantId: string; restaurantName: string; city: string | null; vendorOfferId: string | null; packPriceEur: string | null; discountPct: string | null; validUntil: string | null; note: string | null };
+type Client = { id: string; name: string; city: string | null; orders: number; gmv: number };
+const eur = (v: number | string) => `${Number(v).toFixed(2).replace('.', ',')} €`;
+
+export function Pricing() {
+  const [offers, setOffers] = useState<Offer[]>([]); const [data, setData] = useState<{ tiers: Tier[]; customers: CP[]; clients: Client[] } | null>(null); const [err, setErr] = useState<string | null>(null); const [msg, setMsg] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null); const [draft, setDraft] = useState<{ minPacks: string; packPriceEur: string }[]>([]);
+  const [cp, setCp] = useState({ restaurantId: '', vendorOfferId: '', mode: 'pct' as 'pct' | 'price', value: '', validUntil: '', note: '' });
+  const load = () => Promise.all([api<{ offers: Offer[] }>('/vendor/offers'), api<{ tiers: Tier[]; customers: CP[]; clients: Client[] }>('/vendor/pricing')]).then(([o, p]) => { setOffers(o.offers); setData(p); }).catch((e) => setErr((e as Error).message));
+  useEffect(() => { void load(); }, []);
+  const startEdit = (o: Offer) => { setEditing(o.id); setDraft((data?.tiers ?? []).filter((t) => t.vendorOfferId === o.id).map((t) => ({ minPacks: String(t.minPacks), packPriceEur: String(t.packPriceEur) }))); };
+  const saveTiers = async (o: Offer) => { setErr(null); try { await api(`/vendor/offers/${o.id}/tiers`, { method: 'PUT', json: { tiers: draft.filter((d) => d.minPacks && d.packPriceEur).map((d) => ({ minPacks: Number(d.minPacks), packPriceEur: Number(d.packPriceEur) })) } }); setEditing(null); setMsg(`Paliers enregistrés pour ${o.productName}.`); await load(); } catch (e) { setErr((e as Error).message); } };
+  const addCp = async () => { setErr(null); try { await api('/vendor/customer-prices', { method: 'POST', json: { restaurantId: cp.restaurantId, vendorOfferId: cp.vendorOfferId || null, packPriceEur: cp.mode === 'price' ? Number(cp.value) : undefined, discountPct: cp.mode === 'pct' ? Number(cp.value) : undefined, validUntil: cp.validUntil || null, note: cp.note || undefined } }); setCp({ ...cp, value: '', note: '' }); setMsg('Accord client enregistré : le restaurant voit désormais son prix dans votre catalogue.'); await load(); } catch (e) { setErr((e as Error).message); } };
+  if (!data) return <p className="text-stone-500">Chargement…</p>;
+  return (
+    <div className="space-y-5">
+      {msg && <p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{msg}</p>}{err && <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{err}</p>}
+      <section className="card !p-0"><div className="p-4 pb-2"><h2 className="flex items-center gap-2 font-bold"><Tag size={18} /> Paliers de volume</h2><p className="text-sm text-stone-500">« À partir de N colis, prix unitaire X ». Affiché aux restaurants ; appliqué automatiquement à la commande. Jusqu'à 6 paliers, prix décroissants.</p></div>
+        <table className="w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-3">Produit</th><th className="p-3">Cond.</th><th className="p-3 text-right">Catalogue</th><th className="p-3">Paliers</th><th className="p-3"></th></tr></thead>
+          <tbody className="divide-y divide-stone-100">{offers.map((o) => { const ts = data.tiers.filter((t) => t.vendorOfferId === o.id); return <tr key={o.id}><td className="p-3 font-semibold">{o.productName}</td><td className="p-3 text-stone-600">{o.packLabel}</td><td className="p-3 text-right">{eur(o.packPriceEur)}</td>
+            <td className="p-3">{editing === o.id ? <div className="space-y-1">{draft.map((d, i) => <div key={i} className="flex items-center gap-1 text-xs">à partir de <input type="number" min={2} className="input !w-16 !py-1" value={d.minPacks} onChange={(e) => setDraft(draft.map((x, k) => k === i ? { ...x, minPacks: e.target.value } : x))} /> colis → <input type="number" step="0.01" className="input !w-20 !py-1" value={d.packPriceEur} onChange={(e) => setDraft(draft.map((x, k) => k === i ? { ...x, packPriceEur: e.target.value } : x))} /> €<button className="text-red-600" onClick={() => setDraft(draft.filter((_, k) => k !== i))}><Trash2 size={13} /></button></div>)}{draft.length < 6 && <button className="text-xs text-brand-700 underline" onClick={() => setDraft([...draft, { minPacks: '', packPriceEur: '' }])}><Plus size={12} className="inline" /> palier</button>}</div> : ts.length ? <span className="text-emerald-700">{ts.map((t) => `${t.minPacks}+ : ${eur(t.packPriceEur)}`).join(' · ')}</span> : <span className="text-stone-400">—</span>}</td>
+            <td className="p-3 text-right">{editing === o.id ? <div className="flex gap-1"><button className="btn-primary !py-1" onClick={() => void saveTiers(o)}>OK</button><button className="btn-ghost !py-1" onClick={() => setEditing(null)}>✕</button></div> : <button className="btn-ghost !py-1" onClick={() => startEdit(o)}>Modifier</button>}</td></tr>; })}
+          {!offers.length && <tr><td colSpan={5} className="p-6 text-center text-stone-500">Ajoutez d'abord des produits au catalogue.</td></tr>}</tbody></table></section>
+
+      <section className="card space-y-3"><h2 className="flex items-center gap-2 font-bold"><Users size={18} /> Prix négociés par client</h2><p className="text-sm text-stone-500">Un tarif ferme sur un produit, une remise % sur un produit, ou une remise % sur tout votre catalogue pour un restaurant donné. Prioritaire sur les paliers (le plus bas des deux s'applique).</p>
+        {!data.clients.length && <p className="rounded-xl bg-stone-50 p-3 text-sm text-stone-600">Vos clients apparaîtront ici après leur première commande (ou dès qu'ils vous ajoutent comme fournisseur).</p>}
+        {data.clients.length > 0 && <div className="grid gap-2 sm:grid-cols-6">
+          <select className="input sm:col-span-2" value={cp.restaurantId} onChange={(e) => setCp({ ...cp, restaurantId: e.target.value })}><option value="">— Restaurant —</option>{data.clients.map((c) => <option key={c.id} value={c.id}>{c.name}{c.city ? ` (${c.city})` : ''} · {c.orders} cde · {eur(c.gmv)}</option>)}</select>
+          <select className="input sm:col-span-2" value={cp.vendorOfferId} onChange={(e) => setCp({ ...cp, vendorOfferId: e.target.value, mode: e.target.value ? cp.mode : 'pct' })}><option value="">Tout le catalogue (remise %)</option>{offers.map((o) => <option key={o.id} value={o.id}>{o.productName} · {o.packLabel} · {eur(o.packPriceEur)}</option>)}</select>
+          <div className="flex gap-1"><select className="input !w-24" value={cp.mode} disabled={!cp.vendorOfferId} onChange={(e) => setCp({ ...cp, mode: e.target.value as 'pct' })}><option value="pct">− %</option><option value="price">€ ferme</option></select><input type="number" step="0.01" className="input" placeholder={cp.mode === 'pct' ? '5' : '18.50'} value={cp.value} onChange={(e) => setCp({ ...cp, value: e.target.value })} /></div>
+          <button className="btn-primary" disabled={!cp.restaurantId || !cp.value} onClick={() => void addCp()}>Enregistrer</button>
+          <Field label="Valable jusqu'au (optionnel)"><input type="date" className="input" value={cp.validUntil} onChange={(e) => setCp({ ...cp, validUntil: e.target.value })} /></Field>
+          <div className="sm:col-span-5"><Field label="Note interne"><input className="input" value={cp.note} onChange={(e) => setCp({ ...cp, note: e.target.value })} placeholder="Ex. accord verbal du 12/09, volume 200 kg/mois" /></Field></div>
+        </div>}
+        {data.customers.length > 0 && <table className="w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-2">Client</th><th className="p-2">Produit</th><th className="p-2">Accord</th><th className="p-2">Validité</th><th className="p-2"></th></tr></thead><tbody className="divide-y divide-stone-100">{data.customers.map((c) => { const o = offers.find((x) => x.id === c.vendorOfferId); return <tr key={c.id}><td className="p-2 font-semibold">{c.restaurantName}</td><td className="p-2">{o ? `${o.productName} · ${o.packLabel}` : <i>tout le catalogue</i>}</td><td className="p-2">{c.packPriceEur ? <b>{eur(c.packPriceEur)}</b> : <b>−{Number(c.discountPct)} %</b>}{c.note && <span className="ml-2 text-xs text-stone-500">{c.note}</span>}</td><td className="p-2 text-xs">{c.validUntil ? `jusqu'au ${new Date(c.validUntil + 'T00:00:00').toLocaleDateString('fr-FR')}` : 'sans limite'}</td><td className="p-2 text-right"><button className="text-red-600" onClick={async () => { if (confirm('Supprimer cet accord ?')) { await api(`/vendor/customer-prices/${c.id}`, { method: 'DELETE' }); await load(); } }}><Trash2 size={14} /></button></td></tr>; })}</tbody></table>}
+      </section>
+    </div>
+  );
+}

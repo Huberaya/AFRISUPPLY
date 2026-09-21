@@ -155,3 +155,32 @@ describe('chantier 26 — litiges & avoirs', () => {
     expect((await call('POST', `/api/claims/${c2.id}/close`, { action: 'accept' }, R)).json.claim.status).toBe('clos');
   });
 });
+
+describe('chantier 28 — paliers de volume & prix négociés', () => {
+  it('paliers validés, devis, commande au bon prix, accord client prioritaire', async () => {
+    const vid = (await call('GET', '/api/vendor/me', undefined, V)).json.vendors[0].id; const rid = (await call('GET', '/api/settings', undefined, R)).json.restaurant.id;
+    const pid = (await call('GET', '/api/stock', undefined, R)).json.items[0].productId;
+    const off = (await call('POST', '/api/vendor/offers', { productId: pid, packLabel: 'Sac 20 kg', packQty: 20, packPrice: 40 }, V)).json.offer;
+    expect((await call('PUT', `/api/vendor/offers/${off.id}/tiers`, { tiers: [{ minPacks: 5, packPriceEur: 45 }] }, V)).status).toBe(400); // pas moins cher
+    expect((await call('PUT', `/api/vendor/offers/${off.id}/tiers`, { tiers: [{ minPacks: 5, packPriceEur: 38 }, { minPacks: 10, packPriceEur: 39 }] }, V)).status).toBe(400); // non décroissant
+    expect((await call('PUT', `/api/vendor/offers/${off.id}/tiers`, { tiers: [{ minPacks: 10, packPriceEur: 34 }, { minPacks: 5, packPriceEur: 37 }] }, V)).status).toBe(200);
+    const fiche = await call('GET', `/api/marketplace/vendors/${vid}`, undefined, R); const fo = fiche.json.offers.find((o: Json) => o.id === off.id); expect(fo.tiers.map((t: Json) => t.minPacks)).toEqual([5, 10]); expect(fo.negotiated).toBe(false);
+    const q1 = await call('POST', `/api/marketplace/vendors/${vid}/quote`, { lines: [{ vendorOfferId: off.id, packs: 3 }] }, R); expect(q1.json.lines[0].packPriceEur).toBe(40); expect(q1.json.lines[0].nextTier.missingPacks).toBe(2);
+    const q2 = await call('POST', `/api/marketplace/vendors/${vid}/quote`, { lines: [{ vendorOfferId: off.id, packs: 6 }] }, R); expect(q2.json.lines[0].packPriceEur).toBe(37); expect(q2.json.saved).toBe(18); expect(q2.json.lines[0].source).toBe('palier');
+    const o = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 10 }] }, R); expect(o.status).toBe(201); expect(Number(o.json.order.totalEur)).toBe(340);
+    // accord client : remise globale 10 % → 36 pour 1 colis ; palier 34 reste meilleur à 10 colis
+    expect((await call('POST', '/api/vendor/customer-prices', { restaurantId: rid, discountPct: 10 }, V)).status).toBe(201);
+    const q3 = await call('POST', `/api/marketplace/vendors/${vid}/quote`, { lines: [{ vendorOfferId: off.id, packs: 1 }] }, R); expect(q3.json.lines[0].packPriceEur).toBe(36); expect(q3.json.lines[0].source).toBe('remise_client');
+    const q4 = await call('POST', `/api/marketplace/vendors/${vid}/quote`, { lines: [{ vendorOfferId: off.id, packs: 10 }] }, R); expect(q4.json.lines[0].packPriceEur).toBe(34);
+    // prix ferme sur l'offre : 30 → prioritaire partout
+    const cp = await call('POST', '/api/vendor/customer-prices', { restaurantId: rid, vendorOfferId: off.id, packPriceEur: 30, validUntil: '2099-01-01' }, V); expect(cp.status).toBe(201);
+    expect((await call('POST', '/api/vendor/customer-prices', { restaurantId: rid, vendorOfferId: off.id, packPriceEur: 50 }, V)).status).toBe(400);
+    const f2 = (await call('GET', `/api/marketplace/vendors/${vid}`, undefined, R)).json.offers.find((x: Json) => x.id === off.id); expect(f2.negotiated).toBe(true); expect(Number(f2.packPriceEur)).toBe(30); expect(f2.listPriceEur).toBe(40);
+    const o2 = await call('POST', `/api/marketplace/vendors/${vid}/orders`, { lines: [{ vendorOfferId: off.id, packs: 2 }] }, R); expect(Number(o2.json.order.totalEur)).toBe(60);
+    const pr = await call('GET', '/api/vendor/pricing', undefined, V); expect(pr.json.customers.length).toBe(2); expect(pr.json.clients.some((c: Json) => c.id === rid)).toBe(true);
+    // un autre restaurant ne voit pas le prix négocié
+    const R2 = (await reg('autre@n.fr', 'Autre resto')).h; const f3 = (await call('GET', `/api/marketplace/vendors/${vid}`, undefined, R2)).json.offers.find((x: Json) => x.id === off.id); expect(f3.negotiated).toBe(false); expect(Number(f3.packPriceEur)).toBe(40);
+    expect((await call('POST', '/api/vendor/customer-prices', { restaurantId: (await call('GET', '/api/settings', undefined, R2)).json.restaurant.id, discountPct: 5 }, V)).status).toBe(400); // pas client
+    expect((await call('DELETE', `/api/vendor/customer-prices/${cp.json.price.id}`, undefined, V)).json.ok).toBe(true);
+  });
+});

@@ -12,6 +12,7 @@ import { sendMessage, waLink } from '../lib/sms.js';
 import { maybeRemind } from '../jobs/reminders.js';
 import { VENDOR_CGV_VERSION } from '../lib/cgv.js';
 import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
+import { vendorPriceTiers, vendorCustomerPrices } from '@afrisupply/db';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
 import { orderPdf } from '../lib/pdf.js';
@@ -273,6 +274,48 @@ vendorRoutes.get('/vendor/orders/:id/timeline', async (c) => {
   const [o] = await db.select({ id: orders.id, fulfillment: orders.fulfillment, proofPhoto: orders.proofPhoto, proofSignature: orders.proofSignature, proofReceiverName: orders.proofReceiverName, proofNote: orders.proofNote, vendorDeliveredAt: orders.vendorDeliveredAt }).from(orders).where(and(eq(orders.id, c.req.param('id')), eq(orders.vendorId, vid)));
   if (!o) return c.json({ error: 'Commande introuvable' }, 404);
   return c.json({ order: o, events: await orderTimeline(o.id) });
+});
+
+// ---------------- Chantier 28 : paliers de volume & prix négociés ----------------
+vendorRoutes.get('/vendor/pricing', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const tiers = await db.select({ t: vendorPriceTiers }).from(vendorPriceTiers).innerJoin(vendorOffers, eq(vendorOffers.id, vendorPriceTiers.vendorOfferId)).where(eq(vendorOffers.vendorId, vid)).orderBy(vendorPriceTiers.minPacks);
+  const customers = await db.select({ p: vendorCustomerPrices, restaurantName: restaurants.name, city: restaurants.city }).from(vendorCustomerPrices).innerJoin(restaurants, eq(restaurants.id, vendorCustomerPrices.restaurantId)).where(eq(vendorCustomerPrices.vendorId, vid)).orderBy(desc(vendorCustomerPrices.updatedAt));
+  const clients = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql<number>`count(${orders.id})`, gmv: sql<number>`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} <> 'annulee'), 0)` }).from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId)).where(eq(orders.vendorId, vid)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql`count(${orders.id}) desc`);
+  return c.json({ tiers: tiers.map((x) => x.t), customers: customers.map((x) => ({ ...x.p, restaurantName: x.restaurantName, city: x.city })), clients: clients.map((x) => ({ ...x, orders: n(x.orders), gmv: n(x.gmv) })) });
+});
+/** Remplace tous les paliers d'une offre. */
+vendorRoutes.put('/vendor/offers/:id/tiers', async (c) => {
+  const body = z.object({ tiers: z.array(z.object({ minPacks: z.number().int().min(2), packPriceEur: z.number().positive() })).max(6) }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [o] = await db.select().from(vendorOffers).where(and(eq(vendorOffers.id, c.req.param('id')), eq(vendorOffers.vendorId, vid))); if (!o) return c.json({ error: 'Offre introuvable' }, 404);
+  const sorted = [...body.data.tiers].sort((a, b) => a.minPacks - b.minPacks);
+  for (let i = 0; i < sorted.length; i++) { if (sorted[i].packPriceEur >= n(o.packPriceEur)) return c.json({ error: `Le palier ${sorted[i].minPacks}+ doit être moins cher que le prix catalogue (${eur(n(o.packPriceEur))})` }, 400); if (i > 0 && sorted[i].packPriceEur >= sorted[i - 1].packPriceEur) return c.json({ error: 'Les prix doivent baisser à chaque palier' }, 400); if (i > 0 && sorted[i].minPacks === sorted[i - 1].minPacks) return c.json({ error: 'Deux paliers identiques' }, 400); }
+  await db.delete(vendorPriceTiers).where(eq(vendorPriceTiers.vendorOfferId, o.id));
+  if (sorted.length) await db.insert(vendorPriceTiers).values(sorted.map((t) => ({ vendorOfferId: o.id, minPacks: t.minPacks, packPriceEur: t.packPriceEur.toFixed(2) })));
+  return c.json({ tiers: sorted });
+});
+/** Crée / met à jour un accord client (prix ferme ou remise % sur une offre, ou remise globale). */
+vendorRoutes.post('/vendor/customer-prices', async (c) => {
+  const body = z.object({ restaurantId: z.string().uuid(), vendorOfferId: z.string().uuid().nullable().optional(), packPriceEur: z.number().positive().optional(), discountPct: z.number().min(0.5).max(60).optional(), validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), note: z.string().max(200).optional() }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
+  const db = await getDb(); const vid = c.get('vendorId'); const d = body.data;
+  if (!d.packPriceEur && !d.discountPct) return c.json({ error: 'Indiquez un prix ferme ou une remise %' }, 400);
+  if (!d.vendorOfferId && d.packPriceEur) return c.json({ error: 'Un prix ferme s’applique à une offre précise ; pour tout le catalogue, utilisez une remise %' }, 400);
+  if (d.vendorOfferId) { const [o] = await db.select().from(vendorOffers).where(and(eq(vendorOffers.id, d.vendorOfferId), eq(vendorOffers.vendorId, vid))); if (!o) return c.json({ error: 'Offre introuvable' }, 404); if (d.packPriceEur && d.packPriceEur >= n(o.packPriceEur)) return c.json({ error: `Le prix négocié doit être inférieur au catalogue (${eur(n(o.packPriceEur))})` }, 400); }
+  const [known] = await db.select({ id: orders.id }).from(orders).where(and(eq(orders.vendorId, vid), eq(orders.restaurantId, d.restaurantId))).limit(1);
+  const [linked] = await db.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.vendorId, vid), eq(suppliers.restaurantId, d.restaurantId))).limit(1);
+  if (!known && !linked) return c.json({ error: 'Ce restaurant n’est pas encore votre client sur AFRISUPPLY' }, 400);
+  const existing = await db.select().from(vendorCustomerPrices).where(and(eq(vendorCustomerPrices.vendorId, vid), eq(vendorCustomerPrices.restaurantId, d.restaurantId), d.vendorOfferId ? eq(vendorCustomerPrices.vendorOfferId, d.vendorOfferId) : sql`${vendorCustomerPrices.vendorOfferId} is null`));
+  const vals = { packPriceEur: d.packPriceEur?.toFixed(2) ?? null, discountPct: d.packPriceEur ? null : d.discountPct?.toFixed(2) ?? null, validUntil: d.validUntil ?? null, note: d.note, updatedAt: new Date() };
+  const [row] = existing[0] ? await db.update(vendorCustomerPrices).set(vals).where(eq(vendorCustomerPrices.id, existing[0].id)).returning() : await db.insert(vendorCustomerPrices).values({ vendorId: vid, restaurantId: d.restaurantId, vendorOfferId: d.vendorOfferId ?? null, ...vals }).returning();
+  await audit('vendor.customer_price', { actorEmail: c.get('user').email, target: row.id, meta: { restaurantId: d.restaurantId, offer: d.vendorOfferId, price: d.packPriceEur, pct: d.discountPct } });
+  return c.json({ price: row }, existing[0] ? 200 : 201);
+});
+vendorRoutes.delete('/vendor/customer-prices/:id', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [row] = await db.delete(vendorCustomerPrices).where(and(eq(vendorCustomerPrices.id, c.req.param('id')), eq(vendorCustomerPrices.vendorId, vid))).returning(); if (!row) return c.json({ error: 'Introuvable' }, 404);
+  return c.json({ ok: true });
 });
 
 // ---- achats groupés ----
