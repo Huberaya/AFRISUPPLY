@@ -27,6 +27,44 @@ describe('prévision', () => {
     const [pf] = forecastProducts(new Map(), [], [{ productId: 'x', productName: 'Sel', unit: 'kg', quantity: 1, criticalLevel: 5, targetLevel: null }], { today });
     expect(pf.recommendedOrder).toBe(4); expect(pf.explanation).toMatch(/aucune recette/);
   });
+
+  // Chantier 1 (audit) — démarrage à froid : un compte neuf doit recevoir des recommandations,
+  // pas « rien à commander » avec le stock à zéro. Et jamais de « pic » inventé sans ventes.
+  describe('démarrage à froid (compte neuf, aucune vente)', () => {
+    it('recommande de remonter à l’objectif même sans ventes, avec une explication honnête', () => {
+      const rf = forecastRecipes([], ['r1'], { horizonDays: 7, today });
+      const [pf] = forecastProducts(rf, [{ recipeId: 'r1', productId: 'riz', quantity: 0.15 }],
+        [{ productId: 'riz', productName: 'Riz parfumé', unit: 'kg', quantity: 0, criticalLevel: 4, targetLevel: 10 }], { horizonDays: 7, today });
+      expect(pf.recommendedOrder).toBe(10);            // objectif 10 kg, stock 0
+      expect(pf.explanation).not.toMatch(/pic/);        // aucun « pic mardi » sans données
+      expect(pf.explanation).toMatch(/Pas encore assez de ventes/);
+      expect(pf.explanation).toMatch(/objectif/);
+    });
+    it('un produit non configuré (0/0) ne recommande rien mais l’explique — jamais un chiffre inventé', () => {
+      const [pf] = forecastProducts(new Map(), [], [{ productId: 'x', productName: 'Sel', unit: 'kg', quantity: 0, criticalLevel: 0, targetLevel: null }], { today });
+      expect(pf.recommendedOrder).toBe(0);
+      expect(pf.explanation).toMatch(/seuil|inventaire/);
+      expect(pf.explanation).not.toMatch(/pic/);
+    });
+    it('sans recette mais avec objectif, remonte au moins à l’objectif', () => {
+      const [pf] = forecastProducts(new Map(), [], [{ productId: 'x', productName: 'Sel', unit: 'kg', quantity: 1, criticalLevel: 5, targetLevel: 12 }], { today });
+      expect(pf.recommendedOrder).toBe(11);             // 12 − 1
+    });
+    it('une cible mal réglée ne fait jamais sous-commander une période active', () => {
+      const rf = forecastRecipes(sales, ['r1'], { horizonDays: 7, today });
+      const [pf] = forecastProducts(rf, [{ recipeId: 'r1', productId: 'riz', quantity: 0.15 }],
+        [{ productId: 'riz', productName: 'Riz parfumé', unit: 'kg', quantity: 2, criticalLevel: 1, targetLevel: 3 /* cible obsolète : 3 kg pour 10 kg de besoin */ }], { horizonDays: 7, today });
+      expect(pf.recommendedOrder).toBeGreaterThan(pf.predictedNeed - 2); // couvre au moins le besoin + sécurité
+    });
+    it('avec des ventes réelles, l’explication garde ses repères et n’invente pas de pic à zéro', () => {
+      const rf = forecastRecipes(sales, ['r1'], { horizonDays: 7, today });
+      const [pf] = forecastProducts(rf, [{ recipeId: 'r1', productId: 'riz', quantity: 0.15 }],
+        [{ productId: 'riz', productName: 'Riz parfumé', unit: 'kg', quantity: 50, criticalLevel: 3, targetLevel: 40 }], { horizonDays: 7, today });
+      expect(pf.recommendedOrder).toBe(0);              // stock suffisant
+      expect(pf.explanation).toMatch(/Besoin estimé/);
+      expect(pf.explanation).toMatch(/pic/);            // vraies données → vrai pic
+    });
+  });
 });
 
 describe('panier intelligent', () => {

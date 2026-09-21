@@ -41,6 +41,8 @@ export const weakestBasis = (a: ForecastBasis, b: ForecastBasis): ForecastBasis 
 export interface RecipeForecast {
   recipeId: string; perDay: number[]; total: number; confidence: number;
   basis: ForecastBasis; closedPerDay: boolean[];
+  /** Jours réellement couverts par des données observées : 0 = démarrage à froid (aucune vente). */
+  daysWithData: number;
 }
 export interface ProductForecast {
   productId: string; productName: string; unit: string;
@@ -162,10 +164,20 @@ export function forecastRecipes(sales: SaleRow[], recipeIds: string[], opts: For
       closedPerDay.push(false);
     }
     const total = perDay.reduce((a, b) => a + b, 0);
-    const confidence = basis === 'ventes_28j'
+    // Confiance : la plus PRUDENTE des deux lectures — la source utilisée (cascade du chantier 9)
+    // et le nombre de jours réellement observés (démarrage à froid). Jamais la plus flatteuse.
+    const parSource = basis === 'ventes_28j'
       ? (daysWithData >= 28 ? 0.85 : daysWithData >= 14 ? 0.7 : 0.55)
       : BASIS_CONFIDENCE[basis];
-    out.set(rid, { recipeId: rid, perDay, total: Math.round(total * 10) / 10, confidence, basis, closedPerDay });
+    // On ne pénalise pas une estimation qui ne repose PAS sur des ventes : « couverts » et « seuils »
+    // ont déjà leur propre niveau, volontairement bas (0,3 et 0,15). En revanche, dès qu'il s'agit de
+    // ventes, la confiance ne peut pas dépasser ce que les jours réellement observés justifient.
+    const ventes = basis === 'ventes_28j' || basis === 'ventes_7j';
+    const parHistorique = ventes
+      ? (daysWithData >= 28 ? 0.85 : daysWithData >= 14 ? 0.7 : daysWithData >= 7 ? 0.55 : daysWithData > 0 ? 0.4 : 0.2)
+      : parSource;
+    const confidence = Math.min(parSource, parHistorique);
+    out.set(rid, { recipeId: rid, perDay, total: Math.round(total * 10) / 10, confidence, basis, closedPerDay, daysWithData });
   }
   return out;
 }
@@ -176,14 +188,15 @@ export function forecastProducts(
 ): ProductForecast[] {
   const horizon = opts.horizonDays ?? 7; const safetyDays = opts.safetyDays ?? 2; const today = opts.today ?? new Date();
   const closed = new Set(opts.closedWeekdays ?? []);
-  const perProduct = new Map<string, { perDay: number[]; conf: number[]; recipes: number; basis: ForecastBasis; usedCovers: boolean }>();
+  const perProduct = new Map<string, { perDay: number[]; conf: number[]; recipes: number; basis: ForecastBasis; usedCovers: boolean; daysWithData: number }>();
   for (const ing of ingredients) {
     const rf = recipeForecasts.get(ing.recipeId); if (!rf) continue;
-    const acc = perProduct.get(ing.productId) ?? { perDay: new Array<number>(horizon).fill(0), conf: [] as number[], recipes: 0, basis: 'ventes_28j' as ForecastBasis, usedCovers: false };
+    const acc = perProduct.get(ing.productId) ?? { perDay: new Array<number>(horizon).fill(0), conf: [] as number[], recipes: 0, basis: 'ventes_28j' as ForecastBasis, usedCovers: false, daysWithData: 0 };
     rf.perDay.forEach((p, i) => { acc.perDay[i] += p * ing.quantity; });
     acc.conf.push(rf.confidence); acc.recipes++;
     acc.basis = acc.recipes === 1 ? rf.basis : weakestBasis(acc.basis, rf.basis);
     if (rf.basis === 'couverts') acc.usedCovers = true;
+    acc.daysWithData = Math.max(acc.daysWithData, rf.daysWithData);
     perProduct.set(ing.productId, acc);
   }
   const out: ProductForecast[] = [];
@@ -205,29 +218,50 @@ export function forecastProducts(
     for (let i = 0; i < perDay.length; i++) { cum += perDay[i]; if (cum > s.quantity) { stockoutIdx = i; break; } }
     const daysLeft = avg > 0 ? Math.round((s.quantity / avg) * 10) / 10 : null;
     const safety = Math.max(s.criticalLevel, avg * safetyDays);
-    let recommended = Math.max(0, need + safety - s.quantity);
-    if (s.targetLevel && s.quantity + recommended > s.targetLevel * 1.5) recommended = Math.max(0, s.targetLevel * 1.5 - s.quantity);
+    const needWithSafety = need + safety;
+    // Démarrage à froid (chantier 1) : sans AUCUN historique de vente, se couvrir sur l'horizon donne
+    // toujours 0 et le panier intelligent reste muet. On complète alors au moins jusqu'à l'objectif
+    // (politique (s, S)) ; sans objectif, on retombe sur le seuil critique.
+    const daysWithData = acc?.daysWithData ?? 0;
+    let upTo = needWithSafety;
+    if (daysWithData === 0) upTo = Math.max(needWithSafety, s.targetLevel ?? 0);
+    let recommended = Math.max(0, upTo - s.quantity);
+    // Plafond anti-surstock : jamais en dessous du besoin couvert (une cible mal réglée ne doit pas
+    // faire sous-commander une période de forte activité).
+    const cap = Math.max(needWithSafety, s.targetLevel ? s.targetLevel * 1.5 : 0);
+    if (s.quantity + recommended > cap) recommended = Math.max(0, cap - s.quantity);
     if (s.shelfLifeDays && s.shelfLifeDays < horizon && avg > 0) recommended = Math.min(recommended, Math.max(0, avg * s.shelfLifeDays + safety - s.quantity));
     recommended = Math.round(recommended * 10) / 10;
 
     const fmt = (v: number) => `${Number.isInteger(v) ? v : v.toFixed(1)} ${s.unit}`;
     const source = BASIS_LABEL[basis];
     let explanation: string;
+    // Mention ajoutée quand la recommandation ne vient pas d'une prévision chiffrée mais de
+    // l'objectif de stock fixé par le restaurant (démarrage à froid) : on dit d'où vient le chiffre.
+    const parObjectif = daysWithData === 0 && (s.targetLevel ?? 0) > 0 && recommended > 0
+      ? ' (ramène le stock à votre objectif)' : '';
     if (!acc) {
       // Produit hors recette : le seuil critique est la seule vérité disponible — et on le dit.
       explanation = `${s.productName} n'entre dans aucune recette : besoin estimé à partir de votre seuil critique uniquement (${fmt(s.criticalLevel)}). ` +
-        (recommended > 0 ? `Commande recommandée : ${fmt(recommended)}.` : 'Rien à commander pour l’instant.');
+        (recommended > 0 ? `Commande recommandée : ${fmt(recommended)}${parObjectif}.` : 'Rien à commander pour l’instant.');
     } else {
       const peak = perDay.indexOf(Math.max(...perDay)); const peakDay = DOW_FR[new Date(today.getTime() + (peak + 1) * DAY_MS).getDay()];
       const base = `Besoin estimé de ${fmt(Math.round(need * 10) / 10)} sur ${horizon} jours, calculé à partir de ${acc.recipes} recette${acc.recipes > 1 ? 's' : ''} et de ${source}`;
-      explanation = base +
+      const ventes = basis === 'ventes_28j' || basis === 'ventes_7j';
+      // Aucune vente saisie : on le dit d'emblée — c'est l'information la plus utile à un restaurant
+      // qui démarre — avant d'expliquer sur quoi la commande s'appuie réellement.
+      const preambule = daysWithData === 0
+        ? `Pas encore assez de ventes pour prévoir ${s.productName.toLowerCase()} sur ${horizon} jours. `
+        : '';
+      explanation = preambule + base +
         (basis === 'ventes_28j' ? ` (pic ${peakDay})` : '') + '. ' +
         (basis === 'seuils'
           ? `Aucune vente ni couvert renseigné : la commande recommandée vient uniquement de votre seuil critique. `
           : basis === 'couverts' ? `Estimation de repli à partir de vos couverts : saisissez vos ventes pour l’affiner jour par jour. ` : '') +
-        `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null ? ` → rupture prévue ${DOW_FR[new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ', suffisant sur la période.') +
+        (ventes && daysWithData < 7 ? `Données encore légères (${daysWithData} jour${daysWithData > 1 ? 's' : ''}). ` : '') +
+        `Stock actuel ${fmt(s.quantity)}` + (stockoutIdx !== null && need > 0 ? ` → rupture prévue ${DOW_FR[new Date(today.getTime() + (stockoutIdx + 1) * DAY_MS).getDay()]}.` : ', suffisant sur la période.') +
         (season ? ` Coefficient de saisonnalité ${season.coef} appliqué (mois ${season.months.join(', ')}).` : '') +
-        (recommended > 0 ? ` Commande recommandée : ${fmt(recommended)} (inclut ${safetyDays} j de sécurité).` : '');
+        (recommended > 0 ? ` Commande recommandée : ${fmt(recommended)}${parObjectif} (inclut ${safetyDays} j de sécurité).` : '');
     }
     out.push({
       productId: s.productId, productName: s.productName, unit: s.unit, horizonDays: horizon,

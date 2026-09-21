@@ -6,26 +6,78 @@ import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox } from '../components/ui';
 
 type T = { name: string; region: string; suggestedPrice: number; category: string; ingredientCount: number; ingredients: { product: string; qty: number; unit: string }[] };
+type DoneItem = { id: string; productId: string; productName: string; unit: string; category: string; criticalLevel: number; targetLevel: number | null };
 const CAT_LABEL: Record<string, string> = { plat: 'Plats', accompagnement: 'Accompagnements', entree: 'Entrées', boisson: 'Boissons', dessert: 'Desserts' };
+const num = (s: string) => Number(String(s).replace(',', '.')) || 0;
 
 export default function Onboarding() {
   const nav = useNavigate();
   const { data, loading, error, reload } = useApi<{ templates: T[]; regions: string[] }>('/onboarding/templates');
   const [sel, setSel] = useState<Set<string>>(new Set()); const [prices, setPrices] = useState<Record<string, number>>({});
-  const [region, setRegion] = useState(''); const [busy, setBusy] = useState(false); const [done, setDone] = useState<{ createdRecipes: number; trackedProducts: number; totalProducts: number } | null>(null);
+  const [region, setRegion] = useState(''); const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<{ createdRecipes: number; trackedProducts: number; totalProducts: number; items: DoneItem[] } | null>(null);
+  // Chantier 1 (audit) — étape « vos seuils d'alerte » : éditions locales des seuils pré-remplis.
+  const [thr, setThr] = useState<Record<string, { c: string; t: string }>>({});
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   const toggle = (n: string) => setSel((s) => { const c = new Set(s); if (c.has(n)) c.delete(n); else c.add(n); return c; });
   const list = (data?.templates ?? []).filter((t) => !region || t.region.includes(region));
   const products = useMemo(() => { const m = new Map<string, string>(); for (const t of data?.templates ?? []) if (sel.has(t.name)) for (const i of t.ingredients) m.set(i.product, i.unit); return [...m.keys()]; }, [sel, data]);
   const apply = async () => { setBusy(true); try { setDone(await api('/onboarding/apply', { method: 'POST', json: { templates: [...sel], prices } })); } finally { setBusy(false); } };
+  const saveThresholds = async (next: string) => {
+    if (!done || busy) return;
+    setBusy(true); setSaveErr(null);
+    try {
+      await api('/stock/thresholds', {
+        method: 'POST',
+        json: { items: (done.items ?? []).map((i) => {
+          const v = thr[i.id] ?? { c: String(i.criticalLevel), t: i.targetLevel === null ? '' : String(i.targetLevel) };
+          return { itemId: i.id, criticalLevel: num(v.c), targetLevel: v.t === '' ? null : num(v.t) };
+        }) },
+      });
+      nav(next);
+    } catch (e) { setSaveErr(e instanceof Error ? e.message : 'Enregistrement impossible'); setBusy(false); }
+  };
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
-  if (done) return (
-    <div className="card max-w-lg mx-auto text-center space-y-3 animate-fade-up">
-      <div className="text-5xl">🎉</div><h2 className="text-2xl font-extrabold">Votre cuisine est configurée</h2>
-      <p className="text-stone-600">{done.createdRecipes} recette{done.createdRecipes > 1 ? 's' : ''} créée{done.createdRecipes > 1 ? 's' : ''} · {done.totalProducts} produits identifiés · {done.trackedProducts} ajouté{done.trackedProducts > 1 ? 's' : ''} à votre stock.</p>
-      <p className="text-sm text-stone-500">Étape suivante : importez vos fournisseurs et leurs prix, puis faites un premier inventaire.</p>
-      <div className="flex justify-center gap-2 pt-2"><button className="btn-ghost" onClick={() => nav('/app/stock')}>Voir le stock</button><button className="btn-primary" onClick={() => nav('/app/import')}>Importer mes fournisseurs <ArrowRight size={16} /></button></div>
-    </div>
-  );
+  if (done) {
+    const items = done.items ?? [];
+    const val = (i: DoneItem) => thr[i.id] ?? { c: String(i.criticalLevel), t: i.targetLevel === null ? '' : String(i.targetLevel) };
+    return (
+      <div className="max-w-2xl mx-auto space-y-6 animate-fade-up">
+        <div className="card text-center space-y-3">
+          <div className="text-5xl">🎉</div><h2 className="text-2xl font-extrabold">Votre cuisine est configurée</h2>
+          <p className="text-stone-600">{done.createdRecipes} recette{done.createdRecipes > 1 ? 's' : ''} créée{done.createdRecipes > 1 ? 's' : ''} · {done.totalProducts} produits identifiés · {done.trackedProducts} ajouté{done.trackedProducts > 1 ? 's' : ''} à votre stock.</p>
+        </div>
+        {/* Chantier 1 : sans seuils, la prévision et le panier intelligent restent muets — on les règle tout de suite. */}
+        <div className="card space-y-3">
+          <div>
+            <h3 className="font-bold text-lg">🔔 Réglez vos seuils d’alerte</h3>
+            <p className="text-sm text-stone-500">AFRISUPPLY vous prévient quand un produit passe sous le seuil critique, et recommande jusqu’à l’objectif. Valeurs proposées : ≈ 3 jours d’avance (critique), ≈ 7 jours (objectif) — ajustez selon votre activité.</p>
+          </div>
+          <div className="max-h-96 overflow-y-auto divide-y divide-stone-100">
+            {items.map((i) => (
+              <div key={i.id} className="flex items-center gap-2 py-2 text-sm">
+                <div className="flex-1 min-w-0"><p className="font-medium truncate">{i.productName}</p><p className="text-xs text-stone-400">en {i.unit}</p></div>
+                <label className="text-xs text-stone-500">critique
+                  <input type="number" min="0" step="0.5" className="input !w-20 !py-1 ml-1" value={val(i).c}
+                    onChange={(e) => setThr({ ...thr, [i.id]: { ...val(i), c: e.target.value } })} />
+                </label>
+                <label className="text-xs text-stone-500">objectif
+                  <input type="number" min="0" step="0.5" className="input !w-20 !py-1 ml-1" value={val(i).t}
+                    onChange={(e) => setThr({ ...thr, [i.id]: { ...val(i), t: e.target.value } })} />
+                </label>
+              </div>
+            ))}
+          </div>
+          {saveErr && <ErrorBox message={saveErr} />}
+          <div className="flex flex-wrap justify-center gap-2 pt-1">
+            <button className="btn-primary" disabled={busy} onClick={() => saveThresholds('/app/import')}>{busy ? 'Enregistrement…' : 'Valider mes seuils'} <ArrowRight size={16} /></button>
+            <button className="btn-ghost" disabled={busy} onClick={() => saveThresholds('/app/stock')}>Voir le stock</button>
+          </div>
+          <p className="text-center text-xs text-stone-400">Étape suivante : importez vos fournisseurs et leurs prix, puis faites un premier inventaire.</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="animate-fade-up">
       <PageTitle title="👩🏾‍🍳 Configurer ma carte en 5 minutes" subtitle="Cochez les plats que vous servez. AFRISUPPLY en déduit la liste de produits à suivre, avec des grammages moyens que vous pourrez ajuster." />

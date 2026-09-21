@@ -4,7 +4,7 @@ import { and, eq, desc, gte, sql, inArray } from 'drizzle-orm';
 import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements,
   orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, restaurants,
-  quantityCeiling,
+  quantityCeiling, defaultThresholds,
 } from '@afrisupply/db';
 import { insertWithFreshReference } from '../lib/reference.js';
 import { logOrderEvent } from '../lib/order-events.js';
@@ -479,7 +479,7 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
       const [delivery] = await tx.insert(deliveries).values({ restaurantId: rid, orderId: order.id, receivedBy: user.id, isLate, notes: body.data.notes }).returning();
       deliveryId = delivery.id;
 
-      for (const { line, productName, unit } of lines) {
+      for (const { line, productName, unit, category } of lines) {
         const received = resolved.get(line.id) ?? n(line.quantity);
         receivedByLine.set(line.id, received);
         const invoiced = invoicedByLine.get(line.id) ?? null;
@@ -493,7 +493,10 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
         }).where(eq(orderLines.id, line.id));
 
         if (received > 0) {
-          await tx.insert(inventoryItems).values({ restaurantId: rid, productId: line.productId, quantity: '0', criticalLevel: '0' })
+          // Chantier 1 (audit) : un produit reçu sans être suivi naît avec des seuils explicites
+          // (≈3 j critique / ≈7 j objectif) — jamais `critical_level = 0` (prévision muette ensuite).
+          const dt = defaultThresholds(category);
+          await tx.insert(inventoryItems).values({ restaurantId: rid, productId: line.productId, quantity: '0', criticalLevel: dt.criticalLevel.toFixed(3), targetLevel: dt.targetLevel.toFixed(3) })
             .onConflictDoNothing({ target: [inventoryItems.restaurantId, inventoryItems.productId] });
           const [inv] = await tx.select().from(inventoryItems).where(and(eq(inventoryItems.restaurantId, rid), eq(inventoryItems.productId, line.productId)));
           await tx.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: inv.id, type: 'reception', quantity: received.toFixed(3), unitCostEur: unitCost.toFixed(4), orderId: order.id, createdBy: user.id, note: invoiced !== null ? 'Prix facturé saisi à la réception' : null });

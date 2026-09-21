@@ -22,7 +22,9 @@ describe('chantier 9 — cascade de prévision', () => {
     const f = rf.get('r1')!;
     expect(f.basis).toBe('ventes_7j');
     expect(f.total).toBeGreaterThan(0);
-    expect(f.confidence).toBe(0.45);
+    // Fusion avec le « démarrage à froid » : 2 jours de ventes ne justifient pas la confiance d'une
+    // semaine complète (0,45) — on retient la plus prudente des deux lectures (0,4).
+    expect(f.confidence).toBe(0.4);
     const [pf] = forecastProducts(rf, [{ recipeId: 'r1', productId: 'riz', quantity: 0.15 }], [stock()], { horizonDays: 7, today });
     expect(pf.basis).toBe('ventes_7j');
     expect(pf.predictedNeed).toBeGreaterThan(0);
@@ -55,8 +57,12 @@ describe('chantier 9 — cascade de prévision', () => {
     const [pf] = forecastProducts(rf, [{ recipeId: 'r1', productId: 'riz', quantity: 0.15 }], [stock()], { horizonDays: 7, today });
     expect(pf.basis).toBe('seuils');
     expect(pf.predictedNeed).toBe(0);
-    expect(pf.recommendedOrder).toBe(0);              // 5 kg en stock > seuil critique 3 kg
-    const [low] = forecastProducts(rf, [{ recipeId: 'r1', productId: 'riz', quantity: 0.15 }], [stock({ quantity: 1 })], { horizonDays: 7, today });
+    // Au DÉMARRAGE À FROID (aucune vente jamais saisie), la recommandation suit l'objectif que le
+    // restaurant a lui-même fixé : on complète jusqu'à 40 kg (politique s,S) — 40 − 5 = 35 kg.
+    // Le besoin prévisionnel, lui, reste 0 : on n'invente aucune consommation.
+    expect(pf.recommendedOrder).toBe(35);
+    // Sans objectif fixé, on retombe sur le comportement d'origine : remonter au seuil critique.
+    const [low] = forecastProducts(rf, [{ recipeId: 'r1', productId: 'riz', quantity: 0.15 }], [stock({ quantity: 1, targetLevel: null })], { horizonDays: 7, today });
     expect(low.recommendedOrder).toBe(2);             // on remonte au seuil critique
     expect(low.explanation).toMatch(/seuil critique/);
   });
