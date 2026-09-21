@@ -21,7 +21,7 @@ results = []
 PWD = "Plantain-Yassa-42"
 
 
-def call(method, path, token=None, body=None, rid=None):
+def _call_once(method, path, token=None, body=None, rid=None):
     req = urllib.request.Request(BASE + path, method=method)
     if token: req.add_header("Authorization", "Bearer " + token)
     if rid: req.add_header("X-Restaurant-Id", rid)
@@ -36,6 +36,28 @@ def call(method, path, token=None, body=None, rid=None):
         raw = e.read()
         try: return e.code, json.loads(raw or b"null")
         except Exception: return e.code, raw.decode()[:300]
+
+
+def call(method, path, token=None, body=None, rid=None, tries=3, max_wait=900):
+    """Comme _call_once(), mais patiente si l'API limite le débit (429).
+
+    Vérifier les parcours de compte consomme les quotas anti-abus (5 mots de passe oubliés
+    par 15 min, 10 réinitialisations par 15 min). Une suite complète peut épuiser la fenêtre :
+    sans patience, ce simple quota était rapporté comme un échec du produit. On attend la
+    fenêtre annoncée (Retry-After) puis on réessaie ; si le refus persiste, il est réel.
+    """
+    st, data = _call_once(method, path, token, body, rid)
+    waited = 0
+    for _ in range(max(0, tries - 1)):
+        if st != 429:
+            break
+        delay = min(65, max_wait - waited)
+        if delay <= 0:
+            break
+        print(f"      · quota anti-abus atteint (429) sur {method} {path} — attente {delay} s avant nouvelle tentative")
+        time.sleep(delay); waited += delay
+        st, data = _call_once(method, path, token, body, rid)
+    return st, data
 
 
 def text(url):

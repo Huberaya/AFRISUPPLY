@@ -10,10 +10,33 @@ import json, os, urllib.request, urllib.error, time
 BASE = os.environ.get("AFS_API", "http://localhost:8787/api")
 OK = lambda b: "\033[32mOK\033[0m" if b else "\033[31mÉCHEC\033[0m"
 results = []
+
+def call(method, path, token=None, body=None, extra=None, tries=3, max_wait=900):
+    """Comme _call_once(), mais patiente si l'API limite le débit (429).
+
+    Les points d'entrée d'authentification partagent des quotas anti-abus par IP
+    (« 5 mots de passe oubliés par 15 min »). Deux suites lancées dans la même fenêtre de
+    15 minutes pouvaient épuiser le quota : sans patience, un simple quota atteint était
+    rapporté comme un échec du produit. On attend la fin de la fenêtre annoncée (en-tête
+    Retry-After) puis on réessaie ; si le refus persiste, c'est un vrai problème.
+    """
+    st, j, h = _call_once(method, path, token, body, extra)
+    waited = 0
+    for _ in range(max(0, tries - 1)):
+        if st != 429:
+            break
+        delay = min(int((h or {}).get("Retry-After") or 65), max_wait - waited)
+        if delay <= 0:
+            break
+        print(f"      · quota anti-abus atteint (429) sur {method} {path} — attente {delay} s avant nouvelle tentative")
+        time.sleep(delay); waited += delay
+        st, j, h = _call_once(method, path, token, body, extra)
+    return st, j, h
+
 PWD = "Plantain-Yassa-42"
 NEW = "Riz-Brise-2026-x"
 
-def call(method, path, token=None, body=None, extra=None):
+def _call_once(method, path, token=None, body=None, extra=None):
     req = urllib.request.Request(BASE + path, method=method)
     if token: req.add_header("Authorization", "Bearer " + token)
     for k, v in (extra or {}).items(): req.add_header(k, v)
