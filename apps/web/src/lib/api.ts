@@ -1,38 +1,29 @@
-// Client API minimal (remplace le client Supabase) — JWT en localStorage + header X-Restaurant-Id
-const TOKEN_KEY = 'afs_token';
+// Client API minimal — session par cookie HttpOnly (audit S2 : le jeton n'est JAMAIS lisible
+// par le JavaScript : ni localStorage, ni variable lisible). `afs_authed` est un simple indice
+// d'interface (pas un secret) ; l'authentification réelle = le cookie `afs_token` posé par l'API.
 const RESTAURANT_KEY = 'afs_restaurant';
+const AUTHED_KEY = 'afs_authed';
 
 export const tokenStore = {
-  get: () => localStorage.getItem(TOKEN_KEY),
-  set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
-  clear: () => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(RESTAURANT_KEY); },
-  clearRestaurant: () => { localStorage.removeItem(RESTAURANT_KEY); },
+  authed: () => localStorage.getItem(AUTHED_KEY) === '1',
+  setAuthed: () => localStorage.setItem(AUTHED_KEY, '1'),
+  clear: () => { localStorage.removeItem(AUTHED_KEY); localStorage.removeItem(RESTAURANT_KEY); },
   restaurant: () => localStorage.getItem(RESTAURANT_KEY),
   setRestaurant: (id: string) => localStorage.setItem(RESTAURANT_KEY, id),
 };
 
-export class ApiError extends Error {
-  constructor(public status: number, message: string, public details?: unknown, public code?: string, public retryAfterSec?: number) { super(message); }
-}
+export class ApiError extends Error { constructor(public status: number, message: string, public details?: unknown, public code?: string) { super(message); } }
 
 export async function api<T = unknown>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> ?? {}) };
-  const token = tokenStore.get(); if (token) headers.Authorization = `Bearer ${token}`;
+  // S2 : plus d'en-tête Authorization — le cookie HttpOnly `afs_token` accompagne la requête.
   const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
   let body = init.body;
   if (init.json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(init.json); }
   const res = await fetch(`/api${path}`, { ...init, headers, body, credentials: 'include' });
-  // Chantier 8 : quand l'accès au restaurant courant a changé (établissement retiré, rôle modifié),
-  // l'interface est prévenue pour se remettre d'aplomb au lieu d'afficher une erreur incompréhensible.
-  if (res.status === 403) {
-    res.clone().json().then((d: { code?: string; error?: string }) => {
-      if (d?.code === 'restaurant_forbidden' || d?.code === 'no_restaurant') window.dispatchEvent(new CustomEvent('afs:access', { detail: d }));
-    }).catch(() => null);
-  }
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (res.status === 402 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('afs:paywall', { detail: data?.error ?? 'Abonnement requis' }));
-  const retryAfter = Number(res.headers.get('retry-after') ?? 0);
-  if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`, data?.details, data?.code, retryAfter > 0 ? retryAfter : undefined);
+  if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`, data?.details, data?.code);
   return data as T;
 }
 
@@ -46,12 +37,11 @@ export const fmtDate = (iso: string | null | undefined) => iso ? new Date(iso).t
 export const CATEGORY_LABEL: Record<string, string> = { feculents: '🌾 Féculents', frais: '🥬 Frais', viandes_poissons: '🥩 Viandes & poissons', epicerie: '🫙 Épicerie', boissons: '🥤 Boissons', emballages: '📦 Emballages' };
 export const STATUS_LABEL: Record<string, string> = { brouillon: 'Brouillon', preparee: 'Préparée', envoyee: 'Envoyée', confirmee: 'Confirmée', livree_partiel: 'Livrée (écart)', livree: 'Livrée', annulee: 'Annulée' };
 
-/** Télécharge un fichier protégé par JWT (export de mes données, journal d'audit, sauvegarde). */
 export async function downloadFile(path: string, filename: string) {
+  // Cookie HttpOnly (S2) : aucune en-tête d'authentification à fabriquer côté navigateur.
   const headers: Record<string, string> = {};
-  const t = tokenStore.get(); if (t) headers.Authorization = `Bearer ${t}`;
   const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
-  const res = await fetch(`/api${path}`, { headers });
+  const res = await fetch(`/api${path}`, { headers, credentials: 'include' });
   if (!res.ok) throw new ApiError(res.status, 'Téléchargement impossible');
   const url = URL.createObjectURL(await res.blob());
   const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
@@ -60,7 +50,7 @@ export async function downloadFile(path: string, filename: string) {
 
 /** Ouvre un PDF protégé par JWT dans un nouvel onglet (chantier 16). */
 export async function openPdf(path: string) {
-  const headers: Record<string, string> = {}; const t = tokenStore.get(); if (t) headers.Authorization = `Bearer ${t}`; const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
-  const res = await fetch(`/api${path}`, { headers }); if (!res.ok) throw new ApiError(res.status, 'PDF indisponible');
+  const headers: Record<string, string> = {}; const rid = tokenStore.restaurant(); if (rid) headers['X-Restaurant-Id'] = rid;
+  const res = await fetch(`/api${path}`, { headers, credentials: 'include' }); if (!res.ok) throw new ApiError(res.status, 'PDF indisponible');
   const url = URL.createObjectURL(await res.blob()); window.open(url, '_blank'); setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ShoppingCart, Info, AlertTriangle, CalendarPlus, Trash2 } from 'lucide-react';
 import { useApi } from '../lib/useApi';
-import { fmtQty } from '../lib/api';
+import { api, fmtQty } from '../lib/api';
 import { PageTitle, Loader, ErrorBox, Empty, Stat } from '../components/ui';
 
 // Chantier 9 (audit 2) : la prévision dit toujours d'où elle vient. Un chiffre estimé depuis les

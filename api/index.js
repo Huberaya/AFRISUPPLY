@@ -54,6 +54,7 @@ __export(schema_exports, {
   productCategory: () => productCategory,
   products: () => products,
   prospects: () => prospects,
+  rateLimits: () => rateLimits,
   recipeIngredients: () => recipeIngredients,
   recipeIngredientsRelations: () => recipeIngredientsRelations,
   recipes: () => recipes,
@@ -102,7 +103,7 @@ import {
   uniqueIndex
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
-var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, emailVerifications, passwordResets, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, forecastEvents, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, subscriptionInvoices, feedback, usageEvents, prospects, shoppingLists, notifications, orderEvents, recurringOrders, claims, vendorPriceTiers, vendorCustomerPrices, vendorReviews, vendorRoutes, vendorCreditTerms;
+var memberRole, productCategory, unit, movementType, orderStatus, orderChannel, alertKind, alertSeverity, plan, users, emailVerifications, passwordResets, restaurants, restaurantMembers, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, reorderRules, forecasts, forecastEvents, leadStatus, leads, restaurantsRelations, suppliersRelations, supplierOffersRelations, priceHistoryRelations, inventoryItemsRelations, stockMovementsRelations, ordersRelations, orderLinesRelations, deliveriesRelations, deliveryDiscrepanciesRelations, recipesRelations, recipeIngredientsRelations, salesRelations, alertsRelations, rateLimits, jobRuns, auditLog, vendorStatus, vendors, vendorMembers, vendorOffers, groupBuyStatus, groupBuys, groupBuyParticipations, commissions, billingEvents, commissionInvoices, subscriptionInvoices, feedback, usageEvents, prospects, shoppingLists, notifications, orderEvents, recurringOrders, claims, vendorPriceTiers, vendorCustomerPrices, vendorReviews, vendorRoutes, vendorCreditTerms;
 var init_schema = __esm({
   "packages/db/src/schema.ts"() {
     "use strict";
@@ -554,6 +555,12 @@ var init_schema = __esm({
       product: one(products, { fields: [alerts.productId], references: [products.id] }),
       supplier: one(suppliers, { fields: [alerts.supplierId], references: [suppliers.id] })
     }));
+    rateLimits = pgTable("rate_limits", {
+      key: text("key").primaryKey(),
+      // `${route}:${ip}`
+      n: integer("n").default(0).notNull(),
+      resetAt: timestamp("reset_at", { withTimezone: true }).notNull()
+    });
     jobRuns = pgTable("job_runs", {
       id: uuid("id").primaryKey().defaultRandom(),
       job: text("job").notNull(),
@@ -2195,6 +2202,7 @@ __export(src_exports, {
   products: () => products,
   prospects: () => prospects,
   quantityCeiling: () => quantityCeiling,
+  rateLimits: () => rateLimits,
   recipeIngredients: () => recipeIngredients,
   recipeIngredientsRelations: () => recipeIngredientsRelations,
   recipes: () => recipes,
@@ -2739,8 +2747,8 @@ function checkSecureConfig(env = process.env) {
   if (prod && !env.DATABASE_URL?.trim()) {
     errors2.push("DATABASE_URL est absent en production : la base serait une base locale \xE9ph\xE9m\xE8re (donn\xE9es perdues \xE0 chaque d\xE9ploiement).");
   }
-  if (env.SEED_DEMO === "true" && prod && env.ALLOW_DEMO_SEED !== "true") {
-    errors2.push("SEED_DEMO=true en production cr\xE9erait le restaurant de d\xE9monstration avec des identifiants publics (awa@chezawa.fr / demo1234). Retirez SEED_DEMO, ou assumez-le explicitement avec ALLOW_DEMO_SEED=true.");
+  if (env.SEED_DEMO && env.SEED_DEMO !== "false" && prod && env.ALLOW_DEMO_SEED !== "true") {
+    errors2.push("SEED_DEMO (true/purge) en production cr\xE9erait le restaurant de d\xE9monstration avec des identifiants publics (awa@chezawa.fr / demo1234). Retirez SEED_DEMO, ou assumez-le explicitement avec ALLOW_DEMO_SEED=true.");
   }
   if (prod && !env.CRON_SECRET?.trim()) warnings2.push("CRON_SECRET absent : le job quotidien (mail du matin, rappels grossistes) r\xE9pondra 503.");
   if (prod && !env.ADMIN_EMAILS?.trim()) warnings2.push("ADMIN_EMAILS absent : aucune personne ne peut valider les fournisseurs plateforme ni voir les leads.");
@@ -2927,6 +2935,7 @@ var init_auth = __esm({
 
 // apps/api/src/lib/ops.ts
 import { getConnInfo } from "@hono/node-server/conninfo";
+import { sql as sql5 } from "drizzle-orm";
 function parseDsn(dsn) {
   const u = new URL(dsn);
   const projectId = u.pathname.replace(/^\//, "");
@@ -2962,6 +2971,25 @@ ${JSON.stringify(event)}
   } catch {
   }
 }
+async function bumpCounter(key, windowMs) {
+  const db = await getDb();
+  const iso = new Date(Date.now() + windowMs).toISOString();
+  const res = await db.execute(sql5`
+    INSERT INTO rate_limits (key, n, reset_at) VALUES (${key}, 1, ${iso}::timestamptz)
+    ON CONFLICT (key) DO UPDATE SET
+      n = CASE WHEN rate_limits.reset_at <= now() THEN 1 ELSE rate_limits.n + 1 END,
+      reset_at = CASE WHEN rate_limits.reset_at <= now() THEN ${iso}::timestamptz ELSE rate_limits.reset_at END
+    RETURNING n, reset_at`);
+  const row = (res.rows ?? [])[0];
+  if (!row) throw new Error("rate_limits: RETURNING vide");
+  if (Math.random() < 0.01) {
+    try {
+      await db.execute(sql5`DELETE FROM rate_limits WHERE reset_at <= now()`);
+    } catch {
+    }
+  }
+  return { n: Number(row.n), resetMs: new Date(row.reset_at).getTime() };
+}
 function clientIp(c) {
   const trustProxy = process.env.TRUST_PROXY === "true" || !!process.env.VERCEL;
   const xff = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
@@ -2977,21 +3005,26 @@ function rateLimit(opts) {
   return async (c, next) => {
     const ip = clientIp(c);
     const k = `${opts.key ? opts.key(c) : c.req.path}:${ip}`;
-    const now = Date.now();
-    let b = buckets.get(k);
-    if (!b || b.reset < now) {
-      b = { n: 0, reset: now + opts.windowMs };
-      buckets.set(k, b);
+    let n18;
+    let resetMs;
+    try {
+      ({ n: n18, resetMs } = await bumpCounter(k, opts.windowMs));
+    } catch {
+      const now = Date.now();
+      let b = memBuckets.get(k);
+      if (!b || b.reset < now) {
+        b = { n: 0, reset: now + opts.windowMs };
+        memBuckets.set(k, b);
+      }
+      b.n += 1;
+      if (memBuckets.size > 2e4) memBuckets.clear();
+      n18 = b.n;
+      resetMs = b.reset;
     }
-    b.n += 1;
-    if (buckets.size > 5e3) {
-      for (const [kk, v] of buckets) if (v.reset < now) buckets.delete(kk);
-    }
-    if (buckets.size > 2e4) buckets.clear();
     c.header("X-RateLimit-Limit", String(opts.max));
-    c.header("X-RateLimit-Remaining", String(Math.max(0, opts.max - b.n)));
-    if (b.n > opts.max) {
-      c.header("Retry-After", String(Math.ceil((b.reset - now) / 1e3)));
+    c.header("X-RateLimit-Remaining", String(Math.max(0, opts.max - n18)));
+    if (n18 > opts.max) {
+      c.header("Retry-After", String(Math.max(1, Math.ceil((resetMs - Date.now()) / 1e3))));
       return c.json({ error: "Trop de tentatives, r\xE9essayez dans une minute." }, 429);
     }
     await next();
@@ -3026,13 +3059,13 @@ async function alertAdmin(opts) {
   await captureException(new Error(opts.message), { route: `ops/${opts.key}`, extra: opts.detail });
   return true;
 }
-var sentryEnabled, buckets, adminAlerts, buildInfo;
+var sentryEnabled, memBuckets, adminAlerts, buildInfo;
 var init_ops = __esm({
   "apps/api/src/lib/ops.ts"() {
     "use strict";
     init_src();
     sentryEnabled = () => !!process.env.SENTRY_DSN;
-    buckets = /* @__PURE__ */ new Map();
+    memBuckets = /* @__PURE__ */ new Map();
     adminAlerts = /* @__PURE__ */ new Map();
     buildInfo = () => ({ version: process.env.npm_package_version ?? "0.1.0", commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local", env: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development", region: process.env.VERCEL_REGION ?? "local" });
   }
@@ -3280,7 +3313,7 @@ var init_recipients = __esm({
 });
 
 // apps/api/src/lib/notify.ts
-import { and as and6, asc as asc2, eq as eq9, gte, inArray as inArray2, isNull as isNull4, lt, or, sql as sql5 } from "drizzle-orm";
+import { and as and6, asc as asc2, eq as eq9, gte, inArray as inArray2, isNull as isNull4, lt, or, sql as sql6 } from "drizzle-orm";
 async function pendingImmediateAlerts(rid2, limit = 50) {
   const db = await getDb();
   const cutoff = new Date(Date.now() - IMMEDIATE_WINDOW_HOURS() * 36e5);
@@ -3291,7 +3324,7 @@ async function pendingImmediateAlerts(rid2, limit = 50) {
     gte(alerts.createdAt, cutoff),
     // Chantier 9 : un rappel doux (severity « blue ») ne part pas par e-mail — il serait quotidien
     // et deviendrait du bruit. Les alertes graves partent immédiatement, comme avant.
-    or(and6(inArray2(alerts.kind, [...IMMEDIATE_KINDS]), inArray2(alerts.severity, [...IMMEDIATE_SEVERITIES])), sql5`${alerts.payload} ? 'surchargeEur'`)
+    or(and6(inArray2(alerts.kind, [...IMMEDIATE_KINDS]), inArray2(alerts.severity, [...IMMEDIATE_SEVERITIES])), sql6`${alerts.payload} ? 'surchargeEur'`)
   )).orderBy(asc2(alerts.createdAt)).limit(limit);
   return rows.map((r) => ({ id: r.id, kind: r.kind, severity: r.severity, title: r.title, message: r.message, actionUrl: r.actionUrl }));
 }
@@ -3710,7 +3743,7 @@ var init_engines = __esm({
 // apps/api/src/routes/restaurant.ts
 import { Hono as Hono2 } from "hono";
 import { z as z2 } from "zod";
-import { and as and7, eq as eq10, desc as desc3, gte as gte2, sql as sql6, inArray as inArray3 } from "drizzle-orm";
+import { and as and7, eq as eq10, desc as desc3, gte as gte2, sql as sql7, inArray as inArray3 } from "drizzle-orm";
 async function assertPlausibleQuantity(rid2, asked, opts = {}) {
   const db = await getDb();
   const inv = await db.select().from(inventoryItems).where(and7(eq10(inventoryItems.restaurantId, rid2), inArray3(inventoryItems.productId, asked.map((a) => a.productId))));
@@ -3776,11 +3809,11 @@ async function loadSupplierStats(rid2) {
   const db = await getDb();
   const rows = await db.select({
     supplierId: orders.supplierId,
-    delivered: sql6`count(*) filter (where ${orders.status} in ('livree','livree_partiel'))`,
-    late: sql6`count(*) filter (where ${deliveries.isLate})`,
-    discrepancies: sql6`count(*) filter (where ${deliveries.hasDiscrepancy})`,
-    total: sql6`count(*)`,
-    spent: sql6`coalesce(sum(${orders.totalEur}),0)`
+    delivered: sql7`count(*) filter (where ${orders.status} in ('livree','livree_partiel'))`,
+    late: sql7`count(*) filter (where ${deliveries.isLate})`,
+    discrepancies: sql7`count(*) filter (where ${deliveries.hasDiscrepancy})`,
+    total: sql7`count(*)`,
+    spent: sql7`coalesce(sum(${orders.totalEur}),0)`
   }).from(orders).leftJoin(deliveries, eq10(deliveries.orderId, orders.id)).where(eq10(orders.restaurantId, rid2)).groupBy(orders.supplierId);
   const map = /* @__PURE__ */ new Map();
   for (const r of rows) {
@@ -3876,11 +3909,11 @@ var init_restaurant = __esm({
       const startPrev = new Date(startMonth);
       startPrev.setMonth(startPrev.getMonth() - 1);
       const spend = await db.select({
-        thisMonth: sql6`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${startMonth.toISOString()}),0)`,
-        prevMonth: sql6`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${startPrev.toISOString()} and ${orders.createdAt} < ${startMonth.toISOString()}),0)`,
-        last30: sql6`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${new Date(Date.now() - 30 * 864e5).toISOString()}),0)`,
-        prev30: sql6`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${new Date(Date.now() - 60 * 864e5).toISOString()} and ${orders.createdAt} < ${new Date(Date.now() - 30 * 864e5).toISOString()}),0)`
-      }).from(orders).where(and7(eq10(orders.restaurantId, rid2), sql6`${orders.status} <> 'annulee'`));
+        thisMonth: sql7`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${startMonth.toISOString()}),0)`,
+        prevMonth: sql7`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${startPrev.toISOString()} and ${orders.createdAt} < ${startMonth.toISOString()}),0)`,
+        last30: sql7`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${new Date(Date.now() - 30 * 864e5).toISOString()}),0)`,
+        prev30: sql7`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${new Date(Date.now() - 60 * 864e5).toISOString()} and ${orders.createdAt} < ${new Date(Date.now() - 30 * 864e5).toISOString()}),0)`
+      }).from(orders).where(and7(eq10(orders.restaurantId, rid2), sql7`${orders.status} <> 'annulee'`));
       const sp = spend[0];
       const evolutionPct = n(sp.prev30) > 0 ? (n(sp.last30) - n(sp.prev30)) / n(sp.prev30) * 100 : null;
       const recentAlerts = await db.select().from(alerts).where(and7(eq10(alerts.restaurantId, rid2), eq10(alerts.isRead, false))).orderBy(desc3(alerts.createdAt)).limit(6);
@@ -3966,7 +3999,7 @@ var init_restaurant = __esm({
       const [rows, stats3, offerCounts] = await Promise.all([
         db.select().from(suppliers).where(eq10(suppliers.restaurantId, rid2)).orderBy(suppliers.name),
         loadSupplierStats(rid2),
-        db.select({ supplierId: supplierOffers.supplierId, count: sql6`count(*)` }).from(supplierOffers).where(eq10(supplierOffers.restaurantId, rid2)).groupBy(supplierOffers.supplierId)
+        db.select({ supplierId: supplierOffers.supplierId, count: sql7`count(*)` }).from(supplierOffers).where(eq10(supplierOffers.restaurantId, rid2)).groupBy(supplierOffers.supplierId)
       ]);
       const counts = new Map(offerCounts.map((o) => [o.supplierId, n(o.count)]));
       return c.json({
@@ -4009,7 +4042,7 @@ var init_restaurant = __esm({
     restaurantRoutes.get("/products", async (c) => {
       const rid2 = c.get("restaurantId");
       const db = await getDb();
-      const rows = await db.select().from(products).where(sql6`${products.restaurantId} is null or ${products.restaurantId} = ${rid2}`).orderBy(products.category, products.name);
+      const rows = await db.select().from(products).where(sql7`${products.restaurantId} is null or ${products.restaurantId} = ${rid2}`).orderBy(products.category, products.name);
       return c.json({ products: rows });
     });
     restaurantRoutes.get("/compare/:productId", async (c) => {
@@ -4873,7 +4906,7 @@ var init_assistant = __esm({
 // apps/api/src/routes/intelligence.ts
 import { Hono as Hono4 } from "hono";
 import { z as z4 } from "zod";
-import { and as and9, eq as eq12, desc as desc4, gte as gte3, asc as asc3, sql as sql8, inArray as inArray5 } from "drizzle-orm";
+import { and as and9, eq as eq12, desc as desc4, gte as gte3, asc as asc3, sql as sql9, inArray as inArray5 } from "drizzle-orm";
 async function loadContext(rid2) {
   const db = await getDb();
   const [restaurant] = await db.select().from(restaurants).where(eq12(restaurants.id, rid2));
@@ -4883,7 +4916,7 @@ async function loadContext(rid2) {
     db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, quantity: recipeIngredients.quantity, seasonality: products.seasonality }).from(recipeIngredients).innerJoin(recipes, eq12(recipes.id, recipeIngredients.recipeId)).innerJoin(products, eq12(products.id, recipeIngredients.productId)).where(and9(eq12(recipes.restaurantId, rid2), eq12(recipes.isActive, true))),
     db.select().from(recipes).where(eq12(recipes.restaurantId, rid2)),
     db.select({ offer: supplierOffers, supplier: suppliers }).from(supplierOffers).innerJoin(suppliers, eq12(suppliers.id, supplierOffers.supplierId)).where(and9(eq12(supplierOffers.restaurantId, rid2), eq12(suppliers.isActive, true))),
-    db.select({ supplierId: orders.supplierId, delivered: sql8`count(*) filter (where ${orders.status} in ('livree','livree_partiel'))`, late: sql8`count(*) filter (where ${deliveries.isLate})`, disc: sql8`count(*) filter (where ${deliveries.hasDiscrepancy})`, spent: sql8`coalesce(sum(${orders.totalEur}),0)` }).from(orders).leftJoin(deliveries, eq12(deliveries.orderId, orders.id)).where(eq12(orders.restaurantId, rid2)).groupBy(orders.supplierId),
+    db.select({ supplierId: orders.supplierId, delivered: sql9`count(*) filter (where ${orders.status} in ('livree','livree_partiel'))`, late: sql9`count(*) filter (where ${deliveries.isLate})`, disc: sql9`count(*) filter (where ${deliveries.hasDiscrepancy})`, spent: sql9`coalesce(sum(${orders.totalEur}),0)` }).from(orders).leftJoin(deliveries, eq12(deliveries.orderId, orders.id)).where(eq12(orders.restaurantId, rid2)).groupBy(orders.supplierId),
     // Chantier 4 (audit) — événements déclarés (soirées privatisées…) à venir
     db.select().from(forecastEvents).where(and9(eq12(forecastEvents.restaurantId, rid2), gte3(forecastEvents.day, (/* @__PURE__ */ new Date()).toISOString().slice(0, 10))))
   ]);
@@ -5113,7 +5146,7 @@ var init_intelligence = __esm({
       const db = await getDb();
       const day = c.req.query("day") ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
       const [recs, rows] = await Promise.all([db.select().from(recipes).where(and9(eq12(recipes.restaurantId, rid2), eq12(recipes.isActive, true))).orderBy(recipes.name), db.select().from(sales).where(and9(eq12(sales.restaurantId, rid2), eq12(sales.day, day)))]);
-      const last14 = await db.select({ day: sales.day, portions: sql8`sum(${sales.portions})` }).from(sales).where(and9(eq12(sales.restaurantId, rid2), gte3(sales.day, new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10)))).groupBy(sales.day).orderBy(sales.day);
+      const last14 = await db.select({ day: sales.day, portions: sql9`sum(${sales.portions})` }).from(sales).where(and9(eq12(sales.restaurantId, rid2), gte3(sales.day, new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10)))).groupBy(sales.day).orderBy(sales.day);
       return c.json({ day, recipes: recs.map((r) => ({ id: r.id, name: r.name, portions: rows.find((s) => s.recipeId === r.id)?.portions ?? 0 })), history: last14.map((h) => ({ day: h.day, portions: n3(h.portions) })) });
     });
     intelligenceRoutes.post("/sales", async (c) => {
@@ -5254,8 +5287,8 @@ var init_intelligence = __esm({
           const start = /* @__PURE__ */ new Date();
           start.setDate(1);
           start.setHours(0, 0, 0, 0);
-          const [sp] = await db.select({ month: sql8`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${start.toISOString()}),0)`, last30: sql8`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${new Date(Date.now() - 30 * 864e5).toISOString()}),0)`, prev30: sql8`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${new Date(Date.now() - 60 * 864e5).toISOString()} and ${orders.createdAt} < ${new Date(Date.now() - 30 * 864e5).toISOString()}),0)` }).from(orders).where(and9(eq12(orders.restaurantId, rid2), sql8`${orders.status} <> 'annulee'`));
-          const bySup = await db.select({ name: suppliers.name, total: sql8`sum(${orders.totalEur})` }).from(orders).innerJoin(suppliers, eq12(suppliers.id, orders.supplierId)).where(and9(eq12(orders.restaurantId, rid2), gte3(orders.createdAt, new Date(Date.now() - 30 * 864e5)))).groupBy(suppliers.name).orderBy(desc4(sql8`sum(${orders.totalEur})`));
+          const [sp] = await db.select({ month: sql9`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${start.toISOString()}),0)`, last30: sql9`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${new Date(Date.now() - 30 * 864e5).toISOString()}),0)`, prev30: sql9`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${new Date(Date.now() - 60 * 864e5).toISOString()} and ${orders.createdAt} < ${new Date(Date.now() - 30 * 864e5).toISOString()}),0)` }).from(orders).where(and9(eq12(orders.restaurantId, rid2), sql9`${orders.status} <> 'annulee'`));
+          const bySup = await db.select({ name: suppliers.name, total: sql9`sum(${orders.totalEur})` }).from(orders).innerJoin(suppliers, eq12(suppliers.id, orders.supplierId)).where(and9(eq12(orders.restaurantId, rid2), gte3(orders.createdAt, new Date(Date.now() - 30 * 864e5)))).groupBy(suppliers.name).orderBy(desc4(sql9`sum(${orders.totalEur})`));
           const ph = await db.select({ productName: products.name, unit: products.baseUnit, supplierName: suppliers.name, price: priceHistory.unitPriceEur, at: priceHistory.recordedAt, offerId: priceHistory.offerId }).from(priceHistory).innerJoin(supplierOffers, eq12(supplierOffers.id, priceHistory.offerId)).innerJoin(products, eq12(products.id, supplierOffers.productId)).innerJoin(suppliers, eq12(suppliers.id, supplierOffers.supplierId)).where(and9(eq12(priceHistory.restaurantId, rid2), gte3(priceHistory.recordedAt, new Date(Date.now() - 60 * 864e5)))).orderBy(priceHistory.recordedAt);
           const hikes = [];
           for (const offerId of new Set(ph.map((p) => p.offerId))) {
@@ -5444,12 +5477,12 @@ var init_reminders = __esm({
 });
 
 // apps/api/src/lib/credit.ts
-import { and as and12, eq as eq15, inArray as inArray7, sql as sql10 } from "drizzle-orm";
+import { and as and12, eq as eq15, inArray as inArray7, sql as sql11 } from "drizzle-orm";
 async function exposureFor(vendorId, restaurantIds) {
   const db = await getDb();
   const out = /* @__PURE__ */ new Map();
   if (!restaurantIds.length) return out;
-  const rows = await db.select({ rid: orders.restaurantId, total: orders.totalEur, fee: orders.deliveryFeeEur, paid: orders.paidAmountEur, paidAt: orders.paidAt, dueAt: orders.dueAt, status: orders.status }).from(orders).where(and12(eq15(orders.vendorId, vendorId), inArray7(orders.restaurantId, restaurantIds), sql10`${orders.status} not in ('brouillon','preparee','annulee')`));
+  const rows = await db.select({ rid: orders.restaurantId, total: orders.totalEur, fee: orders.deliveryFeeEur, paid: orders.paidAmountEur, paidAt: orders.paidAt, dueAt: orders.dueAt, status: orders.status }).from(orders).where(and12(eq15(orders.vendorId, vendorId), inArray7(orders.restaurantId, restaurantIds), sql11`${orders.status} not in ('brouillon','preparee','annulee')`));
   const t = today();
   for (const rid2 of restaurantIds) out.set(rid2, { outstandingEur: 0, overdueEur: 0, overdueCount: 0, openOrders: 0, oldestDueAt: null });
   for (const r of rows) {
@@ -5490,7 +5523,7 @@ async function remindPayments(now = /* @__PURE__ */ new Date()) {
   const t = now.toISOString().slice(0, 10);
   const { vendors: vendors2, restaurants: restaurants2, restaurantMembers: restaurantMembers2, users: users2 } = await Promise.resolve().then(() => (init_src(), src_exports));
   const { sendMail: sendMail2 } = await Promise.resolve().then(() => (init_mailer(), mailer_exports));
-  const rows = await db.select({ o: orders, vendorName: vendors2.name, restaurantName: restaurants2.name }).from(orders).innerJoin(vendors2, eq15(vendors2.id, orders.vendorId)).innerJoin(restaurants2, eq15(restaurants2.id, orders.restaurantId)).where(and12(sql10`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql10`${orders.paidAt} is null`, sql10`${orders.dueAt} is not null`, sql10`${orders.paymentDays} > 0`));
+  const rows = await db.select({ o: orders, vendorName: vendors2.name, restaurantName: restaurants2.name }).from(orders).innerJoin(vendors2, eq15(vendors2.id, orders.vendorId)).innerJoin(restaurants2, eq15(restaurants2.id, orders.restaurantId)).where(and12(sql11`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql11`${orders.paidAt} is null`, sql11`${orders.dueAt} is not null`, sql11`${orders.paymentDays} > 0`));
   const dayDiff = (due2) => Math.round(((/* @__PURE__ */ new Date(`${t}T00:00:00Z`)).getTime() - (/* @__PURE__ */ new Date(`${due2}T00:00:00Z`)).getTime()) / 864e5);
   const due = rows.map((r) => ({ ...r, d: dayDiff(r.o.dueAt) })).filter((r) => [-2, 1, 8, 15].includes(r.d));
   let reminded = 0;
@@ -5719,7 +5752,7 @@ var init_digest = __esm({
 // apps/api/src/routes/public.ts
 import { Hono as Hono6 } from "hono";
 import { z as z5 } from "zod";
-import { and as and14, desc as desc5, eq as eq17, ilike, isNull as isNull7, sql as sql11 } from "drizzle-orm";
+import { and as and14, desc as desc5, eq as eq17, ilike, isNull as isNull7, sql as sql12 } from "drizzle-orm";
 function rateLimited(ip) {
   const now = Date.now();
   const arr = (hits.get(ip) ?? []).filter((t) => now - t < 36e5);
@@ -5794,7 +5827,7 @@ var init_public = __esm({
       if (!admins.includes(c.get("user").email.toLowerCase())) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
       const db = await getDb();
       const rows = await db.select().from(leads).orderBy(desc5(leads.createdAt)).limit(500);
-      const [{ total }] = await db.select({ total: sql11`count(*)` }).from(leads);
+      const [{ total }] = await db.select({ total: sql12`count(*)` }).from(leads);
       return c.json({ leads: rows, total: Number(total) });
     });
     publicRoutes.put("/admin/leads/:id", requireAuth, async (c) => {
@@ -6111,7 +6144,7 @@ ${xref}
 // apps/api/src/routes/billing.ts
 import { Hono as Hono7 } from "hono";
 import { z as z6 } from "zod";
-import { and as and15, eq as eq18, sql as sql12, desc as desc6 } from "drizzle-orm";
+import { and as and15, eq as eq18, sql as sql13, desc as desc6 } from "drizzle-orm";
 async function handleStripeInvoicePaid(db, inv) {
   if (typeof inv.customer === "string") await db.update(restaurants).set({ subscriptionStatus: "active" }).where(eq18(restaurants.stripeCustomerId, inv.customer));
   let [r] = inv.subscription ? await db.select().from(restaurants).where(eq18(restaurants.stripeSubscriptionId, inv.subscription)) : [];
@@ -6208,7 +6241,7 @@ L'\xE9quipe AFRISUPPLY`,
 }
 async function invoiceCommissions(period, opts = {}) {
   const db = await getDb();
-  const rows = await db.select({ vendorId: commissions.vendorId, orders: sql12`count(*)`, base: sql12`sum(${commissions.orderTotalEur})`, amount: sql12`sum(${commissions.amountEur})` }).from(commissions).where(and15(eq18(commissions.period, period), eq18(commissions.invoiced, false))).groupBy(commissions.vendorId);
+  const rows = await db.select({ vendorId: commissions.vendorId, orders: sql13`count(*)`, base: sql13`sum(${commissions.orderTotalEur})`, amount: sql13`sum(${commissions.amountEur})` }).from(commissions).where(and15(eq18(commissions.period, period), eq18(commissions.invoiced, false))).groupBy(commissions.vendorId);
   const out = [];
   for (const r of rows) {
     const amount = Number(r.amount);
@@ -6579,7 +6612,7 @@ var init_billing2 = __esm({
 // apps/api/src/routes/pilots.ts
 import { Hono as Hono8 } from "hono";
 import { z as z7 } from "zod";
-import { and as and16, desc as desc7, eq as eq19, gte as gte5, sql as sql13 } from "drizzle-orm";
+import { and as and16, desc as desc7, eq as eq19, gte as gte5, sql as sql14 } from "drizzle-orm";
 function makeInviteCode() {
   const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let s = "";
@@ -6590,15 +6623,15 @@ async function activityCounts(rid2) {
   const db = await getDb();
   const one = async (q2) => n7((await q2)[0]?.c);
   const [recipesC, invC, supC, offC, salesC, ordersC, delivC, movC, alertsUnread] = await Promise.all([
-    one(db.select({ c: sql13`count(*)` }).from(recipes).where(eq19(recipes.restaurantId, rid2))),
-    one(db.select({ c: sql13`count(*)` }).from(inventoryItems).where(and16(eq19(inventoryItems.restaurantId, rid2), sql13`${inventoryItems.quantity} > 0`))),
-    one(db.select({ c: sql13`count(*)` }).from(suppliers).where(eq19(suppliers.restaurantId, rid2))),
-    one(db.select({ c: sql13`count(*)` }).from(supplierOffers).innerJoin(suppliers, eq19(suppliers.id, supplierOffers.supplierId)).where(eq19(suppliers.restaurantId, rid2))),
-    one(db.select({ c: sql13`count(*)` }).from(sales).where(eq19(sales.restaurantId, rid2))),
-    one(db.select({ c: sql13`count(*)` }).from(orders).where(and16(eq19(orders.restaurantId, rid2), sql13`${orders.status} <> 'brouillon'`))),
-    one(db.select({ c: sql13`count(*)` }).from(deliveries).where(eq19(deliveries.restaurantId, rid2))),
-    one(db.select({ c: sql13`count(*)` }).from(stockMovements).where(eq19(stockMovements.restaurantId, rid2))),
-    one(db.select({ c: sql13`count(*)` }).from(alerts).where(and16(eq19(alerts.restaurantId, rid2), eq19(alerts.isRead, false))))
+    one(db.select({ c: sql14`count(*)` }).from(recipes).where(eq19(recipes.restaurantId, rid2))),
+    one(db.select({ c: sql14`count(*)` }).from(inventoryItems).where(and16(eq19(inventoryItems.restaurantId, rid2), sql14`${inventoryItems.quantity} > 0`))),
+    one(db.select({ c: sql14`count(*)` }).from(suppliers).where(eq19(suppliers.restaurantId, rid2))),
+    one(db.select({ c: sql14`count(*)` }).from(supplierOffers).innerJoin(suppliers, eq19(suppliers.id, supplierOffers.supplierId)).where(eq19(suppliers.restaurantId, rid2))),
+    one(db.select({ c: sql14`count(*)` }).from(sales).where(eq19(sales.restaurantId, rid2))),
+    one(db.select({ c: sql14`count(*)` }).from(orders).where(and16(eq19(orders.restaurantId, rid2), sql14`${orders.status} <> 'brouillon'`))),
+    one(db.select({ c: sql14`count(*)` }).from(deliveries).where(eq19(deliveries.restaurantId, rid2))),
+    one(db.select({ c: sql14`count(*)` }).from(stockMovements).where(eq19(stockMovements.restaurantId, rid2))),
+    one(db.select({ c: sql14`count(*)` }).from(alerts).where(and16(eq19(alerts.restaurantId, rid2), eq19(alerts.isRead, false))))
   ]);
   return { recipes: recipesC, inventory: invC, supplier: supC, offers: offC, sales: salesC, order: ordersC, delivery: delivC, movements: movC, alertsUnread };
 }
@@ -6614,15 +6647,15 @@ async function pilotHealth(rid2, now = /* @__PURE__ */ new Date()) {
   const counts = await activityCounts(rid2);
   const steps = stepsFor(counts, r.onboardingDone ?? []);
   const since7 = new Date(now.getTime() - 7 * 864e5);
-  const [{ c: events7 }] = await db.select({ c: sql13`count(*)` }).from(usageEvents).where(and16(eq19(usageEvents.restaurantId, rid2), gte5(usageEvents.at, since7)));
-  const [{ c: sales7 }] = await db.select({ c: sql13`count(*)` }).from(sales).where(and16(eq19(sales.restaurantId, rid2), gte5(sales.day, since7.toISOString().slice(0, 10))));
-  const [{ c: mov7 }] = await db.select({ c: sql13`count(*)` }).from(stockMovements).where(and16(eq19(stockMovements.restaurantId, rid2), gte5(stockMovements.createdAt, since7)));
-  const [{ c: orders7 }] = await db.select({ c: sql13`count(*)` }).from(orders).where(and16(eq19(orders.restaurantId, rid2), gte5(orders.createdAt, since7), sql13`${orders.status} <> 'brouillon'`));
+  const [{ c: events7 }] = await db.select({ c: sql14`count(*)` }).from(usageEvents).where(and16(eq19(usageEvents.restaurantId, rid2), gte5(usageEvents.at, since7)));
+  const [{ c: sales7 }] = await db.select({ c: sql14`count(*)` }).from(sales).where(and16(eq19(sales.restaurantId, rid2), gte5(sales.day, since7.toISOString().slice(0, 10))));
+  const [{ c: mov7 }] = await db.select({ c: sql14`count(*)` }).from(stockMovements).where(and16(eq19(stockMovements.restaurantId, rid2), gte5(stockMovements.createdAt, since7)));
+  const [{ c: orders7 }] = await db.select({ c: sql14`count(*)` }).from(orders).where(and16(eq19(orders.restaurantId, rid2), gte5(orders.createdAt, since7), sql14`${orders.status} <> 'brouillon'`));
   const members = await db.select({ email: users.email, fullName: users.fullName, lastLoginAt: users.lastLoginAt, role: restaurantMembers.role }).from(restaurantMembers).innerJoin(users, eq19(users.id, restaurantMembers.userId)).where(eq19(restaurantMembers.restaurantId, rid2));
   const lastLogin = members.map((m) => m.lastLoginAt?.getTime() ?? 0).reduce((a, b) => Math.max(a, b), 0);
   const daysSinceLogin = lastLogin ? Math.floor((now.getTime() - lastLogin) / 864e5) : null;
   const [nps] = await db.select({ score: feedback.score, at: feedback.createdAt }).from(feedback).where(and16(eq19(feedback.restaurantId, rid2), eq19(feedback.kind, "nps"))).orderBy(desc7(feedback.createdAt)).limit(1);
-  const [{ c: openFeedback }] = await db.select({ c: sql13`count(*)` }).from(feedback).where(and16(eq19(feedback.restaurantId, rid2), eq19(feedback.status, "nouveau"), sql13`${feedback.kind} <> 'nps'`));
+  const [{ c: openFeedback }] = await db.select({ c: sql14`count(*)` }).from(feedback).where(and16(eq19(feedback.restaurantId, rid2), eq19(feedback.status, "nouveau"), sql14`${feedback.kind} <> 'nps'`));
   const dayNumber = Math.floor((now.getTime() - r.createdAt.getTime()) / 864e5) + 1;
   const doneSteps = steps.filter((s) => s.done).length;
   const active7 = n7(sales7) + n7(mov7) + n7(orders7) > 0 || n7(events7) >= 5;
@@ -6763,7 +6796,7 @@ ${APP3()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) \u2014 pag
       const fb = await db.select({ f: feedback, restaurantName: restaurants.name }).from(feedback).innerJoin(restaurants, eq19(restaurants.id, feedback.restaurantId)).orderBy(desc7(feedback.createdAt)).limit(100);
       const npsScores = pilots.map((p) => p.nps?.score).filter((s) => typeof s === "number");
       const npsValue = npsScores.length ? Math.round((npsScores.filter((s) => s >= 9).length - npsScores.filter((s) => s <= 6).length) / npsScores.length * 100) : null;
-      const invited = await db.select({ id: leads.id, restaurantName: leads.restaurantName, contactName: leads.contactName, email: leads.email, inviteCode: leads.inviteCode, invitedAt: leads.invitedAt, restaurantId: leads.restaurantId, status: leads.status }).from(leads).where(sql13`${leads.inviteCode} is not null`).orderBy(desc7(leads.invitedAt));
+      const invited = await db.select({ id: leads.id, restaurantName: leads.restaurantName, contactName: leads.contactName, email: leads.email, inviteCode: leads.inviteCode, invitedAt: leads.invitedAt, restaurantId: leads.restaurantId, status: leads.status }).from(leads).where(sql14`${leads.inviteCode} is not null`).orderBy(desc7(leads.invitedAt));
       return c.json({ pilots, feedback: fb.map(({ f, restaurantName }) => ({ ...f, restaurantName })), summary: { total: pilots.length, vert: pilots.filter((p) => p.status === "vert").length, orange: pilots.filter((p) => p.status === "orange").length, rouge: pilots.filter((p) => p.status === "rouge").length, activeThisWeek: pilots.filter((p) => p.week.sales + p.week.movements + p.week.orders > 0).length, nps: npsValue, npsResponses: npsScores.length, founders: pilots.filter((p) => p.founder).length, founderSeatsLeft: Math.max(0, FOUNDER_OFFER.seats - pilots.filter((p) => p.founder).length) }, invited, steps: ONBOARDING_STEPS });
     });
     pilotAdminRoutes.post("/admin/pilots/invite", async (c) => {
@@ -6850,7 +6883,7 @@ var init_pricing = __esm({
 });
 
 // apps/api/src/lib/routes.ts
-import { and as and18, eq as eq21, inArray as inArray9, sql as sql14 } from "drizzle-orm";
+import { and as and18, eq as eq21, inArray as inArray9, sql as sql15 } from "drizzle-orm";
 function routeServes(r, rest) {
   if (!r.zones.length) return true;
   const city = (rest.city ?? "").trim().toLowerCase();
@@ -6878,7 +6911,7 @@ async function nextSlots(vendorId, rest, days2 = 14, now = /* @__PURE__ */ new D
   if (!rs.length) return [];
   const today2 = parisDate(now);
   const horizon = addDays(today2, days2);
-  const load = await db.select({ routeId: orders.routeId, date: orders.expectedAt, count: sql14`count(*)` }).from(orders).where(and18(inArray9(orders.routeId, rs.map((r) => r.id)), sql14`${orders.expectedAt} between ${today2} and ${horizon}`, sql14`${orders.status} not in ('annulee')`)).groupBy(orders.routeId, orders.expectedAt);
+  const load = await db.select({ routeId: orders.routeId, date: orders.expectedAt, count: sql15`count(*)` }).from(orders).where(and18(inArray9(orders.routeId, rs.map((r) => r.id)), sql15`${orders.expectedAt} between ${today2} and ${horizon}`, sql15`${orders.status} not in ('annulee')`)).groupBy(orders.routeId, orders.expectedAt);
   const out = [];
   for (let i = 0; i <= days2; i++) {
     const date2 = addDays(today2, i);
@@ -6915,14 +6948,14 @@ var init_routes = __esm({
 });
 
 // apps/api/src/lib/reliability.ts
-import { and as and19, gte as gte7, inArray as inArray10, sql as sql15 } from "drizzle-orm";
+import { and as and19, gte as gte7, inArray as inArray10, sql as sql16 } from "drizzle-orm";
 async function reliabilityFor(vendorIds) {
   const db = await getDb();
   const out = /* @__PURE__ */ new Map();
   if (!vendorIds.length) return out;
-  const since = sql15`now() - interval '90 days'`;
-  const rev = await db.select({ vendorId: vendorReviews.vendorId, rating: sql15`avg(${vendorReviews.rating})`, count: sql15`count(*)`, onTime: sql15`count(*) filter (where ${vendorReviews.onTime})`, onTimeN: sql15`count(*) filter (where ${vendorReviews.onTime} is not null)`, conform: sql15`count(*) filter (where ${vendorReviews.conform})`, conformN: sql15`count(*) filter (where ${vendorReviews.conform} is not null)` }).from(vendorReviews).where(inArray10(vendorReviews.vendorId, vendorIds)).groupBy(vendorReviews.vendorId);
-  const ops = await db.select({ vendorId: orders.vendorId, total: sql15`count(*)`, decided: sql15`count(*) filter (where ${orders.vendorDecisionAt} is not null)`, refused: sql15`count(*) filter (where ${orders.status} = 'annulee' and ${orders.vendorDecisionAt} is not null)`, avgH: sql15`avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null and ${orders.sentAt} is not null)`, delivered: sql15`count(*) filter (where ${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, partial: sql15`count(*) filter (where ${orders.status} = 'livree_partiel')` }).from(orders).where(and19(inArray10(orders.vendorId, vendorIds), gte7(orders.createdAt, since))).groupBy(orders.vendorId);
+  const since = sql16`now() - interval '90 days'`;
+  const rev = await db.select({ vendorId: vendorReviews.vendorId, rating: sql16`avg(${vendorReviews.rating})`, count: sql16`count(*)`, onTime: sql16`count(*) filter (where ${vendorReviews.onTime})`, onTimeN: sql16`count(*) filter (where ${vendorReviews.onTime} is not null)`, conform: sql16`count(*) filter (where ${vendorReviews.conform})`, conformN: sql16`count(*) filter (where ${vendorReviews.conform} is not null)` }).from(vendorReviews).where(inArray10(vendorReviews.vendorId, vendorIds)).groupBy(vendorReviews.vendorId);
+  const ops = await db.select({ vendorId: orders.vendorId, total: sql16`count(*)`, decided: sql16`count(*) filter (where ${orders.vendorDecisionAt} is not null)`, refused: sql16`count(*) filter (where ${orders.status} = 'annulee' and ${orders.vendorDecisionAt} is not null)`, avgH: sql16`avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null and ${orders.sentAt} is not null)`, delivered: sql16`count(*) filter (where ${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, partial: sql16`count(*) filter (where ${orders.status} = 'livree_partiel')` }).from(orders).where(and19(inArray10(orders.vendorId, vendorIds), gte7(orders.createdAt, since))).groupBy(orders.vendorId);
   for (const vid of vendorIds) {
     const r = rev.find((x) => x.vendorId === vid);
     const o = ops.find((x) => x.vendorId === vid);
@@ -6968,7 +7001,7 @@ __export(marketplace_exports, {
 });
 import { Hono as Hono9 } from "hono";
 import { z as z8 } from "zod";
-import { and as and20, desc as desc8, eq as eq22, gte as gte8, inArray as inArray11, sql as sql16 } from "drizzle-orm";
+import { and as and20, desc as desc8, eq as eq22, gte as gte8, inArray as inArray11, sql as sql17 } from "drizzle-orm";
 function restaurantZones(r) {
   const z22 = /* @__PURE__ */ new Set(["France"]);
   if (r.city) z22.add(r.city.trim().toLowerCase());
@@ -7148,7 +7181,7 @@ var init_marketplace = __esm({
       const zones = restaurantZones(r);
       const all = await db.select().from(vendors).where(eq22(vendors.status, "actif"));
       const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq22(inventoryItems.restaurantId, rid2))).map((x) => x.productId));
-      const linked = new Map((await db.select({ vendorId: suppliers.vendorId, supplierId: suppliers.id }).from(suppliers).where(and20(eq22(suppliers.restaurantId, rid2), sql16`${suppliers.vendorId} is not null`))).map((x) => [x.vendorId, x.supplierId]));
+      const linked = new Map((await db.select({ vendorId: suppliers.vendorId, supplierId: suppliers.id }).from(suppliers).where(and20(eq22(suppliers.restaurantId, rid2), sql17`${suppliers.vendorId} is not null`))).map((x) => [x.vendorId, x.supplierId]));
       const offers = await db.select({ vendorId: vendorOffers.vendorId, productId: vendorOffers.productId }).from(vendorOffers).where(eq22(vendorOffers.inStock, true));
       const rel = await reliabilityFor(all.map((v) => v.id));
       const out = all.filter((v) => servesZone(v, zones)).map((v) => {
@@ -7166,7 +7199,7 @@ var init_marketplace = __esm({
       if (!v) return c.json({ error: "Fournisseur introuvable" }, 404);
       const rows = await db.select({ offer: vendorOffers, product: products }).from(vendorOffers).innerJoin(products, eq22(products.id, vendorOffers.productId)).where(eq22(vendorOffers.vendorId, vid)).orderBy(products.category, products.name);
       const myBest = /* @__PURE__ */ new Map();
-      for (const o of await db.select({ productId: supplierOffers.productId, unit: sql16`min(${supplierOffers.packPriceEur} / ${supplierOffers.packQty})` }).from(supplierOffers).where(eq22(supplierOffers.restaurantId, rid2)).groupBy(supplierOffers.productId)) myBest.set(o.productId, n9(o.unit));
+      for (const o of await db.select({ productId: supplierOffers.productId, unit: sql17`min(${supplierOffers.packPriceEur} / ${supplierOffers.packQty})` }).from(supplierOffers).where(eq22(supplierOffers.restaurantId, rid2)).groupBy(supplierOffers.productId)) myBest.set(o.productId, n9(o.unit));
       const mine = new Set((await db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq22(inventoryItems.restaurantId, rid2))).map((x) => x.productId));
       const [link] = await db.select({ id: suppliers.id }).from(suppliers).where(and20(eq22(suppliers.restaurantId, rid2), eq22(suppliers.vendorId, vid)));
       const pricing = await loadPricing(rows.map((r) => r.offer), rid2);
@@ -7228,7 +7261,7 @@ var init_marketplace = __esm({
       const rid2 = c.get("restaurantId");
       const db = await getDb();
       const t = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-      const rows = await db.select({ id: orders.id, reference: orders.reference, vendorId: orders.vendorId, vendorName: vendors.name, totalEur: orders.totalEur, feeEur: orders.deliveryFeeEur, paidAmountEur: orders.paidAmountEur, paidAt: orders.paidAt, dueAt: orders.dueAt, paymentDays: orders.paymentDays, status: orders.status, deliveredAt: sql16`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})` }).from(orders).innerJoin(vendors, eq22(vendors.id, orders.vendorId)).where(and20(eq22(orders.restaurantId, rid2), sql16`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql16`${orders.paidAt} is null`)).orderBy(orders.dueAt);
+      const rows = await db.select({ id: orders.id, reference: orders.reference, vendorId: orders.vendorId, vendorName: vendors.name, totalEur: orders.totalEur, feeEur: orders.deliveryFeeEur, paidAmountEur: orders.paidAmountEur, paidAt: orders.paidAt, dueAt: orders.dueAt, paymentDays: orders.paymentDays, status: orders.status, deliveredAt: sql17`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})` }).from(orders).innerJoin(vendors, eq22(vendors.id, orders.vendorId)).where(and20(eq22(orders.restaurantId, rid2), sql17`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql17`${orders.paidAt} is null`)).orderBy(orders.dueAt);
       const items = rows.map((r) => {
         const due = Math.round((n9(r.totalEur) + n9(r.feeEur) - n9(r.paidAmountEur)) * 100) / 100;
         return { ...r, dueEur: due, overdue: !!r.dueAt && r.dueAt < t };
@@ -7395,7 +7428,7 @@ var init_marketplace = __esm({
       if (body3.data.packs === 0) {
         await db.delete(groupBuyParticipations).where(and20(eq22(groupBuyParticipations.groupBuyId, id), eq22(groupBuyParticipations.restaurantId, rid2)));
       } else await db.insert(groupBuyParticipations).values({ groupBuyId: id, restaurantId: rid2, packs: body3.data.packs }).onConflictDoUpdate({ target: [groupBuyParticipations.groupBuyId, groupBuyParticipations.restaurantId], set: { packs: body3.data.packs } });
-      const [{ total }] = await db.select({ total: sql16`coalesce(sum(${groupBuyParticipations.packs}),0)` }).from(groupBuyParticipations).where(eq22(groupBuyParticipations.groupBuyId, id));
+      const [{ total }] = await db.select({ total: sql17`coalesce(sum(${groupBuyParticipations.packs}),0)` }).from(groupBuyParticipations).where(eq22(groupBuyParticipations.groupBuyId, id));
       if (n9(total) >= gb.targetPacks && gb.status === "ouvert") await db.update(groupBuys).set({ status: "atteint" }).where(eq22(groupBuys.id, id));
       return c.json({ ok: true, myPacks: body3.data.packs, committedPacks: n9(total), reached: n9(total) >= gb.targetPacks });
     });
@@ -7432,7 +7465,7 @@ import { createHash as createHash3, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import path3 from "node:path";
-import { and as and21, eq as eq23, getTableColumns, inArray as inArray12, isNull as isNull9, sql as sql17 } from "drizzle-orm";
+import { and as and21, eq as eq23, getTableColumns, inArray as inArray12, isNull as isNull9, sql as sql18 } from "drizzle-orm";
 function stable(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -7605,7 +7638,7 @@ async function restoreBackup(backup, opts = {}) {
     if (t.conflictSafe) {
       const ids = coerced.map((r) => r.id).filter(Boolean);
       if (ids.length) {
-        const [row] = await db.select({ n: sql17`count(*)` }).from(t.table).where(inArray12(rid(t), ids));
+        const [row] = await db.select({ n: sql18`count(*)` }).from(t.table).where(inArray12(rid(t), ids));
         inserted[t.name] = Number(row?.n ?? 0);
       }
     }
@@ -7648,10 +7681,10 @@ async function restoreDrill(backup) {
     const report = await restoreBackup(backup, { db });
     const counts = {};
     for (const t of BACKUP_TABLES) {
-      const [row] = await db.select({ n: sql17`count(*)` }).from(t.table);
+      const [row] = await db.select({ n: sql18`count(*)` }).from(t.table);
       counts[t.name] = Number(row?.n ?? 0);
     }
-    const [restoCount] = await db.select({ n: sql17`count(*)` }).from(restaurants);
+    const [restoCount] = await db.select({ n: sql18`count(*)` }).from(restaurants);
     return {
       ok: report.ok,
       dir,
@@ -7753,7 +7786,7 @@ async function backupAllRestaurants(opts = {}) {
 }
 async function backupStorageStats(dir = backupDir()) {
   const list = await listBackups(dir);
-  const rows = list.length ? await getDb().then((db) => db.select({ n: sql17`count(*)` }).from(restaurants)) : [];
+  const rows = list.length ? await getDb().then((db) => db.select({ n: sql18`count(*)` }).from(restaurants)) : [];
   return {
     dir,
     files: list.length,
@@ -7827,7 +7860,7 @@ var init_backup = __esm({
 });
 
 // apps/api/src/jobs/daily.ts
-import { and as and22, desc as desc9, eq as eq24, gte as gte9, inArray as inArray13, sql as sql18 } from "drizzle-orm";
+import { and as and22, desc as desc9, eq as eq24, gte as gte9, inArray as inArray13, sql as sql19 } from "drizzle-orm";
 async function buildDigestForRestaurant(rid2, opts = {}) {
   const db = await getDb();
   const now = opts.now ?? /* @__PURE__ */ new Date();
@@ -7844,19 +7877,19 @@ async function buildDigestForRestaurant(rid2, opts = {}) {
   const cart = needs.length ? buildSmartCart(needs, ctx.offers) : null;
   const since = new Date(now.getTime() - 36 * 36e5);
   const recentAlerts = await db.select().from(alerts).where(and22(eq24(alerts.restaurantId, rid2), eq24(alerts.isRead, false), gte9(alerts.createdAt, since))).orderBy(desc9(alerts.createdAt)).limit(50);
-  const [disc] = await db.select({ count: sql18`count(*)`, value: sql18`coalesce(sum(greatest(${deliveryDiscrepancies.orderedQty} - ${deliveryDiscrepancies.receivedQty}, 0) * ${orderLines.unitPriceEur}), 0)` }).from(deliveryDiscrepancies).innerJoin(deliveries, eq24(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orderLines, eq24(orderLines.id, deliveryDiscrepancies.orderLineId)).where(and22(eq24(deliveries.restaurantId, rid2), eq24(deliveryDiscrepancies.resolved, false)));
+  const [disc] = await db.select({ count: sql19`count(*)`, value: sql19`coalesce(sum(greatest(${deliveryDiscrepancies.orderedQty} - ${deliveryDiscrepancies.receivedQty}, 0) * ${orderLines.unitPriceEur}), 0)` }).from(deliveryDiscrepancies).innerJoin(deliveries, eq24(deliveries.id, deliveryDiscrepancies.deliveryId)).innerJoin(orderLines, eq24(orderLines.id, deliveryDiscrepancies.orderLineId)).where(and22(eq24(deliveries.restaurantId, rid2), eq24(deliveryDiscrepancies.resolved, false)));
   const pending = await db.select({ reference: orders.reference, supplierName: suppliers.name, status: orders.status, expectedAt: orders.expectedAt }).from(orders).innerJoin(suppliers, eq24(suppliers.id, orders.supplierId)).where(and22(eq24(orders.restaurantId, rid2), inArray13(orders.status, ["envoyee", "confirmee"]))).orderBy(orders.expectedAt).limit(10);
   const yesterday = new Date(now.getTime() - 864e5).toISOString().slice(0, 10);
-  const [ys] = await db.select({ p: sql18`coalesce(sum(${sales.portions}), 0)`, c: sql18`count(*)` }).from(sales).where(and22(eq24(sales.restaurantId, rid2), eq24(sales.day, yesterday)));
+  const [ys] = await db.select({ p: sql19`coalesce(sum(${sales.portions}), 0)`, c: sql19`count(*)` }).from(sales).where(and22(eq24(sales.restaurantId, rid2), eq24(sales.day, yesterday)));
   const startMonth = new Date(now);
   startMonth.setDate(1);
   startMonth.setHours(0, 0, 0, 0);
   const d30 = new Date(now.getTime() - 30 * 864e5).toISOString(), d60 = new Date(now.getTime() - 60 * 864e5).toISOString();
   const [sp] = await db.select({
-    thisMonth: sql18`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${startMonth.toISOString()}),0)`,
-    last30: sql18`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${d30}),0)`,
-    prev30: sql18`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${d60} and ${orders.createdAt} < ${d30}),0)`
-  }).from(orders).where(and22(eq24(orders.restaurantId, rid2), sql18`${orders.status} <> 'annulee'`));
+    thisMonth: sql19`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${startMonth.toISOString()}),0)`,
+    last30: sql19`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${d30}),0)`,
+    prev30: sql19`coalesce(sum(${orders.totalEur}) filter (where ${orders.createdAt} >= ${d60} and ${orders.createdAt} < ${d30}),0)`
+  }).from(orders).where(and22(eq24(orders.restaurantId, rid2), sql19`${orders.status} <> 'annulee'`));
   const evolutionPct = n10(sp.prev30) > 0 ? Math.round((n10(sp.last30) - n10(sp.prev30)) / n10(sp.prev30) * 1e3) / 10 : null;
   const statuses = [...statusOf.values()];
   const input = {
@@ -8413,7 +8446,7 @@ init_data();
 init_auth();
 import { Hono as Hono3 } from "hono";
 import { z as z3 } from "zod";
-import { and as and8, eq as eq11, isNull as isNull5, sql as sql7, inArray as inArray4 } from "drizzle-orm";
+import { and as and8, eq as eq11, isNull as isNull5, sql as sql8, inArray as inArray4 } from "drizzle-orm";
 
 // apps/api/src/lib/csv.ts
 function parseCsv(text2) {
@@ -8539,10 +8572,10 @@ catalogRoutes.get("/catalog", async (c) => {
   await ensureReference();
   const q2 = normalize(c.req.query("q") ?? "");
   const cat = c.req.query("category");
-  const rows = await db.select().from(products).where(sql7`${products.restaurantId} is null or ${products.restaurantId} = ${rid2}`).orderBy(products.category, products.name);
+  const rows = await db.select().from(products).where(sql8`${products.restaurantId} is null or ${products.restaurantId} = ${rid2}`).orderBy(products.category, products.name);
   const [inv, offerCounts] = await Promise.all([
     db.select({ productId: inventoryItems.productId }).from(inventoryItems).where(eq11(inventoryItems.restaurantId, rid2)),
-    db.select({ productId: supplierOffers.productId, count: sql7`count(*)`, minPrice: sql7`min(${supplierOffers.packPriceEur} / ${supplierOffers.packQty})` }).from(supplierOffers).where(eq11(supplierOffers.restaurantId, rid2)).groupBy(supplierOffers.productId)
+    db.select({ productId: supplierOffers.productId, count: sql8`count(*)`, minPrice: sql8`min(${supplierOffers.packPriceEur} / ${supplierOffers.packQty})` }).from(supplierOffers).where(eq11(supplierOffers.restaurantId, rid2)).groupBy(supplierOffers.productId)
   ]);
   const tracked = new Set(inv.map((i) => i.productId));
   const oc = new Map(offerCounts.map((o) => [o.productId, o]));
@@ -8728,7 +8761,7 @@ init_intelligence();
 init_src();
 init_auth();
 import { Hono as Hono5 } from "hono";
-import { and as and10, eq as eq13, gte as gte4, inArray as inArray6, isNotNull, ne, sql as sql9 } from "drizzle-orm";
+import { and as and10, eq as eq13, gte as gte4, inArray as inArray6, isNotNull, ne, sql as sql10 } from "drizzle-orm";
 
 // apps/api/src/lib/analysis.ts
 function monthKey(at) {
@@ -9033,8 +9066,8 @@ analysisRoutes.get("/analysis", async (c) => {
       source: priceHistory.source
     }).from(priceHistory).innerJoin(supplierOffers, eq13(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq13(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq13(products.id, supplierOffers.productId)).where(and10(eq13(priceHistory.restaurantId, rid2), gte4(priceHistory.recordedAt, new Date(priceStart)))),
     db.select().from(recipes).where(eq13(recipes.restaurantId, rid2)),
-    db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, productName: products.name, unit: products.baseUnit, quantity: recipeIngredients.quantity }).from(recipeIngredients).innerJoin(products, eq13(products.id, recipeIngredients.productId)).where(eq13(recipeIngredients.recipeId, sql9`any(select id from recipes where restaurant_id = ${rid2})`)),
-    db.select({ recipeId: sales.recipeId, portions: sql9`coalesce(sum(${sales.portions}),0)` }).from(sales).where(and10(eq13(sales.restaurantId, rid2), gte4(sales.day, new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)))).groupBy(sales.recipeId)
+    db.select({ recipeId: recipeIngredients.recipeId, productId: recipeIngredients.productId, productName: products.name, unit: products.baseUnit, quantity: recipeIngredients.quantity }).from(recipeIngredients).innerJoin(products, eq13(products.id, recipeIngredients.productId)).where(eq13(recipeIngredients.recipeId, sql10`any(select id from recipes where restaurant_id = ${rid2})`)),
+    db.select({ recipeId: sales.recipeId, portions: sql10`coalesce(sum(${sales.portions}),0)` }).from(sales).where(and10(eq13(sales.restaurantId, rid2), gte4(sales.day, new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)))).groupBy(sales.recipeId)
   ]);
   const purchases = lines.map((l) => {
     const invoicedUnit = l.invoicedUnitPriceEur === null || l.invoicedUnitPriceEur === void 0 ? null : n4(l.invoicedUnitPriceEur);
@@ -9132,7 +9165,7 @@ init_mailer();
 init_auth();
 import { Hono as Hono12 } from "hono";
 import { z as z11 } from "zod";
-import { and as and25, eq as eq27, desc as desc12, gte as gte10, inArray as inArray15, sql as sql21 } from "drizzle-orm";
+import { and as and25, eq as eq27, desc as desc12, gte as gte10, inArray as inArray15, sql as sql22 } from "drizzle-orm";
 
 // apps/api/src/lib/messages.ts
 var eur3 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
@@ -9181,7 +9214,7 @@ function buildOrderMessage(i) {
 init_src();
 import { Hono as Hono11 } from "hono";
 import { z as z10 } from "zod";
-import { and as and24, desc as desc11, eq as eq26, inArray as inArray14, sql as sql20 } from "drizzle-orm";
+import { and as and24, desc as desc11, eq as eq26, inArray as inArray14, sql as sql21 } from "drizzle-orm";
 
 // apps/api/src/lib/quick.ts
 var normalize2 = (s) => s.replace(/(\d),(\d)/g, "$1.$2").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9. ]+/g, " ").replace(/\.(?!\d)/g, " ").replace(/\s+/g, " ").trim();
@@ -9317,7 +9350,7 @@ init_mailer();
 init_daily();
 import { Hono as Hono10 } from "hono";
 import { z as z9 } from "zod";
-import { and as and23, desc as desc10, eq as eq25, ilike as ilike2, or as or3, sql as sql19 } from "drizzle-orm";
+import { and as and23, desc as desc10, eq as eq25, ilike as ilike2, or as or3, sql as sql20 } from "drizzle-orm";
 import { SignJWT as SignJWT2, jwtVerify as jwtVerify2 } from "jose";
 var inviteSecret = () => new TextEncoder().encode(`invite:${process.env.JWT_SECRET ?? "dev-secret-change-me-in-production"}`);
 async function signVendorInvite(v) {
@@ -9371,7 +9404,7 @@ prospectRoutes.get("/admin/prospects", async (c) => {
   const status = c.req.query("status");
   const where = and23(kind ? eq25(prospects.kind, kind) : void 0, status ? eq25(prospects.status, status) : void 0, q2 ? or3(ilike2(prospects.name, `%${q2}%`), ilike2(prospects.city, `%${q2}%`), ilike2(prospects.email, `%${q2}%`), ilike2(prospects.phone, `%${q2}%`), ilike2(prospects.contactName, `%${q2}%`)) : void 0);
   const rows = await db.select().from(prospects).where(where).orderBy(desc10(prospects.updatedAt)).limit(1e3);
-  const counts = await db.select({ kind: prospects.kind, status: prospects.status, c: sql19`count(*)` }).from(prospects).groupBy(prospects.kind, prospects.status);
+  const counts = await db.select({ kind: prospects.kind, status: prospects.status, c: sql20`count(*)` }).from(prospects).groupBy(prospects.kind, prospects.status);
   return c.json({ prospects: rows, counts: counts.map((x) => ({ ...x, c: Number(x.c) })), statuses: PROSPECT_STATUS });
 });
 prospectRoutes.post("/admin/prospects", async (c) => {
@@ -9663,15 +9696,15 @@ vendorRoutes2.get("/vendor/dashboard", async (c) => {
   const vid = c.get("vendorId");
   const [v] = await db.select().from(vendors).where(eq26(vendors.id, vid));
   const [stats3] = await db.select({
-    pending: sql20`count(*) filter (where ${orders.status} = 'envoyee')`,
-    confirmed: sql20`count(*) filter (where ${orders.status} = 'confirmee')`,
-    month: sql20`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= date_trunc('month', now())),0)`,
-    restaurants: sql20`count(distinct ${orders.restaurantId}) filter (where ${orders.status} <> 'annulee')`
+    pending: sql21`count(*) filter (where ${orders.status} = 'envoyee')`,
+    confirmed: sql21`count(*) filter (where ${orders.status} = 'confirmee')`,
+    month: sql21`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= date_trunc('month', now())),0)`,
+    restaurants: sql21`count(distinct ${orders.restaurantId}) filter (where ${orders.status} <> 'annulee')`
   }).from(orders).where(eq26(orders.vendorId, vid));
-  const [{ offers }] = await db.select({ offers: sql20`count(*)` }).from(vendorOffers).where(eq26(vendorOffers.vendorId, vid));
-  const [{ linked }] = await db.select({ linked: sql20`count(*)` }).from(suppliers).where(eq26(suppliers.vendorId, vid));
+  const [{ offers }] = await db.select({ offers: sql21`count(*)` }).from(vendorOffers).where(eq26(vendorOffers.vendorId, vid));
+  const [{ linked }] = await db.select({ linked: sql21`count(*)` }).from(suppliers).where(eq26(suppliers.vendorId, vid));
   const period = (/* @__PURE__ */ new Date()).toISOString().slice(0, 7);
-  const [{ commission }] = await db.select({ commission: sql20`coalesce(sum(${commissions.amountEur}),0)` }).from(commissions).where(and24(eq26(commissions.vendorId, vid), eq26(commissions.period, period)));
+  const [{ commission }] = await db.select({ commission: sql21`coalesce(sum(${commissions.amountEur}),0)` }).from(commissions).where(and24(eq26(commissions.vendorId, vid), eq26(commissions.period, period)));
   return c.json({ vendor: v, stats: { pendingOrders: n11(stats3.pending), confirmedOrders: n11(stats3.confirmed), monthRevenue: n11(stats3.month), restaurantsServed: n11(stats3.restaurants), offers: n11(offers), restaurantsFollowing: n11(linked), commissionThisMonth: n11(commission), commissionPct: n11(v.commissionPct) } });
 });
 vendorRoutes2.put("/vendor/profile", async (c) => {
@@ -9709,7 +9742,7 @@ vendorRoutes2.post("/vendor/offers", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const d = body3.data;
-  const [p] = await db.select({ id: products.id }).from(products).where(and24(eq26(products.id, d.productId), sql20`${products.restaurantId} is null`));
+  const [p] = await db.select({ id: products.id }).from(products).where(and24(eq26(products.id, d.productId), sql21`${products.restaurantId} is null`));
   if (!p) return c.json({ error: "Produit hors r\xE9f\xE9rentiel commun" }, 400);
   const [offer] = await db.insert(vendorOffers).values({ vendorId: vid, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock }).onConflictDoUpdate({ target: [vendorOffers.vendorId, vendorOffers.productId, vendorOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, updatedAt: /* @__PURE__ */ new Date() } }).returning();
   const linked = await db.select({ id: suppliers.id, restaurantId: suppliers.restaurantId }).from(suppliers).where(eq26(suppliers.vendorId, vid));
@@ -9723,7 +9756,7 @@ vendorRoutes2.post("/vendor/offers/import", async (c) => {
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
-  const ref = await db.select({ id: products.id, name: products.name, aliases: products.aliases }).from(products).where(sql20`${products.restaurantId} is null`);
+  const ref = await db.select({ id: products.id, name: products.name, aliases: products.aliases }).from(products).where(sql21`${products.restaurantId} is null`);
   const norm2 = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
   const byName = /* @__PURE__ */ new Map();
   for (const p of ref) {
@@ -9753,7 +9786,7 @@ vendorRoutes2.get("/vendor/orders", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const status = c.req.query("status");
-  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings }).from(orders).innerJoin(restaurants, eq26(restaurants.id, orders.restaurantId)).where(and24(eq26(orders.vendorId, vid), sql20`${orders.status} not in ('brouillon','preparee')`, status ? eq26(orders.status, status) : void 0)).orderBy(desc11(orders.createdAt)).limit(100);
+  const rows = await db.select({ order: orders, restaurantName: restaurants.name, city: restaurants.city, address: restaurants.address, settings: restaurants.settings }).from(orders).innerJoin(restaurants, eq26(restaurants.id, orders.restaurantId)).where(and24(eq26(orders.vendorId, vid), sql21`${orders.status} not in ('brouillon','preparee')`, status ? eq26(orders.status, status) : void 0)).orderBy(desc11(orders.createdAt)).limit(100);
   const ids = rows.map((r) => r.order.id);
   const lines = ids.length ? await db.select({ line: orderLines, productName: products.name, unit: products.baseUnit }).from(orderLines).innerJoin(products, eq26(products.id, orderLines.productId)).where(inArray14(orderLines.orderId, ids)) : [];
   return c.json({ orders: rows.map((r) => ({ ...r.order, proofPhoto: void 0, proofSignature: void 0, restaurantName: r.restaurantName, city: r.city, address: r.address, restaurantPhone: r.settings?.notifyPhone ?? null, whatsappLink: waLink(r.settings?.notifyPhone, `Bonjour ${r.restaurantName}, au sujet de votre commande ${r.order.reference} via AFRISUPPLY : `), lines: lines.filter((l) => l.line.orderId === r.order.id).map((l) => ({ ...l.line, productName: l.productName, unit: l.unit })) })) });
@@ -9941,7 +9974,7 @@ vendorRoutes2.get("/vendor/pricing", async (c) => {
   const vid = c.get("vendorId");
   const tiers = await db.select({ t: vendorPriceTiers }).from(vendorPriceTiers).innerJoin(vendorOffers, eq26(vendorOffers.id, vendorPriceTiers.vendorOfferId)).where(eq26(vendorOffers.vendorId, vid)).orderBy(vendorPriceTiers.minPacks);
   const customers = await db.select({ p: vendorCustomerPrices, restaurantName: restaurants.name, city: restaurants.city }).from(vendorCustomerPrices).innerJoin(restaurants, eq26(restaurants.id, vendorCustomerPrices.restaurantId)).where(eq26(vendorCustomerPrices.vendorId, vid)).orderBy(desc11(vendorCustomerPrices.updatedAt));
-  const clients = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql20`count(${orders.id})`, gmv: sql20`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} <> 'annulee'), 0)` }).from(orders).innerJoin(restaurants, eq26(restaurants.id, orders.restaurantId)).where(eq26(orders.vendorId, vid)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql20`count(${orders.id}) desc`);
+  const clients = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql21`count(${orders.id})`, gmv: sql21`coalesce(sum(${orders.totalEur}) filter (where ${orders.status} <> 'annulee'), 0)` }).from(orders).innerJoin(restaurants, eq26(restaurants.id, orders.restaurantId)).where(eq26(orders.vendorId, vid)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql21`count(${orders.id}) desc`);
   return c.json({ tiers: tiers.map((x) => x.t), customers: customers.map((x) => ({ ...x.p, restaurantName: x.restaurantName, city: x.city })), clients: clients.map((x) => ({ ...x, orders: n11(x.orders), gmv: n11(x.gmv) })) });
 });
 vendorRoutes2.put("/vendor/offers/:id/tiers", async (c) => {
@@ -9977,7 +10010,7 @@ vendorRoutes2.post("/vendor/customer-prices", async (c) => {
   const [known] = await db.select({ id: orders.id }).from(orders).where(and24(eq26(orders.vendorId, vid), eq26(orders.restaurantId, d.restaurantId))).limit(1);
   const [linked] = await db.select({ id: suppliers.id }).from(suppliers).where(and24(eq26(suppliers.vendorId, vid), eq26(suppliers.restaurantId, d.restaurantId))).limit(1);
   if (!known && !linked) return c.json({ error: "Ce restaurant n\u2019est pas encore votre client sur AFRISUPPLY" }, 400);
-  const existing = await db.select().from(vendorCustomerPrices).where(and24(eq26(vendorCustomerPrices.vendorId, vid), eq26(vendorCustomerPrices.restaurantId, d.restaurantId), d.vendorOfferId ? eq26(vendorCustomerPrices.vendorOfferId, d.vendorOfferId) : sql20`${vendorCustomerPrices.vendorOfferId} is null`));
+  const existing = await db.select().from(vendorCustomerPrices).where(and24(eq26(vendorCustomerPrices.vendorId, vid), eq26(vendorCustomerPrices.restaurantId, d.restaurantId), d.vendorOfferId ? eq26(vendorCustomerPrices.vendorOfferId, d.vendorOfferId) : sql21`${vendorCustomerPrices.vendorOfferId} is null`));
   const vals = { packPriceEur: d.packPriceEur?.toFixed(2) ?? null, discountPct: d.packPriceEur ? null : d.discountPct?.toFixed(2) ?? null, validUntil: d.validUntil ?? null, note: d.note, updatedAt: /* @__PURE__ */ new Date() };
   const [row] = existing[0] ? await db.update(vendorCustomerPrices).set(vals).where(eq26(vendorCustomerPrices.id, existing[0].id)).returning() : await db.insert(vendorCustomerPrices).values({ vendorId: vid, restaurantId: d.restaurantId, vendorOfferId: d.vendorOfferId ?? null, ...vals }).returning();
   await audit("vendor.customer_price", { actorEmail: c.get("user").email, target: row.id, meta: { restaurantId: d.restaurantId, offer: d.vendorOfferId, price: d.packPriceEur, pct: d.discountPct } });
@@ -10051,7 +10084,7 @@ vendorRoutes2.get("/vendor/billing", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const [v] = await db.select().from(vendors).where(eq26(vendors.id, vid));
-  const [state, invoices, rows] = await Promise.all([vendorPaymentState(vid), vendorCommissionInvoices(vid), db.select({ period: commissions.period, orders: sql20`count(*)`, base: sql20`sum(${commissions.orderTotalEur})`, amount: sql20`sum(${commissions.amountEur})`, invoiced: sql20`bool_and(${commissions.invoiced})` }).from(commissions).where(eq26(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc11(commissions.period))]);
+  const [state, invoices, rows] = await Promise.all([vendorPaymentState(vid), vendorCommissionInvoices(vid), db.select({ period: commissions.period, orders: sql21`count(*)`, base: sql21`sum(${commissions.orderTotalEur})`, amount: sql21`sum(${commissions.amountEur})`, invoiced: sql21`bool_and(${commissions.invoiced})` }).from(commissions).where(eq26(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc11(commissions.period))]);
   return c.json({
     commissionPct: n11(v?.commissionPct),
     billingEmail: v?.billingEmail ?? null,
@@ -10110,7 +10143,7 @@ vendorRoutes2.get("/vendor/billing/invoices/:id/pdf", async (c) => {
 vendorRoutes2.get("/vendor/commissions", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
-  const rows = await db.select({ period: commissions.period, orders: sql20`count(*)`, base: sql20`sum(${commissions.orderTotalEur})`, amount: sql20`sum(${commissions.amountEur})`, invoiced: sql20`bool_and(${commissions.invoiced})` }).from(commissions).where(eq26(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc11(commissions.period));
+  const rows = await db.select({ period: commissions.period, orders: sql21`count(*)`, base: sql21`sum(${commissions.orderTotalEur})`, amount: sql21`sum(${commissions.amountEur})`, invoiced: sql21`bool_and(${commissions.invoiced})` }).from(commissions).where(eq26(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc11(commissions.period));
   return c.json({ periods: rows.map((r) => ({ ...r, orders: n11(r.orders), base: n11(r.base), amount: n11(r.amount) })) });
 });
 var vendorAdminRoutes = new Hono11();
@@ -10119,7 +10152,7 @@ vendorAdminRoutes.use("/admin/vendors", requireAuth);
 vendorAdminRoutes.get("/admin/vendors", async (c) => {
   if (!isAdmin4(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
   const db = await getDb();
-  const rows = await db.select({ v: vendors, offerCount: sql20`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orderCount: sql20`(select count(*) from orders o where o.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc11(vendors.createdAt));
+  const rows = await db.select({ v: vendors, offerCount: sql21`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orderCount: sql21`(select count(*) from orders o where o.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc11(vendors.createdAt));
   return c.json({ vendors: rows.map((r) => ({ ...r.v, offerCount: Number(r.offerCount), orderCount: Number(r.orderCount) })) });
 });
 vendorAdminRoutes.put("/admin/vendors/:id", async (c) => {
@@ -10138,7 +10171,7 @@ Commission plateforme : ${n11(v.commissionPct)} % sur les commandes confirm\xE9e
 });
 async function refProducts() {
   const db = await getDb();
-  return (await db.select({ id: products.id, name: products.name, aliases: products.aliases, baseUnit: products.baseUnit }).from(products).where(sql20`${products.restaurantId} is null`)).map((p) => ({ ...p, baseUnit: p.baseUnit }));
+  return (await db.select({ id: products.id, name: products.name, aliases: products.aliases, baseUnit: products.baseUnit }).from(products).where(sql21`${products.restaurantId} is null`)).map((p) => ({ ...p, baseUnit: p.baseUnit }));
 }
 vendorRoutes2.post("/vendor/catalog/parse", async (c) => {
   const body3 = z10.object({ text: z10.string().max(2e5).optional(), image: z10.string().startsWith("data:image/").max(8e6).optional() }).refine((b) => b.text || b.image, "text ou image requis").safeParse(await c.req.json());
@@ -10238,22 +10271,22 @@ vendorRoutes2.get("/vendor/analytics", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
   const [v] = await db.select().from(vendors).where(eq26(vendors.id, vid));
-  const okStatus = sql20`${orders.status} in ('confirmee','livree','livree_partiel')`;
-  const since = sql20`${orders.createdAt} >= now() - interval '90 days'`;
-  const byProduct = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, packs: sql20`sum(${orderLines.packs})`, qty: sql20`sum(${orderLines.quantity})`, revenue: sql20`sum(${orderLines.lineTotalEur})`, orders: sql20`count(distinct ${orders.id})`, restaurants: sql20`count(distinct ${orders.restaurantId})` }).from(orderLines).innerJoin(orders, eq26(orders.id, orderLines.orderId)).innerJoin(products, eq26(products.id, orderLines.productId)).where(and24(eq26(orders.vendorId, vid), okStatus, since)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql20`sum(${orderLines.lineTotalEur}) desc`).limit(25);
-  const topCustomers = await db.select({ restaurantId: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql20`count(*)`, revenue: sql20`sum(${orders.totalEur})`, last: sql20`max(${orders.createdAt})` }).from(orders).innerJoin(restaurants, eq26(restaurants.id, orders.restaurantId)).where(and24(eq26(orders.vendorId, vid), okStatus)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql20`sum(${orders.totalEur}) desc`).limit(10);
-  const monthly = await db.select({ month: sql20`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`, revenue: sql20`sum(${orders.totalEur})`, orders: sql20`count(*)`, restaurants: sql20`count(distinct ${orders.restaurantId})` }).from(orders).where(and24(eq26(orders.vendorId, vid), okStatus, sql20`${orders.createdAt} >= date_trunc('month', now()) - interval '5 months'`)).groupBy(sql20`1`).orderBy(sql20`1`);
-  const [funnel] = await db.select({ total: sql20`count(*)`, refused: sql20`count(*) filter (where ${orders.status} = 'annulee')`, avgDecisionH: sql20`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)` }).from(orders).where(and24(eq26(orders.vendorId, vid), since));
+  const okStatus = sql21`${orders.status} in ('confirmee','livree','livree_partiel')`;
+  const since = sql21`${orders.createdAt} >= now() - interval '90 days'`;
+  const byProduct = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, packs: sql21`sum(${orderLines.packs})`, qty: sql21`sum(${orderLines.quantity})`, revenue: sql21`sum(${orderLines.lineTotalEur})`, orders: sql21`count(distinct ${orders.id})`, restaurants: sql21`count(distinct ${orders.restaurantId})` }).from(orderLines).innerJoin(orders, eq26(orders.id, orderLines.orderId)).innerJoin(products, eq26(products.id, orderLines.productId)).where(and24(eq26(orders.vendorId, vid), okStatus, since)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql21`sum(${orderLines.lineTotalEur}) desc`).limit(25);
+  const topCustomers = await db.select({ restaurantId: restaurants.id, name: restaurants.name, city: restaurants.city, orders: sql21`count(*)`, revenue: sql21`sum(${orders.totalEur})`, last: sql21`max(${orders.createdAt})` }).from(orders).innerJoin(restaurants, eq26(restaurants.id, orders.restaurantId)).where(and24(eq26(orders.vendorId, vid), okStatus)).groupBy(restaurants.id, restaurants.name, restaurants.city).orderBy(sql21`sum(${orders.totalEur}) desc`).limit(10);
+  const monthly = await db.select({ month: sql21`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`, revenue: sql21`sum(${orders.totalEur})`, orders: sql21`count(*)`, restaurants: sql21`count(distinct ${orders.restaurantId})` }).from(orders).where(and24(eq26(orders.vendorId, vid), okStatus, sql21`${orders.createdAt} >= date_trunc('month', now()) - interval '5 months'`)).groupBy(sql21`1`).orderBy(sql21`1`);
+  const [funnel] = await db.select({ total: sql21`count(*)`, refused: sql21`count(*) filter (where ${orders.status} = 'annulee')`, avgDecisionH: sql21`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)` }).from(orders).where(and24(eq26(orders.vendorId, vid), since));
   const allR = await db.select({ id: restaurants.id, city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants);
   const myZones = v.deliveryZones.map((z22) => z22.trim().toLowerCase());
   const inZone = allR.filter((r) => myZones.length === 0 || [...restaurantZones(r)].some((z22) => myZones.includes(z22.toLowerCase()))).map((r) => r.id);
   let uncovered = [];
   if (inZone.length) {
     const mine = new Set((await db.select({ productId: vendorOffers.productId }).from(vendorOffers).where(eq26(vendorOffers.vendorId, vid))).map((x) => x.productId));
-    const demand = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, restaurants: sql20`count(distinct ${inventoryItems.restaurantId})` }).from(inventoryItems).innerJoin(products, eq26(products.id, inventoryItems.productId)).where(and24(inArray14(inventoryItems.restaurantId, inZone), sql20`${products.restaurantId} is null`)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql20`count(distinct ${inventoryItems.restaurantId}) desc`).limit(60);
+    const demand = await db.select({ productId: products.id, name: products.name, category: products.category, unit: products.baseUnit, restaurants: sql21`count(distinct ${inventoryItems.restaurantId})` }).from(inventoryItems).innerJoin(products, eq26(products.id, inventoryItems.productId)).where(and24(inArray14(inventoryItems.restaurantId, inZone), sql21`${products.restaurantId} is null`)).groupBy(products.id, products.name, products.category, products.baseUnit).orderBy(sql21`count(distinct ${inventoryItems.restaurantId}) desc`).limit(60);
     uncovered = demand.filter((d) => !mine.has(d.productId) && (v.categories.length === 0 || v.categories.includes(d.category))).slice(0, 20).map((d) => ({ ...d, restaurants: n11(d.restaurants) }));
   }
-  const alerts2 = await db.select({ message: leads.message, c: sql20`count(*)` }).from(leads).where(and24(eq26(leads.source, "vitrine"), sql20`${leads.createdAt} >= now() - interval '90 days'`)).groupBy(leads.message).orderBy(sql20`count(*) desc`).limit(10);
+  const alerts2 = await db.select({ message: leads.message, c: sql21`count(*)` }).from(leads).where(and24(eq26(leads.source, "vitrine"), sql21`${leads.createdAt} >= now() - interval '90 days'`)).groupBy(leads.message).orderBy(sql21`count(*) desc`).limit(10);
   const num3 = (o) => Object.fromEntries(Object.entries(o).map(([k, val]) => [k, typeof val === "string" && /^-?\d+(\.\d+)?$/.test(val) ? Number(val) : val]));
   return c.json({
     period: "90 jours",
@@ -10304,7 +10337,7 @@ vendorRoutes2.get("/vendor/routes", async (c) => {
   const vid = c.get("vendorId");
   const rows = await db.select().from(vendorRoutes).where(eq26(vendorRoutes.vendorId, vid)).orderBy(vendorRoutes.weekday, vendorRoutes.name);
   const since = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-  const load = await db.select({ routeId: orders.routeId, date: orders.expectedAt, count: sql20`count(*)` }).from(orders).where(and24(eq26(orders.vendorId, vid), sql20`${orders.routeId} is not null`, sql20`${orders.expectedAt} >= ${since}`, sql20`${orders.status} not in ('annulee')`)).groupBy(orders.routeId, orders.expectedAt);
+  const load = await db.select({ routeId: orders.routeId, date: orders.expectedAt, count: sql21`count(*)` }).from(orders).where(and24(eq26(orders.vendorId, vid), sql21`${orders.routeId} is not null`, sql21`${orders.expectedAt} >= ${since}`, sql21`${orders.status} not in ('annulee')`)).groupBy(orders.routeId, orders.expectedAt);
   return c.json({ routes: rows, upcoming: load.map((l) => ({ ...l, count: n11(l.count) })) });
 });
 vendorRoutes2.post("/vendor/routes", async (c) => {
@@ -10344,7 +10377,7 @@ vendorRoutes2.get("/vendor/credit", async (c) => {
     const r = names.get(id);
     return { restaurantId: id, name: r.name, city: r.city, paymentDays: tm?.paymentDays ?? 0, creditLimitEur: tm?.creditLimitEur === null || tm?.creditLimitEur === void 0 ? null : n11(tm.creditLimitEur), blocked: tm?.blocked ?? false, note: tm?.note ?? null, ...exp.get(id) };
   }).sort((a, b) => b.outstandingEur - a.outstandingEur);
-  const receivables = await db.select({ id: orders.id, reference: orders.reference, restaurantId: orders.restaurantId, restaurantName: restaurants.name, totalEur: orders.totalEur, feeEur: orders.deliveryFeeEur, paidAmountEur: orders.paidAmountEur, dueAt: orders.dueAt, paymentDays: orders.paymentDays, status: orders.status, deliveredAt: sql20`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})` }).from(orders).innerJoin(restaurants, eq26(restaurants.id, orders.restaurantId)).where(and24(eq26(orders.vendorId, vid), sql20`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql20`${orders.paidAt} is null`)).orderBy(orders.dueAt);
+  const receivables = await db.select({ id: orders.id, reference: orders.reference, restaurantId: orders.restaurantId, restaurantName: restaurants.name, totalEur: orders.totalEur, feeEur: orders.deliveryFeeEur, paidAmountEur: orders.paidAmountEur, dueAt: orders.dueAt, paymentDays: orders.paymentDays, status: orders.status, deliveredAt: sql21`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})` }).from(orders).innerJoin(restaurants, eq26(restaurants.id, orders.restaurantId)).where(and24(eq26(orders.vendorId, vid), sql21`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql21`${orders.paidAt} is null`)).orderBy(orders.dueAt);
   const items = receivables.map((r) => ({ ...r, dueEur: Math.round((n11(r.totalEur) + n11(r.feeEur) - n11(r.paidAmountEur)) * 100) / 100, overdue: !!r.dueAt && r.dueAt < t })).filter((r) => r.dueEur > 0);
   return c.json({ clients: rows, receivables: items, totalEur: Math.round(items.reduce((a, r) => a + r.dueEur, 0) * 100) / 100, overdueEur: Math.round(items.filter((r) => r.overdue).reduce((a, r) => a + r.dueEur, 0) * 100) / 100 });
 });
@@ -10385,7 +10418,7 @@ vendorRoutes2.get("/vendor/payments", async (c) => {
   const [v] = await db.select({ acct: vendors.stripeAccountId, enabled: vendors.stripePayoutsEnabled, commissionPct: vendors.commissionPct }).from(vendors).where(eq26(vendors.id, vid));
   if (!stripeConfigured()) return c.json({ configured: false, accountId: v.acct, payoutsEnabled: false, chargesEnabled: false, requirements: [], commissionPct: n11(v.commissionPct) });
   const st = v.acct ? await syncConnectAccount(vid).catch(() => ({ accountId: v.acct, payoutsEnabled: v.enabled, chargesEnabled: v.enabled, requirements: [] })) : { accountId: null, payoutsEnabled: false, chargesEnabled: false, requirements: [] };
-  const online = await db.select({ count: sql20`count(*)`, sum: sql20`coalesce(sum(${orders.paidAmountEur}),0)` }).from(orders).where(and24(eq26(orders.vendorId, vid), eq26(orders.paymentMethod, "en_ligne")));
+  const online = await db.select({ count: sql21`count(*)`, sum: sql21`coalesce(sum(${orders.paidAmountEur}),0)` }).from(orders).where(and24(eq26(orders.vendorId, vid), eq26(orders.paymentMethod, "en_ligne")));
   return c.json({ configured: true, ...st, commissionPct: n11(v.commissionPct), onlinePayments: n11(online[0]?.count), onlineEur: n11(online[0]?.sum) });
 });
 vendorRoutes2.post("/vendor/payments/onboard", async (c) => {
@@ -10725,7 +10758,7 @@ manageRoutes.put("/orders/:id/lines", async (c) => {
     const packPrice = n12(l.lineTotalEur) / l.packs;
     await db.update(orderLines).set({ packs: upd.packs, quantity: (upd.packs * packQty).toFixed(3), lineTotalEur: (upd.packs * packPrice).toFixed(2) }).where(eq27(orderLines.id, l.id));
   }
-  const [{ total, count }] = await db.select({ total: sql21`coalesce(sum(${orderLines.lineTotalEur}),0)`, count: sql21`count(*)` }).from(orderLines).where(eq27(orderLines.orderId, cur.id));
+  const [{ total, count }] = await db.select({ total: sql22`coalesce(sum(${orderLines.lineTotalEur}),0)`, count: sql22`count(*)` }).from(orderLines).where(eq27(orderLines.orderId, cur.id));
   if (n12(count) === 0) {
     await db.update(orders).set({ status: "annulee", totalEur: "0" }).where(eq27(orders.id, cur.id));
     return c.json({ ok: true, cancelled: true });
@@ -10811,7 +10844,7 @@ init_reliability();
 init_src();
 import { Hono as Hono13 } from "hono";
 import { z as z12 } from "zod";
-import { and as and26, eq as eq28, isNull as isNull10, sql as sql22 } from "drizzle-orm";
+import { and as and26, eq as eq28, isNull as isNull10, sql as sql23 } from "drizzle-orm";
 var storefrontRoutes = new Hono13();
 var n13 = (v) => Number(v ?? 0);
 var slugify3 = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
@@ -10821,7 +10854,7 @@ storefrontRoutes.get("/public/catalog", async (c) => {
   const cat = c.req.query("category") ?? "";
   const origin = c.req.query("origin") ?? "";
   const rows = await db.select({ id: products.id, name: products.name, aliases: products.aliases, category: products.category, baseUnit: products.baseUnit, origin: products.origin, imageUrl: products.imageUrl }).from(products).where(isNull10(products.restaurantId)).orderBy(products.category, products.name);
-  const best = await db.select({ productId: vendorOffers.productId, unit: sql22`min(${vendorOffers.packPriceEur} / nullif(${vendorOffers.packQty}, 0))`, offers: sql22`count(*)`, vendors: sql22`count(distinct ${vendorOffers.vendorId})` }).from(vendorOffers).innerJoin(vendors, eq28(vendors.id, vendorOffers.vendorId)).where(and26(eq28(vendorOffers.inStock, true), eq28(vendors.status, "actif"))).groupBy(vendorOffers.productId);
+  const best = await db.select({ productId: vendorOffers.productId, unit: sql23`min(${vendorOffers.packPriceEur} / nullif(${vendorOffers.packQty}, 0))`, offers: sql23`count(*)`, vendors: sql23`count(distinct ${vendorOffers.vendorId})` }).from(vendorOffers).innerJoin(vendors, eq28(vendors.id, vendorOffers.vendorId)).where(and26(eq28(vendorOffers.inStock, true), eq28(vendors.status, "actif"))).groupBy(vendorOffers.productId);
   const bm = new Map(best.map((b) => [b.productId, b]));
   let items = rows.map((p) => {
     const b = bm.get(p.id);
@@ -10854,13 +10887,13 @@ storefrontRoutes.get("/public/products/:id", async (c) => {
     updatedAt: o.updatedAt,
     vendor: { id: v.id, name: v.name, slug: v.slug, city: v.city, deliveryZones: v.deliveryZones, leadTimeHours: v.leadTimeHours, minOrderEur: n13(v.minOrderEur), deliveryFeeEur: n13(v.deliveryFeeEur) }
   })).sort((a, b) => Number(b.inStock) - Number(a.inStock) || a.unitPrice - b.unitPrice);
-  const similar = await db.select({ id: products.id, name: products.name, category: products.category, baseUnit: products.baseUnit, origin: products.origin }).from(products).where(and26(isNull10(products.restaurantId), eq28(products.category, p.category), sql22`${products.id} <> ${id}`)).limit(8);
+  const similar = await db.select({ id: products.id, name: products.name, category: products.category, baseUnit: products.baseUnit, origin: products.origin }).from(products).where(and26(isNull10(products.restaurantId), eq28(products.category, p.category), sql23`${products.id} <> ${id}`)).limit(8);
   return c.json({ product: { ...p, slug: slugify3(p.name) }, offers, similar: similar.map((s) => ({ ...s, slug: slugify3(s.name) })) });
 });
 storefrontRoutes.get("/public/vendors", async (c) => {
   const db = await getDb();
   const vs = await db.select().from(vendors).where(eq28(vendors.status, "actif"));
-  const counts = await db.select({ vendorId: vendorOffers.vendorId, offers: sql22`count(*)` }).from(vendorOffers).where(eq28(vendorOffers.inStock, true)).groupBy(vendorOffers.vendorId);
+  const counts = await db.select({ vendorId: vendorOffers.vendorId, offers: sql23`count(*)` }).from(vendorOffers).where(eq28(vendorOffers.inStock, true)).groupBy(vendorOffers.vendorId);
   const cm = new Map(counts.map((x) => [x.vendorId, n13(x.offers)]));
   const rel = await reliabilityFor(vs.map((v) => v.id));
   return c.json({ vendors: vs.map((v) => ({ reliability: rel.get(v.id) ?? emptyReliability, id: v.id, name: v.name, slug: v.slug, description: v.description, city: v.city, deliveryZones: v.deliveryZones, categories: v.categories, leadTimeHours: v.leadTimeHours, minOrderEur: n13(v.minOrderEur), deliveryFeeEur: n13(v.deliveryFeeEur), offerCount: cm.get(v.id) ?? 0 })) });
@@ -10881,7 +10914,7 @@ init_auth();
 init_ops();
 import { Hono as Hono14 } from "hono";
 import { z as z13 } from "zod";
-import { and as and27, desc as desc13, eq as eq29, ilike as ilike3, isNull as isNull11, or as or4, sql as sql23 } from "drizzle-orm";
+import { and as and27, desc as desc13, eq as eq29, ilike as ilike3, isNull as isNull11, or as or4, sql as sql24 } from "drizzle-orm";
 var isAdmin5 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 var CATS = ["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"];
 var UNITS2 = ["kg", "g", "L", "mL", "piece", "botte", "sac", "carton"];
@@ -10901,8 +10934,8 @@ referenceAdminRoutes.get("/admin/reference", async (c) => {
   const db = await getDb();
   const q2 = (c.req.query("q") ?? "").trim();
   const cat = c.req.query("category");
-  const where = and27(isNull11(products.restaurantId), cat ? eq29(products.category, cat) : void 0, q2 ? or4(ilike3(products.name, `%${q2}%`), sql23`exists (select 1 from unnest(${products.aliases}) a where a ilike ${"%" + q2 + "%"})`) : void 0);
-  const rows = await db.select({ p: products, offers: sql23`(select count(*) from vendor_offers o where o.product_id = ${products.id})`, tracked: sql23`(select count(*) from inventory_items i where i.product_id = ${products.id})` }).from(products).where(where).orderBy(products.category, products.name).limit(400);
+  const where = and27(isNull11(products.restaurantId), cat ? eq29(products.category, cat) : void 0, q2 ? or4(ilike3(products.name, `%${q2}%`), sql24`exists (select 1 from unnest(${products.aliases}) a where a ilike ${"%" + q2 + "%"})`) : void 0);
+  const rows = await db.select({ p: products, offers: sql24`(select count(*) from vendor_offers o where o.product_id = ${products.id})`, tracked: sql24`(select count(*) from inventory_items i where i.product_id = ${products.id})` }).from(products).where(where).orderBy(products.category, products.name).limit(400);
   const requests = await db.select().from(leads).where(and27(eq29(leads.source, "referentiel"), eq29(leads.status, "nouveau"))).orderBy(desc13(leads.createdAt)).limit(50);
   return c.json({ products: rows.map((r) => ({ ...r.p, offers: Number(r.offers), tracked: Number(r.tracked) })), requests: requests.map((r) => ({ id: r.id, product: (r.message ?? "").replace(/^Produit manquant : /, ""), from: r.restaurantName, email: r.email, notes: r.notes, createdAt: r.createdAt })), categories: CATS, units: UNITS2 });
 });
@@ -10939,13 +10972,13 @@ referenceAdminRoutes.post("/admin/reference/:id/merge", async (c) => {
   const [a] = await db.select().from(products).where(eq29(products.id, from));
   const [t] = await db.select().from(products).where(eq29(products.id, into));
   if (!a || !t) return c.json({ error: "Produit introuvable" }, 404);
-  await db.execute(sql23`update vendor_offers set product_id = ${into} where product_id = ${from} and not exists (select 1 from vendor_offers x where x.vendor_id = vendor_offers.vendor_id and x.product_id = ${into} and x.pack_label = vendor_offers.pack_label)`);
-  await db.execute(sql23`delete from vendor_offers where product_id = ${from}`);
-  await db.execute(sql23`update inventory_items set product_id = ${into} where product_id = ${from} and not exists (select 1 from inventory_items x where x.restaurant_id = inventory_items.restaurant_id and x.product_id = ${into})`);
-  await db.execute(sql23`delete from inventory_items where product_id = ${from}`);
+  await db.execute(sql24`update vendor_offers set product_id = ${into} where product_id = ${from} and not exists (select 1 from vendor_offers x where x.vendor_id = vendor_offers.vendor_id and x.product_id = ${into} and x.pack_label = vendor_offers.pack_label)`);
+  await db.execute(sql24`delete from vendor_offers where product_id = ${from}`);
+  await db.execute(sql24`update inventory_items set product_id = ${into} where product_id = ${from} and not exists (select 1 from inventory_items x where x.restaurant_id = inventory_items.restaurant_id and x.product_id = ${into})`);
+  await db.execute(sql24`delete from inventory_items where product_id = ${from}`);
   for (const tbl of ["supplier_offers", "order_lines", "stock_movements", "recipe_ingredients", "price_alerts", "sales_lines"]) {
     try {
-      await db.execute(sql23.raw(`update ${tbl} set product_id = '${into}' where product_id = '${from}'`));
+      await db.execute(sql24.raw(`update ${tbl} set product_id = '${into}' where product_id = '${from}'`));
     } catch {
     }
   }
@@ -10965,7 +10998,7 @@ referenceRequestRoutes.post("/reference/request", requireAuth, async (c) => {
   if (!b.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const u = c.get("user");
-  const [existing] = await db.select({ id: products.id, name: products.name }).from(products).where(and27(isNull11(products.restaurantId), or4(ilike3(products.name, b.data.product), sql23`exists (select 1 from unnest(${products.aliases}) a where lower(a) = lower(${b.data.product}))`)));
+  const [existing] = await db.select({ id: products.id, name: products.name }).from(products).where(and27(isNull11(products.restaurantId), or4(ilike3(products.name, b.data.product), sql24`exists (select 1 from unnest(${products.aliases}) a where lower(a) = lower(${b.data.product}))`)));
   if (existing) return c.json({ ok: false, existing, message: `Ce produit existe d\xE9j\xE0 sous le nom \xAB ${existing.name} \xBB.` });
   await db.insert(leads).values({ restaurantName: b.data.from ?? u.fullName ?? "Fournisseur", contactName: u.fullName ?? u.email, email: u.email, message: `Produit manquant : ${b.data.product}`, notes: b.data.details ?? null, source: "referentiel", planInterest: "referentiel" });
   return c.json({ ok: true, message: `Demande envoy\xE9e : \xAB ${b.data.product} \xBB sera ajout\xE9 au r\xE9f\xE9rentiel sous 24 h ouvr\xE9es, vous serez pr\xE9venu.` }, 201);
@@ -10975,7 +11008,7 @@ referenceRequestRoutes.post("/reference/request", requireAuth, async (c) => {
 init_src();
 init_auth();
 import { Hono as Hono15 } from "hono";
-import { desc as desc14, eq as eq30, gte as gte11, isNull as isNull12, sql as sql24 } from "drizzle-orm";
+import { desc as desc14, eq as eq30, gte as gte11, isNull as isNull12, sql as sql25 } from "drizzle-orm";
 var isAdmin6 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 var n14 = (v) => Number(v ?? 0);
 var adminDashboardRoutes = new Hono15();
@@ -10985,34 +11018,34 @@ adminDashboardRoutes.use("/admin/dashboard", requireAuth, async (c, next) => {
 });
 adminDashboardRoutes.get("/admin/dashboard", async (c) => {
   const db = await getDb();
-  const d30 = sql24`now() - interval '30 days'`;
-  const d7 = sql24`now() - interval '7 days'`;
-  const [u] = await db.select({ total: sql24`count(*)`, w: sql24`count(*) filter (where ${users.createdAt} >= ${d7})`, m: sql24`count(*) filter (where ${users.createdAt} >= ${d30})` }).from(users);
-  const [r] = await db.select({ total: sql24`count(*)`, m: sql24`count(*) filter (where ${restaurants.createdAt} >= ${d30})`, trial: sql24`count(*) filter (where ${restaurants.plan} = 'trial')`, paying: sql24`count(*) filter (where ${restaurants.plan} in ('starter','pro','business'))` }).from(restaurants);
-  const activeR = await db.select({ c: sql24`count(distinct ${orders.restaurantId})` }).from(orders).where(gte11(orders.createdAt, sql24`now() - interval '30 days'`));
-  const [v] = await db.select({ total: sql24`count(*)`, actif: sql24`count(*) filter (where ${vendors.status} = 'actif')`, attente: sql24`count(*) filter (where ${vendors.status} = 'en_attente')` }).from(vendors);
-  const [vo] = await db.select({ offers: sql24`count(*)`, inStock: sql24`count(*) filter (where ${vendorOffers.inStock})`, productsCovered: sql24`count(distinct ${vendorOffers.productId})` }).from(vendorOffers);
-  const [pr] = await db.select({ ref: sql24`count(*) filter (where ${products.restaurantId} is null)`, priv: sql24`count(*) filter (where ${products.restaurantId} is not null)` }).from(products);
-  const [tracked] = await db.select({ c: sql24`count(distinct ${inventoryItems.productId})` }).from(inventoryItems);
+  const d30 = sql25`now() - interval '30 days'`;
+  const d7 = sql25`now() - interval '7 days'`;
+  const [u] = await db.select({ total: sql25`count(*)`, w: sql25`count(*) filter (where ${users.createdAt} >= ${d7})`, m: sql25`count(*) filter (where ${users.createdAt} >= ${d30})` }).from(users);
+  const [r] = await db.select({ total: sql25`count(*)`, m: sql25`count(*) filter (where ${restaurants.createdAt} >= ${d30})`, trial: sql25`count(*) filter (where ${restaurants.plan} = 'trial')`, paying: sql25`count(*) filter (where ${restaurants.plan} in ('starter','pro','business'))` }).from(restaurants);
+  const activeR = await db.select({ c: sql25`count(distinct ${orders.restaurantId})` }).from(orders).where(gte11(orders.createdAt, sql25`now() - interval '30 days'`));
+  const [v] = await db.select({ total: sql25`count(*)`, actif: sql25`count(*) filter (where ${vendors.status} = 'actif')`, attente: sql25`count(*) filter (where ${vendors.status} = 'en_attente')` }).from(vendors);
+  const [vo] = await db.select({ offers: sql25`count(*)`, inStock: sql25`count(*) filter (where ${vendorOffers.inStock})`, productsCovered: sql25`count(distinct ${vendorOffers.productId})` }).from(vendorOffers);
+  const [pr] = await db.select({ ref: sql25`count(*) filter (where ${products.restaurantId} is null)`, priv: sql25`count(*) filter (where ${products.restaurantId} is not null)` }).from(products);
+  const [tracked] = await db.select({ c: sql25`count(distinct ${inventoryItems.productId})` }).from(inventoryItems);
   const [o] = await db.select({
-    total: sql24`count(*)`,
-    m: sql24`count(*) filter (where ${orders.createdAt} >= ${d30})`,
-    mkt: sql24`count(*) filter (where ${orders.vendorId} is not null)`,
-    mktM: sql24`count(*) filter (where ${orders.vendorId} is not null and ${orders.createdAt} >= ${d30})`,
-    gmvM: sql24`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= ${d30}),0)`,
-    gmvAll: sql24`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} in ('confirmee','livree','livree_partiel')),0)`,
-    pending: sql24`count(*) filter (where ${orders.vendorId} is not null and ${orders.status} = 'envoyee')`,
-    refused: sql24`count(*) filter (where ${orders.vendorId} is not null and ${orders.status} = 'annulee')`,
-    avgDecisionH: sql24`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)`
+    total: sql25`count(*)`,
+    m: sql25`count(*) filter (where ${orders.createdAt} >= ${d30})`,
+    mkt: sql25`count(*) filter (where ${orders.vendorId} is not null)`,
+    mktM: sql25`count(*) filter (where ${orders.vendorId} is not null and ${orders.createdAt} >= ${d30})`,
+    gmvM: sql25`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} in ('confirmee','livree','livree_partiel') and ${orders.createdAt} >= ${d30}),0)`,
+    gmvAll: sql25`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} in ('confirmee','livree','livree_partiel')),0)`,
+    pending: sql25`count(*) filter (where ${orders.vendorId} is not null and ${orders.status} = 'envoyee')`,
+    refused: sql25`count(*) filter (where ${orders.vendorId} is not null and ${orders.status} = 'annulee')`,
+    avgDecisionH: sql25`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)`
   }).from(orders);
-  const weekly = await db.select({ week: sql24`to_char(date_trunc('week', ${orders.createdAt}), 'YYYY-MM-DD')`, all: sql24`count(*)`, mkt: sql24`count(*) filter (where ${orders.vendorId} is not null)`, gmv: sql24`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} <> 'annulee'),0)` }).from(orders).where(gte11(orders.createdAt, sql24`date_trunc('week', now()) - interval '11 weeks'`)).groupBy(sql24`1`).orderBy(sql24`1`);
-  const signups = await db.select({ week: sql24`to_char(date_trunc('week', ${restaurants.createdAt}), 'YYYY-MM-DD')`, c: sql24`count(*)` }).from(restaurants).where(gte11(restaurants.createdAt, sql24`date_trunc('week', now()) - interval '11 weeks'`)).groupBy(sql24`1`).orderBy(sql24`1`);
-  const [com] = await db.select({ month: sql24`coalesce(sum(${commissions.amountEur}) filter (where ${commissions.period} = to_char(now(),'YYYY-MM')),0)`, all: sql24`coalesce(sum(${commissions.amountEur}),0)`, uninvoiced: sql24`coalesce(sum(${commissions.amountEur}) filter (where not ${commissions.invoiced}),0)` }).from(commissions);
-  const prospectsAgg = await db.select({ kind: prospects.kind, status: prospects.status, c: sql24`count(*)` }).from(prospects).groupBy(prospects.kind, prospects.status);
-  const [ld] = await db.select({ total: sql24`count(*)`, m: sql24`count(*) filter (where ${leads.createdAt} >= ${d30})`, vitrine: sql24`count(*) filter (where ${leads.source} = 'vitrine')`, referentiel: sql24`count(*) filter (where ${leads.source} = 'referentiel' and ${leads.status} = 'nouveau')` }).from(leads);
-  const demandTop = await db.select({ name: products.name, restaurants: sql24`count(distinct ${inventoryItems.restaurantId})`, covered: sql24`exists (select 1 from vendor_offers o where o.product_id = ${products.id} and o.in_stock)` }).from(inventoryItems).innerJoin(products, eq30(products.id, inventoryItems.productId)).where(isNull12(products.restaurantId)).groupBy(products.id, products.name).orderBy(sql24`count(distinct ${inventoryItems.restaurantId}) desc`).limit(15);
-  const topVendors = await db.select({ name: vendors.name, city: vendors.city, status: vendors.status, offers: sql24`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orders: sql24`(select count(*) from orders x where x.vendor_id = ${vendors.id})`, gmv: sql24`(select coalesce(sum(total_eur),0) from orders x where x.vendor_id = ${vendors.id} and x.status <> 'annulee')`, linked: sql24`(select count(*) from suppliers s where s.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc14(vendors.createdAt)).limit(10);
-  const topRestaurants = await db.select({ name: restaurants.name, city: restaurants.city, plan: restaurants.plan, createdAt: restaurants.createdAt, orders: sql24`(select count(*) from orders x where x.restaurant_id = ${restaurants.id})`, items: sql24`(select count(*) from inventory_items i where i.restaurant_id = ${restaurants.id})`, suppliers: sql24`(select count(*) from suppliers s where s.restaurant_id = ${restaurants.id})`, lastOrder: sql24`(select max(created_at) from orders x where x.restaurant_id = ${restaurants.id})` }).from(restaurants).orderBy(desc14(restaurants.createdAt)).limit(15);
+  const weekly = await db.select({ week: sql25`to_char(date_trunc('week', ${orders.createdAt}), 'YYYY-MM-DD')`, all: sql25`count(*)`, mkt: sql25`count(*) filter (where ${orders.vendorId} is not null)`, gmv: sql25`coalesce(sum(${orders.totalEur}) filter (where ${orders.vendorId} is not null and ${orders.status} <> 'annulee'),0)` }).from(orders).where(gte11(orders.createdAt, sql25`date_trunc('week', now()) - interval '11 weeks'`)).groupBy(sql25`1`).orderBy(sql25`1`);
+  const signups = await db.select({ week: sql25`to_char(date_trunc('week', ${restaurants.createdAt}), 'YYYY-MM-DD')`, c: sql25`count(*)` }).from(restaurants).where(gte11(restaurants.createdAt, sql25`date_trunc('week', now()) - interval '11 weeks'`)).groupBy(sql25`1`).orderBy(sql25`1`);
+  const [com] = await db.select({ month: sql25`coalesce(sum(${commissions.amountEur}) filter (where ${commissions.period} = to_char(now(),'YYYY-MM')),0)`, all: sql25`coalesce(sum(${commissions.amountEur}),0)`, uninvoiced: sql25`coalesce(sum(${commissions.amountEur}) filter (where not ${commissions.invoiced}),0)` }).from(commissions);
+  const prospectsAgg = await db.select({ kind: prospects.kind, status: prospects.status, c: sql25`count(*)` }).from(prospects).groupBy(prospects.kind, prospects.status);
+  const [ld] = await db.select({ total: sql25`count(*)`, m: sql25`count(*) filter (where ${leads.createdAt} >= ${d30})`, vitrine: sql25`count(*) filter (where ${leads.source} = 'vitrine')`, referentiel: sql25`count(*) filter (where ${leads.source} = 'referentiel' and ${leads.status} = 'nouveau')` }).from(leads);
+  const demandTop = await db.select({ name: products.name, restaurants: sql25`count(distinct ${inventoryItems.restaurantId})`, covered: sql25`exists (select 1 from vendor_offers o where o.product_id = ${products.id} and o.in_stock)` }).from(inventoryItems).innerJoin(products, eq30(products.id, inventoryItems.productId)).where(isNull12(products.restaurantId)).groupBy(products.id, products.name).orderBy(sql25`count(distinct ${inventoryItems.restaurantId}) desc`).limit(15);
+  const topVendors = await db.select({ name: vendors.name, city: vendors.city, status: vendors.status, offers: sql25`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orders: sql25`(select count(*) from orders x where x.vendor_id = ${vendors.id})`, gmv: sql25`(select coalesce(sum(total_eur),0) from orders x where x.vendor_id = ${vendors.id} and x.status <> 'annulee')`, linked: sql25`(select count(*) from suppliers s where s.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc14(vendors.createdAt)).limit(10);
+  const topRestaurants = await db.select({ name: restaurants.name, city: restaurants.city, plan: restaurants.plan, createdAt: restaurants.createdAt, orders: sql25`(select count(*) from orders x where x.restaurant_id = ${restaurants.id})`, items: sql25`(select count(*) from inventory_items i where i.restaurant_id = ${restaurants.id})`, suppliers: sql25`(select count(*) from suppliers s where s.restaurant_id = ${restaurants.id})`, lastOrder: sql25`(select max(created_at) from orders x where x.restaurant_id = ${restaurants.id})` }).from(restaurants).orderBy(desc14(restaurants.createdAt)).limit(15);
   const recent = await db.select().from(auditLog).orderBy(desc14(auditLog.at)).limit(30);
   const recentOrders = await db.select({ id: orders.id, reference: orders.reference, status: orders.status, total: orders.totalEur, createdAt: orders.createdAt, restaurant: restaurants.name, vendor: vendors.name }).from(orders).innerJoin(restaurants, eq30(restaurants.id, orders.restaurantId)).leftJoin(vendors, eq30(vendors.id, orders.vendorId)).orderBy(desc14(orders.createdAt)).limit(12);
   const env = { adminEmails: !!process.env.ADMIN_EMAILS, llm: !!process.env.LLM_API_KEY, stripe: !!process.env.STRIPE_SECRET_KEY, resend: !!process.env.RESEND_API_KEY, appUrl: process.env.APP_URL ?? null, vendorAutoApprove: process.env.VENDOR_AUTO_APPROVE === "true" };
@@ -11056,7 +11089,7 @@ init_order_events();
 init_ops();
 import { Hono as Hono16 } from "hono";
 import { z as z14 } from "zod";
-import { and as and28, desc as desc15, eq as eq31, sql as sql25 } from "drizzle-orm";
+import { and as and28, desc as desc15, eq as eq31, sql as sql26 } from "drizzle-orm";
 var APP_URL4 = () => process.env.APP_URL ?? "http://localhost:5173";
 var n15 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var eur11 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
@@ -11065,7 +11098,7 @@ var isAdmin7 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) =>
 async function nextClaimRef() {
   const db = await getDb();
   await syncSequenceToMax({ sequence: "claim_ref_seq", table: "claims", column: "reference", digitsFrom: 10, pattern: "^LIT-[0-9]{4}-[0-9]+$" });
-  const res = await db.execute(sql25`select nextval('claim_ref_seq') as v`);
+  const res = await db.execute(sql26`select nextval('claim_ref_seq') as v`);
   const rows = res.rows ?? res;
   return `LIT-${(/* @__PURE__ */ new Date()).getFullYear()}-${String(Number((Array.isArray(rows) ? rows[0] : rows).v)).padStart(4, "0")}`;
 }
@@ -11252,7 +11285,7 @@ init_order_events();
 init_reliability();
 import { Hono as Hono17 } from "hono";
 import { z as z15 } from "zod";
-import { and as and29, desc as desc16, eq as eq32, sql as sql26 } from "drizzle-orm";
+import { and as and29, desc as desc16, eq as eq32, sql as sql27 } from "drizzle-orm";
 var pub = (r, restaurantName) => ({ id: r.id, rating: r.rating, onTime: r.onTime, conform: r.conform, comment: r.comment, vendorReply: r.vendorReply, createdAt: r.createdAt, restaurantName: restaurantName.length > 2 ? `${restaurantName.slice(0, 1)}${"*".repeat(Math.min(6, restaurantName.length - 2))}${restaurantName.slice(-1)}` : restaurantName, city: null });
 var publicReviewRoutes = new Hono17();
 publicReviewRoutes.get("/public/vendors/:id/reviews", async (c) => {
@@ -11268,7 +11301,7 @@ reviewRoutes.use("/orders/:id/review", requireAuth, requireRestaurant);
 reviewRoutes.get("/reviews/pending", async (c) => {
   const db = await getDb();
   const rid2 = c.get("restaurantId");
-  const rows = await db.select({ id: orders.id, reference: orders.reference, deliveredAt: sql26`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})`, status: orders.status, vendorName: vendors.name, vendorId: vendors.id, reviewed: vendorReviews.id }).from(orders).innerJoin(vendors, eq32(vendors.id, orders.vendorId)).leftJoin(vendorReviews, eq32(vendorReviews.orderId, orders.id)).where(and29(eq32(orders.restaurantId, rid2))).orderBy(desc16(sql26`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt}, ${orders.createdAt})`)).limit(100);
+  const rows = await db.select({ id: orders.id, reference: orders.reference, deliveredAt: sql27`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})`, status: orders.status, vendorName: vendors.name, vendorId: vendors.id, reviewed: vendorReviews.id }).from(orders).innerJoin(vendors, eq32(vendors.id, orders.vendorId)).leftJoin(vendorReviews, eq32(vendorReviews.orderId, orders.id)).where(and29(eq32(orders.restaurantId, rid2))).orderBy(desc16(sql27`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt}, ${orders.createdAt})`)).limit(100);
   return c.json({ pending: rows.filter((r) => !r.reviewed && (["livree", "livree_partiel"].includes(r.status) || r.deliveredAt)).slice(0, 10), reviewedOrderIds: rows.filter((r) => r.reviewed).map((r) => r.id) });
 });
 reviewRoutes.post("/orders/:id/review", async (c) => {
@@ -11568,7 +11601,7 @@ init_src();
 init_auth();
 import { Hono as Hono20 } from "hono";
 import { z as z18 } from "zod";
-import { and as and31, eq as eq35, ne as ne2, sql as sql27 } from "drizzle-orm";
+import { and as and31, eq as eq35, ne as ne2, sql as sql28 } from "drizzle-orm";
 import { randomBytes as randomBytes2 } from "node:crypto";
 init_mailer();
 init_ops();
@@ -11585,7 +11618,7 @@ var membersOf = async (rid2) => await getDb().then((db) => db.select({
 }).from(restaurantMembers).innerJoin(users, eq35(users.id, restaurantMembers.userId)).where(eq35(restaurantMembers.restaurantId, rid2)));
 var countOwners = async (rid2) => {
   const db = await getDb();
-  const [row] = await db.select({ n: sql27`count(*)` }).from(restaurantMembers).where(and31(eq35(restaurantMembers.restaurantId, rid2), eq35(restaurantMembers.role, "owner")));
+  const [row] = await db.select({ n: sql28`count(*)` }).from(restaurantMembers).where(and31(eq35(restaurantMembers.restaurantId, rid2), eq35(restaurantMembers.role, "owner")));
   return Number(row?.n ?? 0);
 };
 memberRoutes.get("/members", async (c) => {
@@ -11684,7 +11717,7 @@ memberRoutes.delete("/members/:userId", requireMinRole("owner"), async (c) => {
   if (!row) return c.json({ error: "Membre introuvable" }, 404);
   if (row.role === "owner" && await countOwners(rid2) <= 1) return c.json({ error: "Impossible : il doit rester au moins un propri\xE9taire." }, 409);
   await db.delete(restaurantMembers).where(and31(eq35(restaurantMembers.restaurantId, rid2), eq35(restaurantMembers.userId, target)));
-  const [other] = await db.select({ n: sql27`count(*)` }).from(restaurantMembers).where(and31(eq35(restaurantMembers.userId, target), ne2(restaurantMembers.restaurantId, rid2)));
+  const [other] = await db.select({ n: sql28`count(*)` }).from(restaurantMembers).where(and31(eq35(restaurantMembers.userId, target), ne2(restaurantMembers.restaurantId, rid2)));
   if (Number(other?.n ?? 0) === 0) await db.delete(users).where(eq35(users.id, target));
   void audit("member.remove", { actorEmail: c.get("user").email, target, meta: { role: row.role, accountDeleted: Number(other?.n ?? 0) === 0 } });
   return c.json({ ok: true });
@@ -11695,7 +11728,7 @@ init_src();
 init_auth();
 import { Hono as Hono21 } from "hono";
 import { z as z19 } from "zod";
-import { and as and32, eq as eq36, inArray as inArray17, sql as sql28 } from "drizzle-orm";
+import { and as and32, eq as eq36, inArray as inArray17, sql as sql29 } from "drizzle-orm";
 var quickRoutes = new Hono21();
 quickRoutes.use("*", requireAuth, requireRestaurant);
 var n16 = (v) => v === null || v === void 0 ? 0 : Number(v);
@@ -11773,7 +11806,7 @@ quickRoutes.get("/quick/inventory", async (c) => {
   const db = await getDb();
   const rows = await db.select({ id: inventoryItems.id, name: products.name, unit: products.baseUnit, category: products.category, quantity: inventoryItems.quantity, criticalLevel: inventoryItems.criticalLevel, lastCountedAt: inventoryItems.lastCountedAt }).from(inventoryItems).innerJoin(products, eq36(products.id, inventoryItems.productId)).where(eq36(inventoryItems.restaurantId, rid2));
   const items = rows.map((r) => ({ ...r, quantity: n16(r.quantity), criticalLevel: n16(r.criticalLevel), daysSinceCount: r.lastCountedAt ? Math.floor((Date.now() - new Date(r.lastCountedAt).getTime()) / 864e5) : null })).sort((a, b) => (a.daysSinceCount ?? 999) === (b.daysSinceCount ?? 999) ? a.name.localeCompare(b.name) : (b.daysSinceCount ?? 999) - (a.daysSinceCount ?? 999));
-  const [{ counted7 }] = await db.select({ counted7: sql28`count(*) filter (where ${inventoryItems.lastCountedAt} > now() - interval '7 days')` }).from(inventoryItems).where(eq36(inventoryItems.restaurantId, rid2));
+  const [{ counted7 }] = await db.select({ counted7: sql29`count(*) filter (where ${inventoryItems.lastCountedAt} > now() - interval '7 days')` }).from(inventoryItems).where(eq36(inventoryItems.restaurantId, rid2));
   return c.json({ items, total: items.length, countedLast7Days: n16(counted7) });
 });
 quickRoutes.post("/quick/invoice", async (c) => {
@@ -11837,7 +11870,7 @@ init_src();
 init_auth();
 import { Hono as Hono22 } from "hono";
 import { z as z20 } from "zod";
-import { and as and33, desc as desc17, eq as eq37, inArray as inArray18, isNull as isNull13, or as or5, sql as sql29 } from "drizzle-orm";
+import { and as and33, desc as desc17, eq as eq37, inArray as inArray18, isNull as isNull13, or as or5, sql as sql30 } from "drizzle-orm";
 init_marketplace();
 var shoppingRoutes = new Hono22();
 shoppingRoutes.use("*", requireAuth, requireRestaurant);
@@ -11946,7 +11979,7 @@ shoppingRoutes.put("/shopping/lists/:id", async (c) => {
   if (body3.data.text) set.text = body3.data.text;
   if (body3.data.used) {
     set.lastUsedAt = /* @__PURE__ */ new Date();
-    set.useCount = sql29`${shoppingLists.useCount} + 1`;
+    set.useCount = sql30`${shoppingLists.useCount} + 1`;
   }
   const [list] = await db.update(shoppingLists).set(set).where(and33(eq37(shoppingLists.id, c.req.param("id")), eq37(shoppingLists.restaurantId, rid2))).returning();
   if (!list) return c.json({ error: "Liste introuvable" }, 404);
@@ -11985,7 +12018,7 @@ init_backup();
 init_mailer();
 init_sms();
 import { Hono as Hono23 } from "hono";
-import { desc as desc18, sql as sql30 } from "drizzle-orm";
+import { desc as desc18, sql as sql31 } from "drizzle-orm";
 var statusRoutes = new Hono23();
 statusRoutes.get("/status", async (c) => {
   const t0 = Date.now();
@@ -11995,7 +12028,7 @@ statusRoutes.get("/status", async (c) => {
   let backup = { lastAt: null, ageHours: null, files: 0, keep: 0 };
   try {
     const db = await getDb();
-    await db.execute(sql30`select 1`);
+    await db.execute(sql31`select 1`);
     dbMs = Date.now() - t0;
     dbOk = true;
     jobs = publicJobHealth(await jobHealth());
@@ -12045,7 +12078,7 @@ init_sms();
 init_job_runs();
 import { Hono as Hono24 } from "hono";
 import { z as z21 } from "zod";
-import { and as and34, desc as desc19, eq as eq38, ilike as ilike4, or as or6, sql as sql31 } from "drizzle-orm";
+import { and as and34, desc as desc19, eq as eq38, ilike as ilike4, or as or6, sql as sql32 } from "drizzle-orm";
 var isAdmin8 = (email) => (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 var opsRoutes = new Hono24();
 opsRoutes.get("/backup/export", requireAuth, requireRestaurant, requireMinRole("owner"), async (c) => {
@@ -12084,7 +12117,7 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
   const alerts2 = await db.select().from(auditLog).where(ilike4(auditLog.action, "ops.%")).orderBy(desc19(auditLog.at)).limit(20);
   const [lastBackupRun] = await db.select().from(jobRuns).where(eq38(jobRuns.job, "backup")).orderBy(desc19(jobRuns.startedAt)).limit(1);
   const t0 = Date.now();
-  await db.execute(sql31`select 1`);
+  await db.execute(sql32`select 1`);
   const dbMs = Date.now() - t0;
   const mc = mailerConfig();
   const sc = smsConfig();
@@ -12200,7 +12233,7 @@ adminOpsRoutes.get("/admin/audit", requireAuth, adminOnly, async (c) => {
     c.header("Content-Disposition", `attachment; filename="journal-audit-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.csv"`);
     return c.body(csv);
   }
-  const [count] = await db.select({ n: sql31`count(*)` }).from(auditLog);
+  const [count] = await db.select({ n: sql32`count(*)` }).from(auditLog);
   return c.json({ rows, total: Number(count.n), filters: { q: q2 ?? null, action: action ?? null, limit } });
 });
 adminOpsRoutes.get("/admin/ops/jobs", requireAuth, adminOnly, async (c) => {

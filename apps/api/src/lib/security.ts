@@ -40,8 +40,8 @@ export function checkSecureConfig(env: NodeJS.ProcessEnv = process.env): ConfigC
     errors.push('DATABASE_URL est absent en production : la base serait une base locale éphémère (données perdues à chaque déploiement).');
   }
 
-  if (env.SEED_DEMO === 'true' && prod && env.ALLOW_DEMO_SEED !== 'true') {
-    errors.push('SEED_DEMO=true en production créerait le restaurant de démonstration avec des identifiants publics (awa@chezawa.fr / demo1234). Retirez SEED_DEMO, ou assumez-le explicitement avec ALLOW_DEMO_SEED=true.');
+  if (env.SEED_DEMO && env.SEED_DEMO !== 'false' && prod && env.ALLOW_DEMO_SEED !== 'true') {
+    errors.push('SEED_DEMO (true/purge) en production créerait le restaurant de démonstration avec des identifiants publics (awa@chezawa.fr / demo1234). Retirez SEED_DEMO, ou assumez-le explicitement avec ALLOW_DEMO_SEED=true.');
   }
 
   if (prod && !env.CRON_SECRET?.trim()) warnings.push('CRON_SECRET absent : le job quotidien (mail du matin, rappels grossistes) répondra 503.');

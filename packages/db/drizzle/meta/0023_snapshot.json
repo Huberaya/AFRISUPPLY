@@ -1,6 +1,6 @@
 {
-  "id": "560b2985-2376-40d6-8105-ed70960adf28",
-  "prevId": "f20b480e-ce63-46e5-948e-7c4b5e3174a1",
+  "id": "f20b480e-ce63-46e5-948e-7c4b5e3174a1",
+  "prevId": "86738378-28a5-4d82-ba9e-e91b03c935e5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -83,12 +83,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "notified_at": {
-          "name": "notified_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -5714,6 +5708,38 @@
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
+    },
+    "public.rate_limits": {
+      "name": "rate_limits",
+      "schema": "",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "n": {
+          "name": "n",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "reset_at": {
+          "name": "reset_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
   "enums": {
@@ -5726,8 +5752,7 @@
         "hausse_prix",
         "opportunite",
         "fournisseur",
-        "ecart_livraison",
-        "saisie"
+        "ecart_livraison"
       ]
     },
     "public.alert_severity": {

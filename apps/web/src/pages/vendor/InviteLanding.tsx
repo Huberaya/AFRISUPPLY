@@ -14,14 +14,14 @@ export function InviteLanding({ token, onDone }: { token: string; onDone: () => 
   const go = async () => {
     setBusy(true); setErr(null);
     try {
-      if (!tokenStore.get()) { if (mode === 'new') await register({ email: f.email, password: f.password, fullName: f.fullName || inv!.name, restaurantName: inv!.name }); else await login(f.email, f.password); }
+      if (!tokenStore.authed()) { if (mode === 'new') await register({ email: f.email, password: f.password, fullName: f.fullName || inv!.name, restaurantName: inv!.name }); else await login(f.email, f.password); }
       await api('/vendor/register', { method: 'POST', json: { acceptCgv: f.acceptCgv, name: inv!.name, city: f.city || undefined, deliveryZones: f.deliveryZones.split(/[,;]+/).map((s) => s.trim()).filter(Boolean), categories: f.categories, leadTimeHours: Number(f.leadTimeHours) || 48, minOrderEur: Number(f.minOrderEur) || 0, deliveryFeeEur: 0, contactEmail: f.email || undefined, contactPhone: f.contactPhone || undefined, whatsapp: f.whatsapp || undefined, invite: token } });
       history.replaceState(null, '', '/fournisseur'); onDone();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   if (err && !inv) return <div className="card mx-auto max-w-lg text-center"><p className="font-bold text-red-700">{err}</p><p className="mt-2 text-sm text-stone-600">Le lien a peut-être expiré. Vous pouvez tout de même <a className="underline" href="/fournisseur">créer votre espace fournisseur</a>.</p></div>;
   if (!inv) return <p className="text-stone-500">Chargement de votre invitation…</p>;
-  const logged = !!tokenStore.get();
+  const logged = !!tokenStore.authed();
   return (
     <div className="mx-auto max-w-2xl space-y-5">
       <div className="rounded-2xl bg-gradient-to-br from-brand-600 to-brand-800 p-6 text-white"><p className="flex items-center gap-2 text-sm font-semibold text-brand-100"><Sparkles size={16} /> Invitation personnelle</p><h1 className="mt-1 text-3xl font-extrabold">{inv.name}, votre fiche est prête.</h1><p className="mt-2 text-brand-50">200 restaurants africains cherchent des grossistes fiables. Créez votre mot de passe, collez votre tarif : vous êtes en ligne en 10 minutes. Sans abonnement, commission uniquement sur les ventes réalisées.</p></div>

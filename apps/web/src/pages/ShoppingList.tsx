@@ -64,8 +64,8 @@ export default function ShoppingList() {
     try { await api(`/shopping/lists/${id}`, { method: 'DELETE' }); toast.success('Liste supprimée.'); } catch (e) { toast.error('Suppression impossible', (e as Error).message); }
     lists.reload();
   };
-  // `applyList` et non un nom en « use » : ce n'est pas un hook, juste une fonction locale.
-  const applyList = (l: SavedList) => { setText(l.text); setUsedList(l.id); setData(null); };
+  // `applySavedList` et non un nom en « use » : ce n'est pas un hook, juste une fonction locale.
+  const applySavedList = (l: SavedList) => { setText(l.text); setUsedList(l.id); setData(null); };
 
   const search = async () => { if (!text.trim()) return; setBusy(true); setMsg(null); try { const r = await api<Parsed>('/shopping/parse', { method: 'POST', json: { text } }); setData(r); setSel({}); setPacks({}); } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); } };
   const chosen = (i: number, l: Line) => { const k = i in sel ? sel[i] : l.selected; return l.offers.find((o) => o.key === k) ?? null; };
@@ -111,7 +111,7 @@ export default function ShoppingList() {
         <div className="flex flex-wrap gap-2">
           {sugg.data && sugg.data.restock.count > 0 && <button className="pill border border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100" onClick={() => { setText(sugg.data!.restock.text); setUsedList(null); setData(null); }}><PackageOpen size={12} /> Réassort : {sugg.data.restock.count} produit{sugg.data.restock.count > 1 ? 's' : ''} sous le seuil</button>}
           {sugg.data?.last && <button className="pill border border-stone-200 bg-white text-stone-700 hover:bg-stone-50" onClick={() => { setText(sugg.data!.last!.text); setUsedList(null); setData(null); }}><RotateCcw size={12} /> Refaire la dernière commande ({sugg.data.last.reference})</button>}
-          {lists.data?.lists.map((l) => <span key={l.id} className="pill border border-brand-200 bg-brand-50 text-brand-900"><button onClick={() => applyList(l)} title={l.text}><ListChecks size={12} className="mr-1 inline" />{l.name}{l.useCount ? ` · ${l.useCount}×` : ''}</button><button className="ml-1 text-stone-400 hover:text-red-600" onClick={() => void delList(l.id)} title="Supprimer"><Trash2 size={12} /></button></span>)}
+          {lists.data?.lists.map((l) => <span key={l.id} className="pill border border-brand-200 bg-brand-50 text-brand-900"><button onClick={() => applySavedList(l)} title={l.text}><ListChecks size={12} className="mr-1 inline" />{l.name}{l.useCount ? ` · ${l.useCount}×` : ''}</button><button className="ml-1 text-stone-400 hover:text-red-600" onClick={() => void delList(l.id)} title="Supprimer"><Trash2 size={12} /></button></span>)}
         </div>
       )}
       {msg && <p className="rounded-xl border border-brand-100 bg-brand-50 p-3 text-sm text-brand-900">{msg}</p>}

@@ -498,6 +498,14 @@ export type Alert = typeof alerts.$inferSelect;
 export type Forecast = typeof forecasts.$inferSelect;
 export type ForecastEvent = typeof forecastEvents.$inferSelect;
 
+// Chantier 5 (audit S1/B7) — compteurs de rate-limit PARTAGÉS entre instances (serverless-proof) :
+// un compteur mémoire se contourne en redéployant, une table Postgres non.
+export const rateLimits = pgTable('rate_limits', {
+  key: text('key').primaryKey(),                       // `${route}:${ip}`
+  n: integer('n').default(0).notNull(),
+  resetAt: timestamp('reset_at', { withTimezone: true }).notNull(),
+});
+
 // -------------------------------------------------------------
 // Exploitation (chantier 8) : historique des jobs + journal d'audit RGPD
 // -------------------------------------------------------------

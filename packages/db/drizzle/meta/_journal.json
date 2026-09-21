@@ -159,29 +159,36 @@
     {
       "idx": 22,
       "version": "7",
-      "when": 1790030000000,
-      "tag": "0022_verification_email",
+      "when": 1790030238668,
+      "tag": "0022_rate_limits",
       "breakpoints": true
     },
     {
       "idx": 23,
       "version": "7",
-      "when": 1790031000000,
-      "tag": "0023_canaux_notifications",
+      "when": 1790040000000,
+      "tag": "0023_verification_email",
       "breakpoints": true
     },
     {
       "idx": 24,
       "version": "7",
-      "when": 1790032000000,
-      "tag": "0024_factures_abonnement",
+      "when": 1790041000000,
+      "tag": "0024_canaux_notifications",
       "breakpoints": true
     },
     {
       "idx": 25,
       "version": "7",
-      "when": 1790033000000,
-      "tag": "0025_facturation_fournisseur",
+      "when": 1790042000000,
+      "tag": "0025_factures_abonnement",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790043000000,
+      "tag": "0026_facturation_fournisseur",
       "breakpoints": true
     }
   ]

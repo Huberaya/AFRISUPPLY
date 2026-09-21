@@ -78,7 +78,7 @@ describe('3. Politique de mot de passe', () => {
     expect(passwordProblem('trois mots sans rapport')).toBeNull();
   });
   it('refuse une inscription avec mot de passe trop faible, accepte un mot de passe solide', async () => {
-    fresh();
+    await fresh();
     const weak = await call('POST', '/api/auth/register', { email: 'faible@resto.fr', password: 'demo1234', fullName: 'Test Faible', restaurantName: 'Faible' });
     expect(weak.status).toBe(400); expect(weak.json.code).toBe('weak_password');
     const ok = await call('POST', '/api/auth/register', { email: 'solide@resto.fr', password: STRONG, fullName: 'Test Solide', restaurantName: 'Solide' });
@@ -89,7 +89,7 @@ describe('3. Politique de mot de passe', () => {
 describe('4. Mot de passe oublié / réinitialisation / révocation', () => {
   let token = ''; let devLink = '';
   it('répond toujours la même chose (pas d’énumération des comptes)', async () => {
-    fresh();
+    await fresh();
     const unknown = await call('POST', '/api/auth/forgot-password', { email: 'inconnu@nulle-part.fr' });
     expect(unknown.status).toBe(200); expect(unknown.json.message).toMatch(/Si un compte existe/); expect(unknown.json.devLink).toBeUndefined();
     const known = await call('POST', '/api/auth/forgot-password', { email: 'solide@resto.fr' });
@@ -104,7 +104,7 @@ describe('4. Mot de passe oublié / réinitialisation / révocation', () => {
     expect(weak.status).toBe(400); expect(weak.json.code).toBe('weak_password');
   });
   it('réinitialise le mot de passe et révoque les sessions déjà ouvertes', async () => {
-    fresh();
+    await fresh();
     const login = await call('POST', '/api/auth/login', { email: 'solide@resto.fr', password: STRONG });
     expect(login.status).toBe(200); token = login.json.token;
     expect((await call('GET', '/api/dashboard', undefined, { authorization: `Bearer ${token}` })).status).toBe(200);
@@ -119,13 +119,13 @@ describe('4. Mot de passe oublié / réinitialisation / révocation', () => {
     expect((await call('POST', '/api/auth/login', { email: 'solide@resto.fr', password: 'Riz-Brisé-2026!' })).status).toBe(200);
   });
   it('un lien ne sert qu’une fois', async () => {
-    fresh();
+    await fresh();
     const t = new URL(devLink).searchParams.get('token');
     const again = await call('POST', '/api/auth/reset-password', { token: t, password: 'Autre-Mot-De-Passe-9' });
     expect(again.status).toBe(400); expect(again.json.code).toBe('reset_invalid');
   });
   it('changement de mot de passe : l’appareil courant reste connecté, les autres non', async () => {
-    fresh();
+    await fresh();
     const l1 = await call('POST', '/api/auth/login', { email: 'solide@resto.fr', password: 'Riz-Brisé-2026!' });
     const l2 = await call('POST', '/api/auth/login', { email: 'solide@resto.fr', password: 'Riz-Brisé-2026!' });
     const t1 = l1.json.token; const t2 = l2.json.token;
@@ -137,7 +137,7 @@ describe('4. Mot de passe oublié / réinitialisation / révocation', () => {
     expect((await call('GET', '/api/dashboard', undefined, { authorization: `Bearer ${t2}` })).status).toBe(401);
   });
   it('« déconnecter tous mes appareils » invalide immédiatement le jeton', async () => {
-    fresh();
+    await fresh();
     const l = await call('POST', '/api/auth/login', { email: 'solide@resto.fr', password: 'Nouveau-Mot-De-Passe-7' });
     const t = l.json.token;
     expect((await call('POST', '/api/auth/logout-all', undefined, { authorization: `Bearer ${t}` })).status).toBe(200);
@@ -149,7 +149,7 @@ describe('4. Mot de passe oublié / réinitialisation / révocation', () => {
 let owner: Record<string, string> = {}; let restaurantId = ''; let staffToken = ''; let managerToken = '';
 describe('5. Rôles : attribuables et réellement appliqués', () => {
   it('le propriétaire invite un membre de l’équipe, qui choisit son mot de passe', async () => {
-    fresh();
+    await fresh();
     const reg = await call('POST', '/api/auth/register', { email: 'patron@resto.fr', password: STRONG, fullName: 'Awa Patronne', restaurantName: 'Chez Awa Test', city: 'Nantes' });
     expect(reg.status).toBe(201); owner = { authorization: `Bearer ${reg.json.token}` }; restaurantId = reg.json.restaurant.id;
 
@@ -169,7 +169,7 @@ describe('5. Rôles : attribuables et réellement appliqués', () => {
   });
   it('« équipe » peut travailler au quotidien (stock, inventaire, réception) mais ne peut pas s’engager financièrement', async () => {
     const staff = { authorization: `Bearer ${staffToken}`, 'x-restaurant-id': restaurantId };
-    fresh();
+    await fresh();
     expect((await call('GET', '/api/stock', undefined, staff)).status).toBe(200);
     const tpl = await call('GET', '/api/onboarding/templates', undefined, staff);
     await call('POST', '/api/onboarding/apply', { templates: tpl.json.templates.slice(0, 1).map((t: Json) => t.name) }, staff);
@@ -186,7 +186,7 @@ describe('5. Rôles : attribuables et réellement appliqués', () => {
   });
   it('« responsable » gère les fournisseurs et les commandes, mais pas l’abonnement ni les membres', async () => {
     const mgr = { authorization: `Bearer ${managerToken}`, 'x-restaurant-id': restaurantId };
-    fresh();
+    await fresh();
     const supplier = await call('POST', '/api/suppliers', { name: 'Grossiste Chef', whatsapp: '+33600000002', leadTimeHours: 24 }, mgr);
     expect(supplier.status).toBe(201);
     const sup = supplier.json.supplier?.id ?? supplier.json.id;
@@ -207,7 +207,7 @@ describe('5. Rôles : attribuables et réellement appliqués', () => {
     expect((await call('DELETE', `/api/members/${kofi.userId}`, undefined, owner)).status).toBe(200);
     const after = await call('GET', '/api/members', undefined, owner);
     expect(after.json.members.some((m: Json) => m.email === 'aide@resto.fr')).toBe(false);
-    fresh();
+    await fresh();
     expect((await call('POST', '/api/auth/login', { email: 'aide@resto.fr', password: STRONG })).status).toBe(401);
   });
 });
@@ -229,7 +229,7 @@ describe('6. Routes inconnues et en-têtes', () => {
 
 describe('7. Cloisonnement des produits privés (BUG-6)', () => {
   it('un restaurant ne peut pas lire le nom du produit privé d’un autre (404 au lieu de 200)', async () => {
-    fresh();
+    await fresh();
     // Restaurant A crée un produit privé
     const a = await call('POST', '/api/auth/register', { email: 'a-cloison@resto.fr', password: STRONG, fullName: 'A Cloison', restaurantName: 'Resto A Cloison' });
     const tokA = a.json.token; const ridA = a.json.restaurant.id;
@@ -256,5 +256,47 @@ describe('7. Cloisonnement des produits privés (BUG-6)', () => {
       const shared = await call('GET', `/api/compare/${ref.id}`, undefined, { authorization: `Bearer ${tokB}`, 'x-restaurant-id': ridB });
       expect(shared.status).toBe(200);
     }
+  });
+});
+
+// =============================================================
+// Chantier 5 (audit S1/B7) — rate-limit PARTAGÉ (serverless-proof)
+// Critère de validation : 14 logins rapides → 429, et le compteur vit en base.
+// =============================================================
+describe('6. Rate-limit partagé entre instances (Postgres)', () => {
+  it('14 logins rapides → 429 (critère de validation du chantier 5)', async () => {
+    await fresh();
+    const statuses: number[] = [];
+    for (let i = 0; i < 14; i++) {
+      const r = await call('POST', '/api/auth/login', { email: 'brute@force.fr', password: 'mauvais-' + i });
+      statuses.push(r.status);
+    }
+    // max 10/min sur /auth/login : les 10 premières tentatives atteignent l'authentification (401),
+    // les suivantes sont refusées avant (429).
+    expect(statuses.slice(0, 10).every((s) => s === 401)).toBe(true);
+    expect(statuses.slice(10).every((s) => s === 429)).toBe(true);
+    // l'en-tête Retry-After est présent sur le refus
+    await fresh();
+  });
+
+  it('le compteur vit dans Postgres (partagé entre instances), pas en mémoire', async () => {
+    await fresh();
+    for (let i = 0; i < 3; i++) await call('POST', '/api/auth/login', { email: 'compteur@base.fr', password: 'x' });
+    const { getDb, rateLimits } = await import('@afrisupply/db');
+    const db = await getDb();
+    const rows = await db.select().from(rateLimits);
+    const loginRow = rows.find((r) => r.key.startsWith('/api/auth/login:'));
+    expect(loginRow).toBeDefined();
+    expect(Number(loginRow!.n)).toBeGreaterThanOrEqual(3);
+  });
+
+  it('la fenêtre expire : après réinitialisation, le service est rétabli', async () => {
+    await fresh();
+    for (let i = 0; i < 11; i++) await call('POST', '/api/auth/login', { email: 'fenetre@gl.fr', password: 'x' });
+    const bloque = await call('POST', '/api/auth/login', { email: 'autre@ip.fr', password: 'x' }); // 12e = 429
+    expect(bloque.status).toBe(429);
+    await fresh(); // la purge (=_resetRateLimits) rétablit aussitôt
+    const retabli = await call('POST', '/api/auth/login', { email: 'fenetre@gl.fr', password: 'x' });
+    expect(retabli.status).toBe(401);
   });
 });

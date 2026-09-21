@@ -32,8 +32,8 @@ export default function VendorSpace() {
   // sinon on respecte l'onglet demandé dans l'URL (tournées, commandes…).
   const [tab, setTab] = useState<Tab>(sp.get('paiement') ? 'commissions' : ((sp.get('tab') as Tab | null) ?? 'orders'));
   const load = () => api<{ vendors: Vendor[]; isAdmin: boolean }>('/vendor/me').then(setMe).catch((e) => { if ((e as { status?: number }).status === 401) nav('/connexion?next=/fournisseur'); else setErr((e as Error).message); });
-  useEffect(() => { if (!tokenStore.get()) { if (!invite) nav('/connexion?next=/fournisseur'); return; } void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  if (invite && (!tokenStore.get() || (me && !me.vendors.length))) return <Shell><InviteLanding token={invite} onDone={load} /></Shell>;
+  useEffect(() => { if (!tokenStore.authed()) { if (!invite) nav('/connexion?next=/fournisseur'); return; } void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (invite && (!tokenStore.authed() || (me && !me.vendors.length))) return <Shell><InviteLanding token={invite} onDone={load} /></Shell>;
   if (err) return <Shell><p className="text-red-700">{err}</p></Shell>;
   if (!me) return <Shell><p className="text-stone-500">Chargement…</p></Shell>;
   if (!me.vendors.length) return <Shell><Register onDone={load} /></Shell>;

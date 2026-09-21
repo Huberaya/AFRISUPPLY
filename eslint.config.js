@@ -18,6 +18,7 @@ export default tseslint.config(
       '**/drizzle',          // migrations générées
       '**/.pglite',
       'api/index.js',        // bundle serverless produit par `npm run build:api`
+      '**/api/index.mjs',
       'scripts/**',          // scripts Python/shell de vérification
       'coverage',
     ],
@@ -27,11 +28,16 @@ export default tseslint.config(
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: { ecmaVersion: 2022, globals: { ...globals.browser, ...globals.node } },
     plugins: { 'react-hooks': reactHooks },
+    // Les règles « recommandées » de react-hooks v7 (set-state-in-effect, static-components, purity,
+    // immutability…) sont volontairement laissées en commentaire : elles signalent des motifs React
+    // PRÉEXISTANTS (setState dans un effet, composant créé pendant le rendu) qu'il faut corriger un par
+    // un, pas désactiver en bloc ni réveiller au milieu d'une fusion. Les deux règles historiques, elles,
+    // sont actives et bloquantes : l'ordre d'appel des hooks et les dépendances d'effet.
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
       // Les dépendances d'effet sont signalées sans bloquer : un `eslint-disable-next-line` ciblé
       // et commenté reste la trace d'un choix, un `warn` ne casse pas la construction.
-      'react-hooks/exhaustive-deps': 'warn',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'error',
     },

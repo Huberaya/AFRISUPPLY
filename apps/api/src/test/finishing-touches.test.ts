@@ -23,7 +23,7 @@ let productId = '';
 
 beforeAll(async () => {
   await runMigrations();
-  _resetRateLimits();
+  await _resetRateLimits();
   const r = await call('POST', '/api/auth/register', { email: 'finitions@resto.fr', password: 'Mafé-Couscous-42', fullName: 'Finitions Test', restaurantName: 'Les Finitions', city: 'Nantes', coversPerDay: 40 });
   token = r.json.token; rid = r.json.restaurant.id; auth = { authorization: `Bearer ${token}`, 'x-restaurant-id': rid };
   await call('GET', '/api/catalog', undefined, auth); // amorçage du référentiel

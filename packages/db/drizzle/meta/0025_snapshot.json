@@ -1,6 +1,6 @@
 {
-  "id": "9b43f7dd-f2a7-4b85-a113-dc09fa3f70b1",
-  "prevId": "24828b18-52d9-46f4-8b73-81567305e25f",
+  "id": "24828b18-52d9-46f4-8b73-81567305e25f",
+  "prevId": "560b2985-2376-40d6-8105-ed70960adf28",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -5519,18 +5519,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "stripe_default_payment_method": {
-          "name": "stripe_default_payment_method",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "billing_email": {
-          "name": "billing_email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "contact_email": {
           "name": "contact_email",
           "type": "text",
@@ -5919,6 +5907,38 @@
           "onUpdate": "no action"
         }
       },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.rate_limits": {
+      "name": "rate_limits",
+      "schema": "",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "n": {
+          "name": "n",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "reset_at": {
+          "name": "reset_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
