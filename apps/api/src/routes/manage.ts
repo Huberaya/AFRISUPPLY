@@ -98,6 +98,28 @@ manageRoutes.post('/suppliers/:id/offers', async (c) => {
   return c.json(offer, 201);
 });
 
+// Chantier 3 (audit U5) — ajout d'offres en lot : 5 fournisseurs × 20 produits ne doivent plus
+// signifier 100 formulaires un par un.
+manageRoutes.post('/suppliers/:id/offers/batch', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb(); const supplierId = c.req.param('id');
+  const body = z.object({ items: z.array(offerBody).min(1).max(50) }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
+  const [sup] = await db.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.id, supplierId), eq(suppliers.restaurantId, rid)));
+  if (!sup) return c.json({ error: 'Fournisseur introuvable' }, 404);
+  const existing = new Set((await db.select({ productId: supplierOffers.productId }).from(supplierOffers)
+    .where(and(eq(supplierOffers.supplierId, supplierId), eq(supplierOffers.restaurantId, rid)))).map((r) => r.productId));
+  let created = 0, updated = 0;
+  for (const d of body.data.items) {
+    const before = existing.has(d.productId);
+    const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid, supplierId, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock })
+      .onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, lastSeenAt: new Date() } }).returning();
+    await db.insert(priceHistory).values({ restaurantId: rid, offerId: offer.id, unitPriceEur: (d.packPrice / d.packQty).toFixed(4), source: 'manuel' });
+    if (before) updated++; else created++;
+  }
+  await trackProducts(rid, body.data.items.map((i) => i.productId));
+  return c.json({ saved: body.data.items.length, created, updated }, 201);
+});
+
 manageRoutes.put('/offers/:id', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
   const body = offerBody.omit({ productId: true }).partial().safeParse(await c.req.json());

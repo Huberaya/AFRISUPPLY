@@ -58,6 +58,44 @@ describe('comparateur', () => {
     const r = compareOffers(offers, { daysOfStockLeft: 20, neededQty: 23, unit: 'kg' });
     expect(r.recommended?.supplierName).toBe('Fournisseur C');
   });
+
+  // Chantier 3 (audit B8) — le score se fait sur le COÛT TOTAL (colis + livraison, minimum inclus).
+  it('livraison payante : recommande le vrai moins cher au total, même avec un prix unitaire plus élevé', () => {
+    const two = [
+      { offerId: 'a', supplierId: 'A', supplierName: 'Cher livraison offerte', packLabel: 'Sac 10 kg', packQty: 10, packPrice: 20, unitPrice: 2, inStock: true, leadTimeHours: 24, deliveryFee: 0, minOrder: 0, reliabilityPct: 90 },
+      { offerId: 'b', supplierId: 'B', supplierName: 'Bon marché livraison payante', packLabel: 'Sac 10 kg', packQty: 10, packPrice: 15, unitPrice: 1.5, inStock: true, leadTimeHours: 24, deliveryFee: 6, minOrder: 0, reliabilityPct: 90 },
+    ];
+    // 10 kg : A = 20 € livrés ; B = 15 + 6 = 21 € → c'est A le vrai moins cher (l'ancien score prenait B).
+    const r = compareOffers(two, { daysOfStockLeft: 30, neededQty: 10, unit: 'kg' });
+    expect(r.recommended?.supplierName).toBe('Cher livraison offerte');
+    expect(r.recommended?.totalCostEur).toBe(20);
+    expect(r.recommended?.strengths).toContain('Livraison offerte');
+    expect(r.ranked.find((o) => o.offerId === 'b')!.totalCostEur).toBe(21);
+  });
+  it('une livraison payante peut rester gagnante : le total est affiché « dont X € de livraison »', () => {
+    const two = [
+      { offerId: 'a', supplierId: 'A', supplierName: 'Livraison offerte', packLabel: 'Sac 10 kg', packQty: 10, packPrice: 20, unitPrice: 2, inStock: true, leadTimeHours: 24, deliveryFee: 0, minOrder: 0, reliabilityPct: 90 },
+      { offerId: 'b', supplierId: 'B', supplierName: 'Livraison 2 €', packLabel: 'Sac 10 kg', packQty: 10, packPrice: 15, unitPrice: 1.5, inStock: true, leadTimeHours: 24, deliveryFee: 2, minOrder: 0, reliabilityPct: 90 },
+    ];
+    const r = compareOffers(two, { daysOfStockLeft: 30, neededQty: 10, unit: 'kg' });
+    expect(r.recommended?.supplierName).toBe('Livraison 2 €');       // 17 € < 20 €
+    expect(r.justification.join(' ')).toMatch(/dont 2,00 € de livraison/);
+  });
+  it('sous le minimum de commande : le coût réel = le minimum facturé, avec pénalité et avertissement', () => {
+    const two = [
+      { offerId: 'x', supplierId: 'X', supplierName: 'Sans minimum', packLabel: 'Sac 10 kg', packQty: 10, packPrice: 15, unitPrice: 1.5, inStock: true, leadTimeHours: 24, deliveryFee: 0, minOrder: 0, reliabilityPct: 90 },
+      { offerId: 'y', supplierId: 'Y', supplierName: 'Avec minimum', packLabel: 'Sac 10 kg', packQty: 10, packPrice: 10, unitPrice: 1, inStock: true, leadTimeHours: 24, deliveryFee: 0, minOrder: 15, reliabilityPct: 90 },
+    ];
+    // Y a le meilleur prix unitaire mais 10 € de marchandises sous un minimum à 15 € : on paie 15 €.
+    const r = compareOffers(two, { daysOfStockLeft: 30, neededQty: 10, unit: 'kg' });
+    const y = r.ranked.find((o) => o.offerId === 'y')!;
+    expect(y.underMin).toBe(true);
+    expect(y.totalCostEur).toBe(15);
+    expect(y.weaknesses.join(' ')).toMatch(/minimum de commande/);
+    expect(y.score).toBeLessThan(r.ranked.find((o) => o.offerId === 'x')!.score); // pénalité sous-minimum
+    expect(r.recommended?.supplierName).toBe('Sans minimum');
+    expect(r.ranked.map((o) => o.supplierName)).toEqual(['Sans minimum', 'Avec minimum']);
+  });
 });
 
 describe('recettes', () => {

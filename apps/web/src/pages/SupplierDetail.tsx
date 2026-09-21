@@ -11,6 +11,8 @@ import { ProductPicker } from '../components/ProductPicker';
 type Sup = { id: string; name: string; contactName: string | null; phone: string | null; email: string | null; whatsapp: string | null; city: string | null; categories: string[]; leadTimeHours: number; minOrderEur: string; deliveryFeeEur: string; preferredChannel: 'email' | 'whatsapp' | 'telephone' | 'plateforme'; rating: string | null; notes: string | null; isActive: boolean };
 type Offer = { id: string; productId: string; productName: string; unit: string; packLabel: string; packQty: string; packPriceEur: string; unitPrice: number; inStock: boolean; lastSeenAt: string };
 type D = { supplier: Sup; stats?: { reliability: number; delivered: number; late: number; discrepancies: number; spent: number }; offers: Offer[]; orders: { id: string; reference: string; createdAt: string; totalEur: string; status: string }[] };
+// Chantier 3 (audit U5) — saisie d'offres en lot : une ligne par produit, plus 100 formulaires à la suite.
+type BatchRow = { product: { id: string; name: string; baseUnit: string } | null; packLabel: string; packQty: string; packPrice: string };
 
 export default function SupplierDetail() {
   const { id } = useParams(); const nav = useNavigate();
@@ -20,6 +22,20 @@ export default function SupplierDetail() {
   const [product, setProduct] = useState<{ id: string; name: string; baseUnit: string } | null>(null);
   const [packLabel, setPackLabel] = useState(''); const [packQty, setPackQty] = useState(''); const [packPrice, setPackPrice] = useState(''); const [inStock, setInStock] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
+  const [batch, setBatch] = useState<null | { rows: BatchRow[]; busy: boolean }>(null);
+  const setRow = (idx: number, patch: Partial<BatchRow>) => setBatch((b) => b && { ...b, rows: b.rows.map((r, k) => (k === idx ? { ...r, ...patch } : r)) });
+  const openBatch = () => { setBatch({ rows: [{ product: null, packLabel: '', packQty: '', packPrice: '' }], busy: false }); setMsg(null); };
+  const saveBatch = async (e: React.FormEvent) => {
+    e.preventDefault(); if (!batch || batch.busy) return;
+    const items = batch.rows.filter((r) => r.product && Number(r.packQty.replace(',', '.')) > 0 && Number(r.packPrice.replace(',', '.')) > 0)
+      .map((r) => ({ productId: r.product!.id, packLabel: r.packLabel || 'Sac', packQty: Number(r.packQty.replace(',', '.')), packPrice: Number(r.packPrice.replace(',', '.')), inStock: true }));
+    if (!items.length) return;
+    setBatch({ ...batch, busy: true });
+    try {
+      const r = await api<{ saved: number }>(`/suppliers/${s.id}/offers/batch`, { method: 'POST', json: { items } });
+      setBatch(null); setMsg(`${r.saved} prix ajoutés au catalogue de ${s.name} — prix historisés et produits suivis en stock.`); await reload();
+    } catch (x) { setBatch({ ...batch, busy: false }); window.alert((x as Error).message); }
+  };
   if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
   const { supplier: s, stats, offers, orders } = data;
   const openOffer = (offer?: Offer) => { setOfferModal({ offer }); setProduct(offer ? { id: offer.productId, name: offer.productName, baseUnit: offer.unit } : null); setPackLabel(offer?.packLabel ?? ''); setPackQty(offer ? String(Number(offer.packQty)) : ''); setPackPrice(offer ? String(Number(offer.packPriceEur)) : ''); setInStock(offer?.inStock ?? true); setMsg(null); };
@@ -48,7 +64,7 @@ export default function SupplierDetail() {
       {s.notes && <p className="text-sm text-stone-600">📝 {s.notes}</p>}
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="card !p-0 overflow-x-auto">
-          <div className="flex items-center justify-between px-4 pt-4"><h2 className="font-bold">Catalogue & prix</h2><button className="btn-primary !py-1.5" onClick={() => openOffer()}><Plus size={14} /> Ajouter un prix</button></div>
+          <div className="flex items-center justify-between px-4 pt-4"><h2 className="font-bold">Catalogue & prix</h2><div className="flex gap-2"><button className="btn-ghost !py-1.5" onClick={openBatch}>Ajouter en lot</button><button className="btn-primary !py-1.5" onClick={() => openOffer()}><Plus size={14} /> Ajouter un prix</button></div></div>
           <table className="mt-2 w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="px-4 py-2">Produit</th><th className="px-4 py-2">Conditionnement</th><th className="px-4 py-2 text-right">Prix</th><th className="px-4 py-2 text-right">/ unité</th><th className="px-4 py-2"></th></tr></thead>
             <tbody className="divide-y divide-stone-100">{offers.map((o) => <tr key={o.id} className={o.inStock ? '' : 'opacity-50'}><td className="px-4 py-2 font-medium"><Link to={`/app/achats/comparer/${o.productId}`} className="hover:text-brand-700">{o.productName}</Link>{!o.inStock && <span className="ml-1 text-xs text-stone-400">(indispo.)</span>}</td><td className="px-4 py-2 text-stone-600">{o.packLabel}</td><td className="px-4 py-2 text-right">{fmtEur(o.packPriceEur)}</td><td className="px-4 py-2 text-right font-semibold">{fmtEur(o.unitPrice)}/{o.unit}</td><td className="px-4 py-2 text-right whitespace-nowrap"><button onClick={() => openOffer(o)} className="p-1 text-stone-400 hover:text-brand-700" aria-label="Modifier"><Pencil size={14} /></button><button onClick={() => void deleteOffer(o)} className="p-1 text-stone-400 hover:text-red-600" aria-label="Supprimer"><Trash2 size={14} /></button></td></tr>)}</tbody></table>
           {offers.length === 0 && <p className="p-4 text-sm text-stone-500">Aucun prix saisi. Ajoutez un prix ou passez par <Link to="/app/import" className="underline">l’import CSV</Link>.</p>}
@@ -69,6 +85,32 @@ export default function SupplierDetail() {
           {packQty && packPrice && Number(packQty.replace(',', '.')) > 0 && <p className="text-xs text-stone-500">= {fmtEur(Number(packPrice.replace(',', '.')) / Number(packQty.replace(',', '.')))} / {product?.baseUnit ?? 'unité'}</p>}
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)} /> Disponible actuellement</label>
           <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={() => setOfferModal(null)}>Annuler</button><button type="submit" className="btn-primary" disabled={!product}>{offerModal.offer ? 'Enregistrer' : 'Ajouter'}</button></div>
+        </form>
+      </Modal>}
+      {/* Chantier 3 (audit U5) — ajout d'offres en lot : une ligne par produit. */}
+      {batch && <Modal title="Ajouter des prix en lot" subtitle="Une ligne par produit : conditionnement, quantité du colis, prix du colis." onClose={() => setBatch(null)} wide>
+        <form onSubmit={saveBatch} className="space-y-3">
+          <div className="max-h-[50vh] space-y-3 overflow-y-auto">
+            {batch.rows.map((row, idx) => (
+              <div key={idx} className="space-y-2 rounded-xl border border-stone-100 p-2">
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    {row.product ? <div className="flex items-center justify-between rounded-xl bg-brand-50 px-3 py-2 text-sm"><span className="font-medium truncate">{row.product.name} <span className="text-stone-500">({row.product.baseUnit})</span></span><button type="button" className="ml-2 text-xs underline" onClick={() => setRow(idx, { product: null })}>changer</button></div>
+                      : <ProductPicker onPick={(p) => setRow(idx, { product: p, packLabel: row.packLabel || (p.baseUnit === 'kg' ? 'Sac 25 kg' : p.baseUnit === 'L' ? 'Bidon 5 L' : 'Carton') })} placeholder={`Produit ${idx + 1} (riz, gombo, attiéké…)`} />}
+                  </div>
+                  {batch.rows.length > 1 && <button type="button" onClick={() => setBatch({ ...batch, rows: batch.rows.filter((_, k) => k !== idx) })} className="p-1 text-stone-400 hover:text-red-600" aria-label="Retirer la ligne"><Trash2 size={14} /></button>}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <Field label="Conditionnement"><input className="input" required value={row.packLabel} onChange={(e) => setRow(idx, { packLabel: e.target.value })} placeholder="Sac 25 kg" /></Field>
+                  <Field label={`Quantité (${row.product?.baseUnit ?? 'unité'})`}><input className="input" required inputMode="decimal" value={row.packQty} onChange={(e) => setRow(idx, { packQty: e.target.value })} placeholder="25" /></Field>
+                  <Field label="Prix du colis (€)"><input className="input" required inputMode="decimal" value={row.packPrice} onChange={(e) => setRow(idx, { packPrice: e.target.value })} placeholder="42,00" /></Field>
+                </div>
+                {row.packQty && row.packPrice && Number(row.packQty.replace(',', '.')) > 0 && <p className="text-xs text-stone-500">= {fmtEur(Number(row.packPrice.replace(',', '.')) / Number(row.packQty.replace(',', '.')))} / {row.product?.baseUnit ?? 'unité'}</p>}
+              </div>
+            ))}
+          </div>
+          <button type="button" className="btn-ghost !py-1.5" onClick={() => setBatch({ ...batch, rows: [...batch.rows, { product: null, packLabel: '', packQty: '', packPrice: '' }] })}><Plus size={14} /> Ajouter une ligne</button>
+          <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={() => setBatch(null)}>Annuler</button><button type="submit" className="btn-primary" disabled={batch.busy || !batch.rows.some((r) => r.product && r.packQty && r.packPrice)}>{batch.busy ? 'Enregistrement…' : 'Enregistrer les prix'}</button></div>
         </form>
       </Modal>}
     </div>

@@ -191,47 +191,73 @@ export interface OfferForComparison {
   offerId: string; supplierId: string; supplierName: string; packLabel: string; packQty: number; packPrice: number;
   unitPrice: number; inStock: boolean; leadTimeHours: number; deliveryFee: number; minOrder: number; reliabilityPct: number;
 }
+export interface RankedOffer extends OfferForComparison {
+  score: number; priceScore: number; delayScore: number; reliabilityScore: number;
+  /** Chantier 3 (audit B8) : dimensionnement pour la quantité demandée. */
+  packs: number;
+  goodsEur: number;
+  /** Le vrai coût : colis + livraison, minimum de commande facturé s'il n'est pas atteint. */
+  totalCostEur: number;
+  underMin: boolean;
+  strengths: string[]; weaknesses: string[];
+}
 export interface ComparisonResult {
-  ranked: (OfferForComparison & { score: number; priceScore: number; delayScore: number; reliabilityScore: number; strengths: string[]; weaknesses: string[] })[];
-  recommended?: ComparisonResult['ranked'][number];
+  ranked: RankedOffer[];
+  recommended?: RankedOffer;
   headline: string;
   justification: string[];
 }
 
 export function compareOffers(offers: OfferForComparison[], ctx: { daysOfStockLeft: number | null; neededQty: number; unit: string }): ComparisonResult {
   if (!offers.length) return { ranked: [], headline: 'Aucune offre disponible', justification: [] };
-  const minPrice = Math.min(...offers.map((o) => o.unitPrice));
-  const maxPrice = Math.max(...offers.map((o) => o.unitPrice));
+  const need = ctx.neededQty > 0 ? ctx.neededQty : 1;
+  // Chantier 3 (audit B8) : le score se base sur le COÛT TOTAL pour la quantité demandée
+  // (colis × prix + livraison) — pas seulement le prix unitaire. Sous le minimum de commande,
+  // le fournisseur facture le minimum : c'est le coût réel, avec une pénalité explicite.
+  const sized = offers.map((o) => {
+    const deliveryFee = Number(o.deliveryFee) || 0;
+    const minOrder = Number(o.minOrder) || 0;
+    const packs = Math.max(1, Math.ceil(need / (o.packQty || 1)));
+    const goodsEur = Math.round(packs * o.packPrice * 100) / 100;
+    const underMin = minOrder > 0 && goodsEur < minOrder;
+    const totalCostEur = Math.round((Math.max(goodsEur, minOrder) + deliveryFee) * 100) / 100;
+    return { ...o, deliveryFee, minOrder, packs, goodsEur, totalCostEur, underMin };
+  });
+  const minTotal = Math.min(...sized.map((o) => o.totalCostEur));
+  const maxTotal = Math.max(...sized.map((o) => o.totalCostEur));
   const urgencyHours = ctx.daysOfStockLeft !== null ? Math.max(0, ctx.daysOfStockLeft * 24) : Infinity;
 
-  const ranked = offers.map((o) => {
-    const priceScore = maxPrice === minPrice ? 100 : Math.round(100 - ((o.unitPrice - minPrice) / (maxPrice - minPrice)) * 100);
+  const ranked = sized.map((o) => {
+    const priceScore = maxTotal === minTotal ? 100 : Math.round(100 - ((o.totalCostEur - minTotal) / (maxTotal - minTotal)) * 100);
     const tooLate = o.leadTimeHours > urgencyHours;
     const delayScore = tooLate ? 0 : Math.max(0, Math.round(100 - (o.leadTimeHours / 168) * 100));
     const reliabilityScore = Math.round(o.reliabilityPct);
     const stockPenalty = o.inStock ? 1 : 0.2;
-    const score = Math.round((priceScore * 0.5 + delayScore * 0.3 + reliabilityScore * 0.2) * stockPenalty);
+    const minPenalty = o.underMin ? 0.9 : 1; // pénalité sous-minimum (audit B8)
+    const score = Math.round((priceScore * 0.5 + delayScore * 0.3 + reliabilityScore * 0.2) * stockPenalty * minPenalty);
     const strengths: string[] = []; const weaknesses: string[] = [];
-    if (o.unitPrice === minPrice) strengths.push('Prix le plus bas du panel');
+    if (o.totalCostEur === minTotal) strengths.push('Coût total le plus bas du panel');
+    if (!o.deliveryFee) strengths.push('Livraison offerte');
     if (o.leadTimeHours <= 24) strengths.push('Livraison sous 24 h');
     if (o.reliabilityPct >= 90) strengths.push(`Fiabilité ${o.reliabilityPct.toFixed(0)} %`);
     if (!o.inStock) weaknesses.push('Rupture chez le fournisseur');
     if (tooLate) weaknesses.push(`Délai de ${Math.round(o.leadTimeHours / 24)} j incompatible avec votre stock (${ctx.daysOfStockLeft} j restants)`);
-    if (o.unitPrice === maxPrice && maxPrice !== minPrice) weaknesses.push('Prix le plus élevé du panel');
+    if (o.underMin) weaknesses.push(`Sous le minimum de commande (${fmtEur(o.minOrder)}) — à regrouper avec d'autres besoins`);
+    if (o.totalCostEur === maxTotal && maxTotal !== minTotal) weaknesses.push('Coût total le plus élevé du panel');
     if (o.reliabilityPct < 80) weaknesses.push('Fiabilité en dessous de 80 %');
     return { ...o, score, priceScore, delayScore, reliabilityScore, strengths, weaknesses };
   }).sort((a, b) => b.score - a.score);
 
   const best = ranked[0];
-  const cheapest = ranked.find((o) => o.unitPrice === minPrice)!;
+  const cheapest = [...ranked].sort((a, b) => a.totalCostEur - b.totalCostEur)[0];
+  const withFee = (o: RankedOffer) => `${fmtEur(o.totalCostEur)}${o.deliveryFee ? ` dont ${fmtEur(o.deliveryFee)} de livraison` : ''}`;
   const justification: string[] = [];
-  justification.push(`${best.supplierName} obtient le meilleur score global (${best.score}/100) en combinant prix (${fmtEur(best.unitPrice)}/${ctx.unit}), délai (${Math.round(best.leadTimeHours / 24)} j) et fiabilité (${best.reliabilityPct.toFixed(0)} %).`);
+  justification.push(`${best.supplierName} obtient le meilleur score global (${best.score}/100) en combinant coût total pour ${fmtQty(need, ctx.unit)} (${withFee(best)}, soit ${fmtEur(best.unitPrice)}/${ctx.unit}), délai (${Math.round(best.leadTimeHours / 24)} j) et fiabilité (${best.reliabilityPct.toFixed(0)} %).`);
   if (cheapest.offerId !== best.offerId) {
     const why = cheapest.weaknesses[0] ?? 'un score global inférieur';
-    justification.push(`${cheapest.supplierName} est moins cher (${fmtEur(cheapest.unitPrice)}/${ctx.unit}) mais présente ${why.charAt(0).toLowerCase() + why.slice(1)}.`);
+    justification.push(`${cheapest.supplierName} est moins cher au total (${withFee(cheapest)}) mais présente ${why.charAt(0).toLowerCase() + why.slice(1)}.`);
   }
-  const packs = Math.max(1, Math.ceil(ctx.neededQty / best.packQty));
-  justification.push(`Pour couvrir ${fmtQty(ctx.neededQty, ctx.unit)} : ${packs} × ${best.packLabel} = ${fmtEur(packs * best.packPrice + best.deliveryFee)}${best.deliveryFee ? ` (dont ${fmtEur(best.deliveryFee)} de livraison)` : ''}.`);
+  justification.push(`Pour couvrir ${fmtQty(need, ctx.unit)} : ${best.packs} × ${best.packLabel} = ${fmtEur(best.totalCostEur)}${best.deliveryFee ? ` (dont ${fmtEur(best.deliveryFee)} de livraison)` : ''}${best.underMin ? `, minimum de commande ${fmtEur(best.minOrder)} non atteint` : ''}.`);
 
   return { ranked, recommended: best, headline: `Meilleur choix : ${best.supplierName}`, justification };
 }

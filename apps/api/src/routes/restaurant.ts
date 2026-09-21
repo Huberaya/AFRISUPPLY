@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { and, eq, desc, gte, sql, inArray } from 'drizzle-orm';
 import {
   getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, stockMovements,
-  orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, restaurants,
+  orders, orderLines, deliveries, deliveryDiscrepancies, recipes, recipeIngredients, sales, alerts, restaurants, users,
   quantityCeiling, defaultThresholds,
 } from '@afrisupply/db';
 import { nextOrderReference } from '../lib/reference.js';
@@ -239,6 +239,24 @@ restaurantRoutes.post('/stock/:itemId/movements', async (c) => {
   await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type, quantity: delta.toFixed(3), note, createdBy: user.id });
   await db.update(inventoryItems).set({ quantity: newQty.toFixed(3), updatedAt: new Date(), ...(type === 'ajustement' ? { lastCountedAt: new Date() } : {}) }).where(eq(inventoryItems.id, item.id));
   return c.json({ ok: true, quantity: newQty });
+});
+
+// Chantier 3 (audit U2) — journal des mouvements : « qui a sorti 10 kg ? » doit avoir une réponse.
+restaurantRoutes.get('/stock/:itemId/movements', async (c) => {
+  const rid = c.get('restaurantId'); const db = await getDb();
+  const [item] = await db.select().from(inventoryItems).where(and(eq(inventoryItems.id, c.req.param('itemId')), eq(inventoryItems.restaurantId, rid)));
+  if (!item) return c.json({ error: 'Article introuvable' }, 404);
+  const rows = await db.select({ m: stockMovements, by: users.fullName })
+    .from(stockMovements).leftJoin(users, eq(users.id, stockMovements.createdBy))
+    .where(and(eq(stockMovements.restaurantId, rid), eq(stockMovements.inventoryItemId, item.id)))
+    .orderBy(desc(stockMovements.createdAt)).limit(20);
+  return c.json({
+    item: { id: item.id, productId: item.productId, quantity: n(item.quantity) },
+    movements: rows.map(({ m, by }) => ({
+      id: m.id, type: m.type, quantity: n(m.quantity), unitCostEur: m.unitCostEur ? n(m.unitCostEur) : null,
+      orderId: m.orderId, note: m.note, createdBy: by, createdAt: m.createdAt,
+    })),
+  });
 });
 
 // -------------------------------------------------------------
@@ -549,7 +567,8 @@ restaurantRoutes.post('/orders/:id/receive', async (c) => {
 
       if (discrepancies.length) {
         const [sup] = await tx.select().from(suppliers).where(eq(suppliers.id, order.supplierId));
-        claimMessage = `Bonjour ${sup?.contactName ?? ''},\n\nNous avons constaté un écart sur la livraison ${order.reference} :\n` +
+        // Chantier 3 (audit B5) : plus jamais « Bonjour , » — la virgule orpheline partait tel quel au fournisseur.
+        claimMessage = `Bonjour${sup?.contactName ? ` ${sup.contactName}` : ''},\n\nNous avons constaté un écart sur la livraison ${order.reference} :\n` +
           discrepancies.map((d) => `• ${d.productName} : commandé ${d.ordered} ${d.unit}, reçu ${d.received} ${d.unit} (${d.ordered - d.received > 0 ? 'manquant' : 'excédent'} ${Math.abs(d.ordered - d.received)} ${d.unit})`).join('\n') +
           `\n\nMerci de nous indiquer la suite à donner (livraison complémentaire ou avoir).\n\nCordialement,\n${user.fullName}`;
         await tx.insert(deliveryDiscrepancies).values(discrepancies.map((d) => ({ deliveryId: delivery.id, orderLineId: d.lineId, orderedQty: d.ordered.toFixed(3), receivedQty: d.received.toFixed(3), reason: d.ordered > d.received ? 'manquant' : 'excédent', claimMessage })));
