@@ -138,8 +138,19 @@ try:
     produits_recette = [p for p in f0.get("products", []) if "aucune recette" not in p["explanation"]]
     check("sans aucune donnée : besoin prédit nul pour les produits qui composent des recettes",
           produits_recette and all(p["predictedNeed"] == 0 for p in produits_recette), f"{len(produits_recette)} produit(s) en recette")
-    check("la commande recommandée ne dépasse jamais le seuil critique quand il n’y a aucune donnée",
-          all(p["recommendedOrder"] <= max(0, p["safetyStock"] - p["currentStock"]) + 0.01 for p in f0.get("products", [])))
+    # Depuis la fusion « démarrage à froid » (chantier 1), sans aucune vente saisie la commande ne
+    # part plus du besoin prévisionnel (qui vaut 0) mais de l'objectif de stock du restaurant :
+    # c'est la politique (s, S). Contrepartie vérifiée ici : elle ne peut JAMAIS dépasser ce plafond.
+    st, stock0, _ = call(API, "GET", "/stock", TOK, rid=RID)
+    objectif = {it["productId"]: (it.get("targetLevel") or 0) for it in stock0.get("items", [])}
+
+    def plafond_reco(p):
+        return max(max(0, p["safetyStock"] - p["currentStock"]), objectif.get(p["productId"], 0) * 1.5) + 0.01
+
+    check("sans aucune donnée : la commande ne dépasse jamais le plafond (seuil critique, ou objectif fixé ×1,5)",
+          all(p["recommendedOrder"] <= plafond_reco(p) for p in f0.get("products", [])),
+          f"{sum(1 for p in f0['products'] if p['recommendedOrder'] > 0)} produit(s) à commander, "
+          f"dépassement max {max([round(p['recommendedOrder'] - plafond_reco(p), 2) for p in f0['products']] or [0])}")
 
     call(API, "PUT", "/settings", TOK, body={"coversPerDay": 120}, rid=RID)
     st, f1, _ = call(API, "GET", "/forecast", TOK, rid=RID)
@@ -154,16 +165,21 @@ try:
     call(API, "POST", "/sales", TOK, body={"day": iso(-2), "lines": [{"recipeId": recette, "portions": 30}], "decrementStock": False}, rid=RID)
     st, f2, _ = call(API, "GET", "/forecast", TOK, rid=RID)
     sept = [p for p in f2["products"] if p["basis"] == "ventes_7j"]
-    check("quelques ventes récentes → source « ventes 7 j », confiance 45 %",
-          sept and sept[0]["confidence"] == 0.45 and sept[0]["predictedNeed"] > 0, f"{len(sept)} produit(s)")
+    # La leçon de la fusion : 1 jour de ventes ne justifie pas la confiance d'une semaine écoulée.
+    # La confiance suit désormais le nombre de jours réellement saisis (0,40 sous 7 jours → 0,85 au-delà de 28).
+    check("quelques ventes récentes (1 jour saisi) → source « ventes 7 j », confiance prudente 40 %",
+          sept and sept[0]["confidence"] == 0.4 and sept[0]["predictedNeed"] > 0,
+          f"{len(sept)} produit(s), confiance {sept[0]['confidence'] if sept else '?'}")
 
-    for d in (-9, -16, -23):
+    # On va jusqu'à 14 jours de ventes saisies : en dessous, la confiance reste légitimement basse
+    # (c'est le point corrigé par la fusion) et le « cas nominal » ne serait jamais atteint.
+    for d in range(-3, -16, -1):
         call(API, "POST", "/sales", TOK, body={"day": iso(d), "lines": [{"recipeId": recette, "portions": 25 + d % 5}], "decrementStock": False}, rid=RID)
     st, f3, _ = call(API, "GET", "/forecast", TOK, rid=RID)
     vingt_huit = [p for p in f3["products"] if p["basis"] == "ventes_28j"]
-    check("historique suffisant → source « ventes 28 j » (retour au cas nominal)",
-          vingt_huit and vingt_huit[0]["confidence"] >= 0.55, f"{len(vingt_huit)} produit(s), confiance {vingt_huit[0]['confidence'] if vingt_huit else '?'}")
-    check("le nombre de jours de ventes est désormais annoncé par l’API", f3["dataQuality"]["salesDays"] == 4 and f3["dataQuality"]["daysSinceLastSale"] == 2,
+    check("historique suffisant (14 jours saisis) → source « ventes 28 j » et confiance 70 %",
+          vingt_huit and vingt_huit[0]["confidence"] >= 0.7, f"{len(vingt_huit)} produit(s), confiance {vingt_huit[0]['confidence'] if vingt_huit else '?'}")
+    check("le nombre de jours de ventes est désormais annoncé par l’API", f3["dataQuality"]["salesDays"] == 14 and f3["dataQuality"]["daysSinceLastSale"] == 2,
           f"salesDays={f3['dataQuality']['salesDays']}, jours depuis la dernière saisie={f3['dataQuality']['daysSinceLastSale']}")
 
     # ------------------------------------------------------------------ C. jours de fermeture

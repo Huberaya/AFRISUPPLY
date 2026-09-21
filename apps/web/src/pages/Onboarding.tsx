@@ -68,7 +68,7 @@ export default function Onboarding() {
               </div>
             ))}
           </div>
-          {saveErr && <ErrorBox message={saveErr} />}
+          {saveErr && <ErrorBox message={saveErr} onRetry={() => saveThresholds('/app/import')} />}
           <div className="flex flex-wrap justify-center gap-2 pt-1">
             <button className="btn-primary" disabled={busy} onClick={() => saveThresholds('/app/import')}>{busy ? 'Enregistrement…' : 'Valider mes seuils'} <ArrowRight size={16} /></button>
             <button className="btn-ghost" disabled={busy} onClick={() => saveThresholds('/app/stock')}>Voir le stock</button>
