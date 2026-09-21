@@ -7,6 +7,8 @@ import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ReorderModal, RecurringList } from '../components/Reorder';
 import { ReviewModal } from '../components/Reliability';
+import { Steps, FLOW_STEPS } from '../components/Steps';
+import { useConfirm, useToast } from '../components/Feedback';
 
 type Line = { id: string; productId?: string; productName: string; packLabel: string | null; packs: number; quantity: string; unitPriceEur: string; lineTotalEur: string; receivedQty: string | null; invoicedUnitPriceEur?: string | null };
 type PriceVariance = { lineId: string; productName: string; unit: string; orderedUnit: number; invoicedUnit: number; deltaUnit: number; deltaPct: number | null; receivedQty: number; deltaEur: number };
@@ -42,14 +44,45 @@ export default function Orders() {
   const [sending, setSending] = useState<{ o: O; msg: Msg } | null>(null);
   const [editing, setEditing] = useState<O | null>(null); const [packs, setPacks] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
+  // Chantier 11 : plus de boîtes de dialogue du navigateur (« Annuler / OK » en anglais,
+  // message d'avertissement du navigateur). Confirmation dans la charte + retour visible après coup.
+  const confirmer = useConfirm();
+  const toast = useToast();
   // Chantier 1 (audit) : anti double-clic + affichage des refus serveur (déjà réceptionnée, quantité invraisemblable)
   const [recvBusy, setRecvBusy] = useState(false);
   const [recvErr, setRecvErr] = useState<{ message: string; code?: string } | null>(null);
   const openSend = async (o: O) => { const msg = await api<Msg>(`/orders/${o.id}/message`); setSending({ o, msg }); setCopied(false); };
-  const markSent = async (o: O) => { await api(`/orders/${o.id}`, { method: 'PUT', json: { status: 'envoyee' } }); setSending(null); await reload(); };
-  const cancel = async (o: O) => { if (!confirm(`Annuler la commande ${o.reference} ?`)) return; await api(`/orders/${o.id}`, { method: 'PUT', json: { status: 'annulee' } }); await reload(); };
+  const markSent = async (o: O) => {
+    try {
+      await api(`/orders/${o.id}`, { method: 'PUT', json: { status: 'envoyee' } });
+      toast.success(`Commande ${o.reference} marquée « Envoyée ».`, 'Le fournisseur peut maintenant confirmer ou proposer une modification.');
+      setSending(null);
+    } catch (e) { toast.error('Mise à jour impossible', (e as Error).message); }
+    await reload();
+  };
+  const cancel = async (o: O) => {
+    const ok = await confirmer({
+      title: `Annuler la commande ${o.reference} ?`,
+      body: <>Elle ne partira pas chez <b>{o.supplierName}</b>. Rien n'est envoyé au fournisseur, et vous pourrez recommander plus tard depuis le stock.</>,
+      confirmLabel: 'Oui, annuler la commande', cancelLabel: 'La garder', danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/orders/${o.id}`, { method: 'PUT', json: { status: 'annulee' } });
+      toast.success(`Commande ${o.reference} annulée.`, 'Aucun message n’a été envoyé au fournisseur.');
+    } catch (e) { toast.error('Annulation impossible', (e as Error).message); }
+    await reload();
+  };
   const openEdit = (o: O) => { setEditing(o); setPacks(Object.fromEntries(o.lines.map((l) => [l.id, String(l.packs)]))); };
-  const saveEdit = async () => { if (!editing) return; await api(`/orders/${editing.id}/lines`, { method: 'PUT', json: { lines: editing.lines.map((l) => ({ lineId: l.id, packs: Math.max(0, Number(packs[l.id]) || 0) })) } }); setEditing(null); await reload(); };
+  const saveEdit = async () => {
+    if (!editing) return;
+    try {
+      await api(`/orders/${editing.id}/lines`, { method: 'PUT', json: { lines: editing.lines.map((l) => ({ lineId: l.id, packs: Math.max(0, Number(packs[l.id]) || 0) })) } });
+      toast.success('Commande mise à jour.', 'Le nouveau total est visible dans « Achats ».');
+      setEditing(null);
+    } catch (e) { toast.error('Modification impossible', (e as Error).message); }
+    await reload();
+  };
   const openReceive = (o: O) => {
     setReceiving(o);
     setReceived(Object.fromEntries(o.lines.map((l) => [l.id, l.quantity])));
@@ -58,7 +91,21 @@ export default function Orders() {
   };
   const confirmReceive = async (override = false) => {
     if (!receiving || recvBusy) return;
-    if (!override && !confirm(`Réceptionner ${receiving.reference} ?\n\nLe stock sera mis à jour avec les quantités reçues. Une commande ne peut être réceptionnée qu'UNE fois.`)) return;
+    if (!override) {
+      const ok = await confirmer({
+        title: `Réceptionner ${receiving.reference} ?`,
+        body: <>Le stock sera mis à jour avec les quantités reçues. Une commande ne peut être réceptionnée <b>qu'une seule fois</b>.</>,
+        confirmLabel: 'Réceptionner maintenant', cancelLabel: 'Pas encore',
+      });
+      if (!ok) return;
+    } else {
+      const ok = await confirmer({
+        title: 'Confirmer un volume inhabituel ?',
+        body: <>Vous déclarez avoir réellement reçu ce volume. La décision sera tracée dans le suivi de la commande.</>,
+        confirmLabel: 'Oui, le volume est réel', danger: true,
+      });
+      if (!ok) return;
+    }
     setRecvBusy(true); setRecvErr(null);
     try {
       const r = await api<RecvResult>(`/orders/${receiving.id}/receive`, {
@@ -76,7 +123,11 @@ export default function Orders() {
           override: override || undefined,
         },
       });
-      setResult(r); await reload(); void disc.reload(); if (!r.claimMessage) setReceiving(null);
+      setResult(r); await reload(); void disc.reload();
+      if (r.claimMessage) toast.error('Réception enregistrée avec écart', 'Un message de réclamation est prêt : vérifiez-le et envoyez-le au fournisseur.');
+      else if ((r.surchargeEur ?? 0) > 0) toast.info('Réception enregistrée', `Facture plus élevée que la commande : +${fmtEur(r.surchargeEur ?? 0)}.`);
+      else toast.success('Réception enregistrée.', 'Le stock a été mis à jour avec les quantités reçues.');
+      if (!r.claimMessage) setReceiving(null);
     } catch (e) {
       const code = e instanceof ApiError ? e.code : undefined;
       setRecvErr({ message: e instanceof Error ? e.message : 'Erreur pendant la réception', code });
@@ -84,7 +135,7 @@ export default function Orders() {
     } finally { setRecvBusy(false); }
   };
   const copy = (t: string) => { void navigator.clipboard.writeText(t); setCopied(true); };
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />;
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   const open = (data?.orders ?? []).filter((o) => ['preparee', 'envoyee', 'confirmee'].includes(o.status));
   const past = (data?.orders ?? []).filter((o) => !['preparee', 'envoyee', 'confirmee'].includes(o.status));
   const Row = ({ o }: { o: O }) => (
@@ -99,7 +150,16 @@ export default function Orders() {
           <p className="font-bold text-amber-900">✏️ {o.supplierName} propose une modification</p>{o.proposal.note && <p className="mt-1 italic text-amber-900">« {o.proposal.note} »</p>}
           <ul className="mt-2 space-y-1">{o.proposal.lines.filter((l) => l.newPacks !== l.packs || l.replacement).map((l) => <li key={l.lineId}>• <b>{l.productName}</b> : {l.newPacks === 0 ? <span className="text-red-700">rupture (0/{l.packs})</span> : <>{l.newPacks}/{l.packs} colis</>}{l.replacement && <> → remplacé par <b>{l.replacement.packs} × {l.replacement.productName}</b> {l.replacement.packLabel} ({fmtEur(l.replacement.lineTotalEur)})</>}</li>)}</ul>
           <p className="mt-2">Nouveau total : <b>{fmtEur(o.proposal.newTotalEur)}</b> <span className="text-stone-500 line-through">{fmtEur(o.totalEur)}</span>{o.proposal.expectedAt && <> · livraison le {o.proposal.expectedAt}</>}</p>
-          <div className="mt-2 flex gap-2"><button className="btn-primary !py-1.5" onClick={async () => { await api(`/orders/${o.id}/proposal`, { method: 'POST', json: { action: 'accept' } }); await reload(); }}>✅ Accepter</button><button className="btn-ghost !py-1.5 text-red-700" onClick={async () => { if (confirm('Refuser la proposition annule la commande. Continuer ?')) { await api(`/orders/${o.id}/proposal`, { method: 'POST', json: { action: 'decline' } }); await reload(); } }}>Refuser (annuler la commande)</button><Link to={`/app/achats/comparer/${o.lines[0]?.productId ?? ''}`} className="btn-ghost !py-1.5">Comparer ailleurs</Link></div>
+          <div className="mt-2 flex gap-2"><button className="btn-primary !py-1.5" onClick={async () => { try { await api(`/orders/${o.id}/proposal`, { method: 'POST', json: { action: 'accept' } }); toast.success('Proposition acceptée.', 'La commande repart chez le fournisseur avec les nouvelles quantités.'); } catch (e) { toast.error('Réponse impossible', (e as Error).message); } await reload(); }}>✅ Accepter</button><button className="btn-ghost !py-1.5 text-red-700" onClick={async () => {
+            const ok = await confirmer({
+              title: 'Refuser la proposition du fournisseur ?',
+              body: <>Refuser <b>annule la commande {o.reference}</b>. Vous serez libre de recommander ailleurs, au prix que vous voulez.</>,
+              confirmLabel: 'Refuser et annuler', cancelLabel: 'Revenir', danger: true,
+            });
+            if (!ok) return;
+            try { await api(`/orders/${o.id}/proposal`, { method: 'POST', json: { action: 'decline' } }); toast.success('Proposition refusée.', 'La commande est annulée, rien ne sera livré.'); } catch (e) { toast.error('Réponse impossible', (e as Error).message); }
+            await reload();
+          }}>Refuser (annuler la commande)</button><Link to={`/app/achats/comparer/${o.lines[0]?.productId ?? ''}`} className="btn-ghost !py-1.5">Comparer ailleurs</Link></div>
         </div>}
         {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <Timeline o={o} />}
         <div className="mt-3 flex flex-wrap gap-2">
@@ -118,6 +178,7 @@ export default function Orders() {
     <div className="animate-fade-up space-y-8">
       <PageTitle title="🛒 Achats" subtitle="Commandes en cours et historique. Rien ne part sans vous : vous envoyez le message par WhatsApp ou e-mail, puis la réception met le stock à jour."
         action={<div className="flex gap-2"><Link to="/app/achats/ecarts" className={`btn-ghost ${disc.data?.items.length ? '!bg-orange-50 !text-orange-800' : ''}`}><AlertTriangle size={16} /> Écarts{disc.data?.items.length ? ` (${disc.data.items.length} · ${fmtEur(disc.data.openValue, 0)})` : ''}</Link><Link to="/app/achats/panier" className="btn-primary">🧺 Panier intelligent</Link></div>} />
+      <Steps steps={FLOW_STEPS} current={2} title="Où en suis-je ?" />
       {flash && <p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{flash}</p>}
       {review && <ReviewModal orderId={review.id} vendorName={review.supplierName} onClose={() => setReview(null)} onDone={(m) => { setReview(null); setFlash(m); void pend.reload(); }} />}
       {reorder && <ReorderModal orderId={reorder} onClose={() => setReorder(null)} onDone={(m) => { setReorder(null); setFlash(m); void reload(); }} />}

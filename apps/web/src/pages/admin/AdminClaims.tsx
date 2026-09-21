@@ -9,7 +9,7 @@ import { CLAIM_STATUS, type Claim } from '../../components/Claims';
 type AC = Claim & { restaurantName: string; vendorName: string; photo?: string | null };
 export default function AdminClaims() {
   const { data, loading, error, reload } = useApi<{ items: AC[] }>('/admin/claims'); const [f, setF] = useState<Record<string, { resolution: 'avoir' | 'relivraison' | 'refus'; creditEur: string; message: string }>>({}); const [err, setErr] = useState<string | null>(null);
-  if (loading) return <Loader />; if (error) return <ErrorBox message={error} />;
+  if (loading) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   const items = data?.items ?? []; const esc = items.filter((c) => c.status === 'escalade'); const stale = items.filter((c) => c.status === 'ouvert' && Date.now() - new Date(c.createdAt).getTime() > 48 * 3600_000);
   const arb = async (c: AC) => { const x = f[c.id] ?? { resolution: 'avoir', creditEur: c.claimedEur, message: '' }; try { await api(`/admin/claims/${c.id}/arbitrate`, { method: 'POST', json: { resolution: x.resolution, creditEur: x.resolution === 'avoir' ? Number(x.creditEur) : undefined, message: x.message } }); await reload(); } catch (e) { setErr((e as Error).message); } };
   const Row = ({ c, canArb }: { c: AC; canArb: boolean }) => { const [label, cls] = CLAIM_STATUS[c.status] ?? [c.status, '']; const x = f[c.id] ?? { resolution: 'avoir' as const, creditEur: c.claimedEur, message: '' }; return <div className="card space-y-2 text-sm">

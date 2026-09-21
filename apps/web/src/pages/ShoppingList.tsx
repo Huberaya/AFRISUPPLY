@@ -5,6 +5,7 @@ import { ListChecks, ShoppingCart, Sparkles, AlertTriangle, Mic, MicOff, Save, T
 import { api, fmtEur } from '../lib/api';
 import { PageTitle, Empty } from '../components/ui';
 import { useApi } from '../lib/useApi';
+import { useConfirm, useToast } from '../components/Feedback';
 
 interface SavedList { id: string; name: string; text: string; useCount: number; lastUsedAt: string | null }
 interface Suggestions { restock: { count: number; text: string }; last: { reference: string; text: string; date: string } | null }
@@ -54,8 +55,15 @@ export default function ShoppingList() {
   const lists = useApi<{ lists: SavedList[] }>('/shopping/lists'); const sugg = useApi<Suggestions>('/shopping/suggestions');
   const dict = useDictation((t) => setText((prev) => (prev.trim() ? `${prev.trim().replace(/,$/, '')}, ${t}` : t)));
   const [saveName, setSaveName] = useState(''); const [usedList, setUsedList] = useState<string | null>(null);
+  // Chantier 11 : confirmations et notifications intégrées (déclarées ici, avant tout retour anticipé).
+  const confirmer = useConfirm(); const toast = useToast();
   const saveList = async () => { if (!saveName.trim() || !text.trim()) return; const r = await api<{ message: string }>('/shopping/lists', { method: 'POST', json: { name: saveName.trim(), text } }); setMsg(r.message); setSaveName(''); lists.reload(); };
-  const delList = async (id: string) => { if (!confirm('Supprimer cette liste ?')) return; await api(`/shopping/lists/${id}`, { method: 'DELETE' }); lists.reload(); };
+  const delList = async (id: string) => {
+    const ok = await confirmer({ title: 'Supprimer cette liste de courses ?', body: <>Les produits cochés ne seront pas remis en stock.</>, confirmLabel: 'Supprimer la liste', danger: true });
+    if (!ok) return;
+    try { await api(`/shopping/lists/${id}`, { method: 'DELETE' }); toast.success('Liste supprimée.'); } catch (e) { toast.error('Suppression impossible', (e as Error).message); }
+    lists.reload();
+  };
   // `applyList` et non un nom en « use » : ce n'est pas un hook, juste une fonction locale.
   const applyList = (l: SavedList) => { setText(l.text); setUsedList(l.id); setData(null); };
 

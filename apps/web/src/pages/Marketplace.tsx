@@ -19,9 +19,9 @@ export default function Marketplace() {
 }
 
 function Directory({ open }: { open: (id: string) => void }) {
-  const { data, loading, error } = useApi<{ vendors: Vendor[]; zones: string[] }>('/marketplace/vendors');
+  const { data, loading, error, reload } = useApi<{ vendors: Vendor[]; zones: string[] }>('/marketplace/vendors');
   const gbs = useApi<{ groupBuys: GB[] }>('/marketplace/group-buys');
-  if (loading) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
+  if (loading) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   return (
     <div className="animate-fade-up space-y-6">
       <PageTitle title="🏪 Marketplace" subtitle={`Fournisseurs vérifiés qui livrent votre zone (${data.zones.filter((z) => z !== 'France').join(', ') || 'toute la France'}). Prix comparés aux vôtres, commande en un clic, achats groupés entre restaurants.`} />
@@ -66,7 +66,7 @@ function VendorDetail({ id, back }: { id: string; back: () => void }) {
   const [cart, setCart] = useState<Record<string, number>>({}); const [msg, setMsg] = useState<string | null>(null); const [busy, setBusy] = useState(false); const [onlyMine, setOnlyMine] = useState(true); const [quote, setQuote] = useState<Quote | null>(null);
   useEffect(() => { setCart({}); setQuote(null); }, [id]);
   useEffect(() => { const lines = Object.entries(cart).filter(([, p]) => p > 0).map(([vendorOfferId, packs]) => ({ vendorOfferId, packs })); if (!lines.length) { setQuote(null); return; } const t = setTimeout(() => api<Quote>(`/marketplace/vendors/${id}/quote`, { method: 'POST', json: { lines } }).then(setQuote).catch(() => setQuote(null)), 250); return () => clearTimeout(t); }, [cart, id]);
-  if (loading) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
+  if (loading) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   const v = data.vendor; const offers = data.offers.filter((o) => !onlyMine || o.tracked);
   const total = quote?.total ?? data.offers.reduce((a, o) => a + (cart[o.id] ?? 0) * Number(o.packPriceEur), 0); const nb = Object.values(cart).filter((x) => x > 0).length;
   const link = async () => { setBusy(true); try { const r = await api<{ message: string }>(`/marketplace/vendors/${id}/link`, { method: 'POST' }); setMsg(r.message); reload(); } finally { setBusy(false); } };

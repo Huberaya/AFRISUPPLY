@@ -19,8 +19,8 @@ function Bars({ data, label }: { data: { k: string; v: number; v2?: number }[]; 
 }
 
 export default function AdminDashboard() {
-  const { data: d, loading, error } = useApi<D>('/admin/dashboard');
-  if (loading) return <Loader />; if (error) return <ErrorBox message={error} />; if (!d) return null;
+  const { data: d, loading, error, reload } = useApi<D>('/admin/dashboard');
+  if (loading) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!d) return null;
   const weeks = [...Array(12)].map((_, i) => { const dt = new Date(); dt.setDate(dt.getDate() - dt.getDay() + 1 - 7 * (11 - i)); return dt.toISOString().slice(0, 10); });
   const wk = (k: string) => d.weekly.find((w) => w.week === k); const su = (k: string) => d.signups.find((w) => w.week === k)?.c ?? 0;
   const pros = (kind: string) => { const rows = d.prospects.filter((p) => p.kind === kind); const tot = rows.reduce((a, r) => a + r.c, 0); const g = (s: string) => rows.find((r) => r.status === s)?.c ?? 0; return { tot, contacte: g('contacte') + g('rdv') + g('interesse'), converti: g('converti'), perdu: g('perdu') }; };

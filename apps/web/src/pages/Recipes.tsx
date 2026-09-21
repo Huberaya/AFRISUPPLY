@@ -4,6 +4,7 @@ import { Plus, Pencil, Trash2 } from 'lucide-react';
 import { api, fmtEur, fmtQty } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
+import { useConfirm, useToast } from '../components/Feedback';
 import { Modal, Field } from '../components/Modal';
 import { ProductPicker } from '../components/ProductPicker';
 
@@ -15,7 +16,9 @@ export default function Recipes() {
   const { data, loading, error, reload } = useApi<{ recipes: R[] }>('/recipes');
   const [modal, setModal] = useState<null | { id?: string; d: Draft }>(null);
   const [err, setErr] = useState<string | null>(null);
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />;
+  // Chantier 11 : confirmations et notifications intégrées (déclarées ici, avant tout retour anticipé).
+  const confirmer = useConfirm(); const toast = useToast();
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   const openNew = () => setModal({ d: { name: '', sellingPriceEur: '', targetMarginPct: '70', ingredients: [] } });
   const openEdit = (r: R) => setModal({ id: r.id, d: { name: r.name, sellingPriceEur: r.sellingPriceEur != null ? String(r.sellingPriceEur) : '', targetMarginPct: r.targetMarginPct ? String(Number(r.targetMarginPct)) : '70', ingredients: r.ingredients.map((i) => ({ productId: i.productId, productName: i.productName, unit: i.unit, quantity: String(i.quantity) })) } });
   const save = async (e: React.FormEvent) => {
@@ -25,7 +28,16 @@ export default function Recipes() {
     const json = { name: d.name, sellingPriceEur: d.sellingPriceEur ? Number(d.sellingPriceEur.replace(',', '.')) : null, targetMarginPct: Number(d.targetMarginPct) || 70, ingredients };
     try { if (modal.id) await api(`/recipes/${modal.id}`, { method: 'PUT', json }); else await api('/recipes', { method: 'POST', json }); setModal(null); await reload(); } catch (x) { setErr((x as Error).message); }
   };
-  const remove = async (r: R) => { if (!confirm(`Supprimer la recette « ${r.name} » ? Les ventes associées seront perdues.`)) return; await api(`/recipes/${r.id}`, { method: 'DELETE' }); await reload(); };
+  const remove = async (r: R) => {
+    const ok = await confirmer({
+      title: `Supprimer la recette « ${r.name} » ?`,
+      body: <>Les ventes déjà saisies pour ce plat ne seront plus déduites du stock : l'historique de consommation pour ce plat sera perdu.</>,
+      confirmLabel: 'Supprimer la recette', danger: true,
+    });
+    if (!ok) return;
+    try { await api(`/recipes/${r.id}`, { method: 'DELETE' }); toast.success('Recette supprimée.'); } catch (e) { toast.error('Suppression impossible', (e as Error).message); }
+    await reload();
+  };
   const setD = (patch: Partial<Draft>) => modal && setModal({ ...modal, d: { ...modal.d, ...patch } });
   return (
     <div className="animate-fade-up">

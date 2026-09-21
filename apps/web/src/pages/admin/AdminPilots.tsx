@@ -15,7 +15,7 @@ export default function AdminPilots() {
   const invite = async () => { const r = await api<{ code: string; link: string; mail: string }>('/admin/pilots/invite', { method: 'POST', json: inv }); setMsg(`Code ${r.code} — e-mail ${r.mail}. Lien : ${r.link}`); setInv({ email: '', restaurantName: '', contactName: '', city: '' }); void load(); };
   const resend = async (leadId: string) => { const r = await api<{ code: string; mail: string }>('/admin/pilots/invite', { method: 'POST', json: { leadId, resend: true } }); setMsg(`Renvoyé : ${r.code} — ${r.mail}`); };
   const treat = async (id: string) => { await api(`/admin/pilots/feedback/${id}`, { method: 'PUT', json: { status: 'traite' } }); void load(); };
-  if (err) return <ErrorBox message={err} />; if (!d) return null; const s = d.summary;
+  if (err) return <ErrorBox message={err} onRetry={() => void load()} />; if (!d) return null; const s = d.summary;
   return (
     <div className="animate-fade-up space-y-5">
       <PageTitle title="🧭 Cockpit pilotes" subtitle="Qui va bien, qui décroche, qui a besoin d’un coup de fil aujourd’hui. Rapport envoyé chaque lundi par e-mail." />

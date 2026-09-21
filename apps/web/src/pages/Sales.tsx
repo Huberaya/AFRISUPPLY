@@ -44,12 +44,12 @@ export default function Sales() {
   const total14 = sales.data?.history.reduce((a, h) => a + h.portions, 0) ?? 0;
   return (
     <div className="animate-fade-up">
-      <PageTitle title="🧾 Ventes du jour & Auto-Reorder" subtitle="Saisissez vos couverts par plat : c’est le carburant de la prévision. Les règles d’auto-reorder préparent des commandes quand un stock passe sous son seuil — jamais d’envoi sans validation." />
+      <PageTitle title="🧾 Ventes du jour & auto-reorder" subtitle="Saisissez vos couverts par plat : c’est le carburant de la prévision. Les règles d’auto-reorder préparent des commandes quand un stock passe sous son seuil — jamais d’envoi sans validation." />
       {msg && <div className="card mb-4 text-sm text-brand-900 bg-brand-50 border-brand-100">{msg}</div>}
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="card">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3"><h3 className="font-semibold">Ventes par plat</h3><input type="date" className="input !w-auto" value={day} max={todayIso()} onChange={(e) => setDay(e.target.value)} /></div>
-          {sales.loading && <Loader />}{sales.error && <ErrorBox message={sales.error} />}
+          {sales.loading && <Loader />}{sales.error && <ErrorBox message={sales.error} onRetry={() => void sales.reload()} />}
           {sales.data && <div className="space-y-2">
             {sales.data.recipes.length === 0 && <p className="text-sm text-stone-500">Aucune recette. <Link to="/app/demarrer" className="underline">Configurer ma carte</Link>.</p>}
             {sales.data.recipes.map((r) => <div key={r.id} className="flex items-center justify-between gap-3"><span className="text-sm">{r.name}</span><input type="number" min={0} className="input !w-24 text-right" value={portions[r.id] ?? 0} onChange={(e) => setPortions({ ...portions, [r.id]: Number(e.target.value) })} /></div>)}
@@ -62,7 +62,7 @@ export default function Sales() {
         </div>
         <div className="card">
           <div className="flex items-center justify-between mb-3"><h3 className="font-semibold flex items-center gap-2"><Bot size={18} /> Règles d’auto-reorder</h3><button className="btn-secondary !py-1.5" disabled={busy} onClick={() => void run()}><Play size={14} /> Exécuter maintenant</button></div>
-          {rules.loading && <Loader />}{rules.error && <ErrorBox message={rules.error} />}
+          {rules.loading && <Loader />}{rules.error && <ErrorBox message={rules.error} onRetry={() => void rules.reload()} />}
           <div className="space-y-2">
             {rules.data?.rules.length === 0 && <p className="text-sm text-stone-500">Aucune règle. Ajoutez-en une ci-dessous pour vos produits critiques (riz, huile, plantain…).</p>}
             {rules.data?.rules.map((r) => <div key={r.id} className={`flex items-center justify-between gap-2 rounded-xl border p-3 text-sm ${r.enabled ? 'border-stone-200' : 'border-stone-100 opacity-60'}`}>

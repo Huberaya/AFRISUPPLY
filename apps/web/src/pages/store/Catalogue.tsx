@@ -11,7 +11,7 @@ export default function Catalogue() {
   const [sp, setSp] = useSearchParams(); const q = sp.get('q') ?? ''; const category = sp.get('category') ?? ''; const origin = sp.get('origin') ?? ''; const sort = sp.get('sort') ?? 'relevance'; const only = sp.get('only') ?? '';
   const [input, setInput] = useState(q); useEffect(() => setInput(q), [q]);
   const set = (k: string, v: string) => { const n = new URLSearchParams(sp); if (v) n.set(k, v); else n.delete(k); setSp(n, { replace: true }); };
-  const { data, loading, error } = useApi<Catalog>(`/public/catalog?${new URLSearchParams({ ...(q && { q }), ...(category && { category }), ...(origin && { origin }) })}`);
+  const { data, loading, error, reload } = useApi<Catalog>(`/public/catalog?${new URLSearchParams({ ...(q && { q }), ...(category && { category }), ...(origin && { origin }) })}`);
   const items = useMemo(() => { let l = data?.items ?? []; if (only === 'price') l = l.filter((i) => i.fromUnitPrice !== null); if (sort === 'price_asc') l = [...l].sort((a, b) => (a.fromUnitPrice ?? 1e9) - (b.fromUnitPrice ?? 1e9)); if (sort === 'price_desc') l = [...l].sort((a, b) => (b.fromUnitPrice ?? -1) - (a.fromUnitPrice ?? -1)); if (sort === 'name') l = [...l].sort((a, b) => a.name.localeCompare(b.name, 'fr')); return l; }, [data, only, sort]);
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 lg:px-8">
@@ -24,7 +24,7 @@ export default function Catalogue() {
         </aside>
         <div>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm text-stone-600"><p><b>{items.length}</b> produit{items.length > 1 ? 's' : ''}{q ? <> pour « {q} »</> : null}{category ? <> · {CATEGORY_LABEL[category]}</> : null}</p><select className="input w-auto" value={sort} onChange={(e) => set('sort', e.target.value)}><option value="relevance">Pertinence</option><option value="price_asc">Prix croissant</option><option value="price_desc">Prix décroissant</option><option value="name">Nom A→Z</option></select></div>
-          {loading && <Loader />}{error && <ErrorBox message={error} />}
+          {loading && <Loader />}{error && <ErrorBox message={error} onRetry={() => void reload()} />}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">{items.map((p) => <ProductCard key={p.id} p={p} />)}</div>
           {!loading && !items.length && <div className="card text-center text-stone-500">Aucun produit ne correspond. Essayez un autre mot (ex. « attiéké », « plantain ») ou retirez un filtre.</div>}
         </div>

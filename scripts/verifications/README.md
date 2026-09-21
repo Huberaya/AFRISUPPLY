@@ -19,7 +19,7 @@ le serveur web doit donc tourner aussi. Les variables `AFS_API` et `AFS_WEB` per
 ## Exécution
 
 ```bash
-npm run verifs:e2e                 # les 9 scripts d'affilée (~25 min : pauses anti-limitation de débit)
+npm run verifs:e2e                 # les 11 scripts d'affilée (~25 min : pauses anti-limitation de débit)
 AFS_PAUSE=0 npm run verifs:e2e     # sans pauses (comptes de test déjà espacés)
 python3 scripts/verifications/chantier9_verif.py   # un seul script
 ```
@@ -32,6 +32,7 @@ Le lanceur sort en **erreur** si un script échoue.
 | Script | Ce qu'il vérifie sur une API réelle |
 |---|---|
 | `chantier1_verif.py` | Intégrité de la réception : 50 kg commandés / 45 reçus → écart détecté, chiffré, alerté ; statuts de commande cohérents |
+| `chantier2_verif.py` | Rôles réellement appliqués côté serveur (un employé ne peut pas écrire), mot de passe, sessions révoquées, isolation entre restaurants |
 | `scenario_tests.py` | Les 6 scénarios métier (nouveau restaurant → première commande → rupture → réception → hausse de prix → analyse des coûts) |
 | `chantier3_verif.py` | Prix réellement facturé (et pas le prix catalogue) + détection de hausse alimentée par les vraies factures |
 | `chantier4_verif.py` | Page Analyse : chiffres issus des données réelles, écran qui explique au lieu d'afficher des totaux vides |
@@ -40,5 +41,6 @@ Le lanceur sort en **erreur** si un script échoue.
 | `chantier7_verif.py` | Encaissement : essai, formules, factures (PDF réellement joint), santé de la facturation, bascule admin |
 | `chantier8_verif.py` | Parcours client et paiements fournisseur : carte enregistrée, commissions calculées et facturées, isolation entre vendeurs |
 | `chantier9_verif.py` | Prévision : cascade de sources (ventes 28 j → 7 j → couverts → seuils), jours fermés, saisonnalité, relances graduées, lot d'alertes complet |
+| `chantier11_verif.py` | Expérience réelle : plus aucune boîte de dialogue du navigateur, confirmations accessibles, notifications, menu par tâche, recherche d'écran, parcours « Rupture → Commander → Recevoir », erreurs avec « Réessayer » — et les écrans du parcours répondent sur l'API |
 
-Dernier relevé complet : **356 vérifications**, 9 scripts sur 9 (voir le rapport de fin de chantier 10).
+Dernier relevé complet : **437 vérifications**, 11 scripts sur 11 (voir le rapport de fin de chantier 11).

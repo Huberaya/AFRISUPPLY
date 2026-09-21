@@ -12,7 +12,7 @@ type S = { id: string; name: string; city: string | null; categories: string[]; 
 export default function Suppliers() {
   const { data, loading, error, reload } = useApi<{ suppliers: S[] }>('/suppliers');
   const [creating, setCreating] = useState(false);
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />;
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   const best = [...(data?.suppliers ?? [])].sort((a, b) => b.stats.reliability - a.stats.reliability)[0];
   return (
     <div className="animate-fade-up">

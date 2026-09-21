@@ -25,7 +25,7 @@ export default function Billing() {
   const { data: inv, reload: reloadInv } = useApi<InvoiceList>('/billing/invoices');
   const [busy, setBusy] = useState<string | null>(null); const [msg, setMsg] = useState<string | null>(null);
   useEffect(() => { const ck = sp.get('checkout'); if (ck === 'ok') { setMsg('🎉 Merci ! Votre abonnement est en cours d’activation…'); api('/billing/sync', { method: 'POST', json: { sessionId: sp.get('session_id') ?? undefined } }).then(() => { setMsg('🎉 Abonnement actif. Bienvenue à bord !'); reload(); reloadInv(); }).catch(() => setMsg('Paiement reçu — l’activation prend quelques secondes, rechargez la page.')); } if (ck === 'annule') setMsg('Paiement annulé — vous pouvez réessayer quand vous voulez.'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  if (loading) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
+  if (loading) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   const go = async (path: string, json?: unknown) => { setBusy(path + JSON.stringify(json ?? '')); setMsg(null); try { const r = await api<{ url: string }>(path, { method: 'POST', json }); window.location.href = r.url; } catch (e) { setMsg((e as Error).message); setBusy(null); } };
   const fmt = (d: string | null) => d ? new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
   const send = async (i: Inv) => { setBusy('send-' + i.id); try { await api(`/billing/invoices/${i.id}/send`, { method: 'POST' }); setMsg(`Facture ${i.number} renvoyée à ${inv?.billingEmail ?? 'votre adresse de facturation'}.`); } catch (e) { setMsg((e as Error).message); } finally { setBusy(null); } };

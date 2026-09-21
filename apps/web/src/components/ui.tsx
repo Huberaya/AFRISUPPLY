@@ -29,8 +29,19 @@ export function Loader({ label = 'Chargement…' }: { label?: string }) {
   return <div className="flex items-center gap-3 py-10 text-stone-500"><div className="h-5 w-5 animate-spin rounded-full border-2 border-brand-200 border-t-brand-600" /> {label}</div>;
 }
 
-export function ErrorBox({ message }: { message: string }) {
-  return <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{message}</div>;
+/**
+ * Chantier 11 : une erreur réseau ne doit pas laisser la personne sans issue.
+ * On affiche le message du serveur tel quel et, quand l'écran sait recharger, un bouton « Réessayer ».
+ */
+export function ErrorBox({ message, onRetry, title }: { message: string; onRetry?: () => void; title?: string }) {
+  return (
+    <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+      <p className="font-semibold">{title ?? 'Impossible d’afficher cet écran'}</p>
+      <p className="mt-1">{message}</p>
+      <p className="mt-2 text-xs text-red-700">Vérifiez votre connexion internet, puis réessayez. Vos données ne sont pas perdues.</p>
+      {onRetry && <button className="btn-ghost mt-3 !py-1.5" onClick={onRetry}>Réessayer</button>}
+    </div>
+  );
 }
 
 export function Empty({ children }: { children: ReactNode }) {

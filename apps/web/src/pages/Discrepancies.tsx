@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Copy, CheckCircle2 } from 'lucide-react';
 import { api, fmtEur, fmtQty, fmtDate } from '../lib/api';
 import { useApi } from '../lib/useApi';
+import { Steps, FLOW_STEPS } from '../components/Steps';
 import { PageTitle, Loader, ErrorBox, Empty, Stat } from '../components/ui';
 import { ClaimModal, ClaimsList } from '../components/Claims';
 
@@ -12,11 +13,12 @@ export default function Discrepancies() {
   const [all, setAll] = useState(false); const [claimFor, setClaimFor] = useState<Item | null>(null); const [flash, setFlash] = useState<string | null>(null);
   const { data, loading, error, reload } = useApi<{ items: Item[]; openValue: number }>(`/discrepancies${all ? '?all=1' : ''}`);
   const resolve = async (i: Item, resolution: 'avoir' | 'relivraison' | 'abandon') => { await api(`/discrepancies/${i.id}/resolve`, { method: 'POST', json: { resolution } }); await reload(); };
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />;
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   const items = data?.items ?? []; const openItems = items.filter((i) => !i.resolved);
   const bySup = openItems.reduce<Record<string, number>>((a, i) => { a[i.supplierName] = (a[i.supplierName] ?? 0) + i.valueEur; return a; }, {});
   return (
     <div className="animate-fade-up space-y-6">
+      <Steps steps={FLOW_STEPS} current={2} title="Où en suis-je ?" />
       <Link to="/app/achats" className="text-sm text-stone-500">← Achats</Link>
       <PageTitle title="⚠️ Écarts de livraison" subtitle="Manquants et excédents constatés à la réception. Chaque écart a sa réclamation pré-rédigée ; marquez-le résolu quand l’avoir ou la relivraison est obtenu."
         action={<label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Afficher les résolus</label>} />

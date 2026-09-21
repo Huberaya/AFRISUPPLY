@@ -11,7 +11,7 @@ const fmt = (d: string) => new Date(d).toLocaleDateString('fr-FR');
 export default function VendorReviews() {
   const { data, loading, error, reload } = useApi<{ reliability: Reliability; reviews: Review[] }>('/vendor/reviews');
   const [replying, setReplying] = useState<string | null>(null); const [text, setText] = useState(''); const [err, setErr] = useState<string | null>(null);
-  if (loading) return <Loader />; if (error || !data) return <ErrorBox message={error ?? 'Erreur'} />;
+  if (loading) return <Loader />; if (error || !data) return <ErrorBox message={error ?? 'Erreur'} onRetry={() => void reload()} />;
   const r = data.reliability;
   const send = async (id: string) => { setErr(null); try { await api(`/vendor/reviews/${id}/reply`, { method: 'POST', json: { reply: text } }); setReplying(null); setText(''); await reload(); } catch (e) { setErr((e as Error).message); } };
   const KPI = ({ l, v }: { l: string; v: string }) => <div className="card !p-3"><p className="text-xs text-stone-500">{l}</p><p className="text-xl font-extrabold">{v}</p></div>;

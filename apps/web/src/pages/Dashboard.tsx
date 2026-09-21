@@ -4,6 +4,9 @@ import { RefreshCw, ArrowRight } from 'lucide-react';
 import { api, fmtEur, fmtQty, fmtDate, STATUS_LABEL } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { OnboardingChecklist } from '../components/Pilot';
+import { Steps, FLOW_STEPS } from '../components/Steps';
+import { useToast } from '../components/Feedback';
+import { useAuth } from '../lib/auth';
 import { PageTitle, Stat, SeverityCard, Loader, ErrorBox, StatusPill, Empty } from '../components/ui';
 
 type Alert = { id: string; kind: string; severity: 'red' | 'orange' | 'green' | 'blue'; title: string; message: string; productId: string | null; actionUrl: string | null; isRead: boolean };
@@ -17,14 +20,21 @@ type Dash = {
 
 export default function Dashboard() {
   const { data, loading, error, reload } = useApi<Dash>('/dashboard');
+  const { restaurant: ctxRestaurant } = useAuth();
+  const toast = useToast();
+  // Les ecritures d'achat sont reservees au responsable et au proprietaire (memes regles que le serveur).
+  const peutCommander = (ctxRestaurant?.role ?? 'owner') !== 'staff';
   const [refreshing, setRefreshing] = useState(false);
   const refreshAlerts = useCallback(async () => { setRefreshing(true); try { await api('/alerts/refresh', { method: 'POST' }); await reload(); } finally { setRefreshing(false); } }, [reload]);
   const noAlertYet = data ? data.alerts.length === 0 : false;
   useEffect(() => { if (noAlertYet) void refreshAlerts(); }, [noAlertYet, refreshAlerts]);
-  const markRead = async (id: string) => { await api(`/alerts/${id}/read`, { method: 'POST' }); await reload(); };
+  const markRead = async (id: string) => {
+    try { await api(`/alerts/${id}/read`, { method: 'POST' }); toast.info('Alerte marquée comme vue.'); } catch (e) { toast.error('Action impossible', (e as Error).message); }
+    await reload();
+  };
 
   if (loading && !data) return <Loader />;
-  if (error) return <ErrorBox message={error} />;
+  if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   if (!data) return null;
   const { stock, spend } = data;
   const evo = spend.evolutionPct;
@@ -36,6 +46,8 @@ export default function Dashboard() {
 
       <OnboardingChecklist />
 
+      <Steps steps={FLOW_STEPS} current={0} title="Votre parcours d'achat" />
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Stock disponible" value={<>🟢 {stock.ok}</>} hint="produits au niveau" tone="good" />
         <Stat label="Bientôt en rupture" value={<>🟠 {stock.bas}</>} hint="à commander cette semaine" tone="warn" />
@@ -46,13 +58,14 @@ export default function Dashboard() {
 
       <div className="grid gap-6 lg:grid-cols-5">
         <section className="lg:col-span-3 space-y-3">
-          <div className="flex items-center justify-between"><h2 className="text-lg font-bold">🤖 L’IA recommande</h2><span className="text-xs text-stone-500">{data.alerts.length} alerte{data.alerts.length > 1 ? 's' : ''} non lue{data.alerts.length > 1 ? 's' : ''}</span></div>
-          {data.alerts.length === 0 && <Empty>Aucune alerte pour le moment. Tout est sous contrôle 🎉</Empty>}
+          <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-bold">🤖 Ce qu’il faut commander</h2><div className="flex items-center gap-3"><span className="text-xs text-stone-500">{data.alerts.length} alerte{data.alerts.length > 1 ? 's' : ''} non lue{data.alerts.length > 1 ? 's' : ''}</span>{peutCommander && <Link to="/app/achats/panier" className="btn-primary !py-1.5">🧺 Composer mon panier</Link>}</div></div>
+          {data.alerts.length === 0 && <Empty>Aucune alerte pour le moment : aucun produit sous son seuil, aucun prix en hausse. Vous n’avez rien à commander aujourd’hui 🎉</Empty>}
           {data.alerts.map((a) => (
             <SeverityCard key={a.id} severity={a.severity} title={a.title} message={a.message}
               action={<div className="flex gap-2">
-                {a.productId && <Link to={`/app/achats/comparer/${a.productId}`} className="btn-primary !py-1.5 !px-3">Comparer <ArrowRight size={14} /></Link>}
-                <button onClick={() => markRead(a.id)} className="btn-ghost !py-1.5 !px-3">Vu</button>
+                {a.productId && <Link to={`/app/achats/comparer/${a.productId}`} className="btn-primary !py-1.5 !px-3">Comparer les prix <ArrowRight size={14} /></Link>}
+                {a.actionUrl && !a.actionUrl.startsWith('/app/achats/comparer') && <Link to={a.actionUrl} className="btn-ghost !py-1.5 !px-3">Voir le détail</Link>}
+                <button onClick={() => markRead(a.id)} className="btn-ghost !py-1.5 !px-3">C’est vu</button>
               </div>} />
           ))}
         </section>

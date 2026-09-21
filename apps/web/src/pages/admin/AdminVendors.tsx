@@ -9,7 +9,7 @@ export default function AdminVendors() {
   const load = () => api<{ vendors: V[] }>('/admin/vendors').then((r) => setList(r.vendors)).catch((e) => setErr((e as Error).message));
   useEffect(() => { void load(); }, []);
   const set = async (id: string, status: string) => { await api(`/admin/vendors/${id}`, { method: 'PUT', json: { status, commissionPct: pct[id] ? Number(pct[id]) : undefined } }); void load(); };
-  if (err) return <ErrorBox message={err} />;
+  if (err) return <ErrorBox message={err} onRetry={() => void load()} />;
   return (
     <div className="animate-fade-up space-y-4">
       <PageTitle title="🛡️ Fournisseurs plateforme" subtitle="Validez les nouveaux grossistes après vérification (SIRET, agrément sanitaire si frais/viande, échange téléphonique)." />

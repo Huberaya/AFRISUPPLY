@@ -7,6 +7,7 @@ import { useApi } from '../lib/useApi';
 import { useAuth } from '../lib/auth';
 import { PageTitle, Loader, ErrorBox } from '../components/ui';
 import { Field } from '../components/Modal';
+import { useConfirm, useToast } from '../components/Feedback';
 
 type Member = { userId: string; email: string; fullName: string; role: string; lastLoginAt: string | null; isYou?: boolean };
 type Data = { members: Member[]; me: { userId: string; role: string }; roles: { role: string; label: string; can: string[] }[] };
@@ -21,8 +22,10 @@ export default function Team() {
   const [busy, setBusy] = useState(false);
   const [cur, setCur] = useState(''); const [pw, setPw] = useState(''); const [pw2, setPw2] = useState('');
   const [errSec, setErrSec] = useState<string | null>(null); const [msgSec, setMsgSec] = useState<string | null>(null);
+  // Chantier 11 : confirmations et notifications intégrées (déclarées ici, avant tout retour anticipé).
+  const confirmer = useConfirm(); const toast = useToast();
 
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   const isOwner = data.me.role === 'owner';
 
   const invite = async () => {
@@ -39,9 +42,14 @@ export default function Team() {
     catch (e) { setMsg((e as Error).message); }
   };
   const remove = async (m: Member) => {
-    if (!confirm(`Retirer ${m.fullName} de l'équipe ?`)) return;
+    const ok = await confirmer({
+      title: `Retirer ${m.fullName} de l’équipe ?`,
+      body: <>Cette personne perdra immédiatement l'accès aux stocks, commandes et prix de votre restaurant. Vous pourrez l'inviter à nouveau plus tard.</>,
+      confirmLabel: 'Retirer de l’équipe', danger: true,
+    });
+    if (!ok) return;
     setMsg(null);
-    try { await api(`/members/${m.userId}`, { method: 'DELETE' }); await reload(); }
+    try { await api(`/members/${m.userId}`, { method: 'DELETE' }); toast.success(`${m.fullName} a été retiré·e de l’équipe.`); await reload(); }
     catch (e) { setMsg((e as Error).message); }
   };
   const changePassword = async () => {
@@ -54,7 +62,12 @@ export default function Team() {
     } catch (e) { setErrSec((e as Error).message); } finally { setBusy(false); }
   };
   const logoutAll = async () => {
-    if (!confirm('Fermer toutes les sessions, y compris sur vos autres appareils ?')) return;
+    const ok = await confirmer({
+      title: 'Fermer toutes les sessions ?',
+      body: <>Vous serez déconnecté·e de <b>tous</b> vos appareils, y compris le téléphone et la tablette de la cuisine. Vos données restent intactes : il suffit de vous reconnecter.</>,
+      confirmLabel: 'Déconnecter partout', danger: true,
+    });
+    if (!ok) return;
     try { await api('/auth/logout-all', { method: 'POST' }); } finally {
       tokenStore.clear(); await refresh().catch(() => null); window.location.href = '/connexion';
     }

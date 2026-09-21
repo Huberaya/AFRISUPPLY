@@ -38,7 +38,8 @@ export function FeedbackWidget() {
   const sendNps = async () => { await api('/feedback', { method: 'POST', json: { kind: 'nps', score, message: npsMsg || undefined, page: loc.pathname } }); setNps({ due: false }); };
   return (
     <>
-      {nps?.due && <div className="fixed inset-x-3 bottom-20 z-40 mx-auto max-w-lg rounded-2xl border border-stone-200 bg-white p-4 shadow-xl lg:bottom-6 lg:right-6 lg:left-auto">
+      {/* Chantier 11 : sur téléphone, le panneau NPS passe au-dessus du bouton « Un avis, un bug ? ». */}
+      {nps?.due && <div className="fixed inset-x-3 bottom-40 z-40 mx-auto max-w-lg rounded-2xl border border-stone-200 bg-white p-4 shadow-xl lg:bottom-6 lg:right-6 lg:left-auto">
         <div className="flex items-start justify-between"><p className="font-bold">Recommanderiez-vous AFRISUPPLY à un autre restaurateur ?</p><button aria-label="Plus tard" onClick={() => setNps({ due: false })}><X size={16} /></button></div>
         <div className="mt-3 flex flex-wrap gap-1">{Array.from({ length: 11 }, (_, i) => <button key={i} onClick={() => setScore(i)} className={`h-9 w-9 rounded-lg text-sm font-bold ${score === i ? 'bg-brand-600 text-white' : 'bg-stone-100 hover:bg-stone-200'}`}>{i}</button>)}</div>
         <div className="mt-1 flex justify-between text-[11px] text-stone-400"><span>Pas du tout</span><span>Absolument</span></div>

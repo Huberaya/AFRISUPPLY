@@ -19,7 +19,7 @@ export default function AdminReference() {
   const save = async () => { if (!edit) return; const json = { ...edit, aliases: aliasText.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean), origin: edit.origin || null, imageUrl: edit.imageUrl || '', shelfLifeDays: edit.shelfLifeDays || null, offers: undefined, tracked: undefined, id: undefined, requestId: undefined };
     try { const r = edit.id ? await api<{ product: P }>(`/admin/reference/${edit.id}`, { method: 'PUT', json }) : await api<{ message: string }>(`/admin/reference${edit.requestId ? `?request=${edit.requestId}` : ''}`, { method: 'POST', json }); setMsg('message' in r ? r.message : 'Enregistré.'); setEdit(null); void load(); } catch (e) { setMsg((e as Error).message); } };
   const doMerge = async () => { if (!merge?.into) return; try { const r = await api<{ message: string }>(`/admin/reference/${merge.from.id}/merge`, { method: 'POST', json: { into: merge.into } }); setMsg(r.message); setMerge(null); void load(); } catch (e) { setMsg((e as Error).message); } };
-  if (err) return <ErrorBox message={err} />;
+  if (err) return <ErrorBox message={err} onRetry={() => void load()} />;
   return (
     <div className="animate-fade-up space-y-5">
       <PageTitle title="📚 Référentiel produits" subtitle="Les produits communs à toute la plateforme : ce que les grossistes peuvent proposer et les restaurants suivre. Ajoutez, corrigez les alias, fusionnez les doublons." action={<button className="btn-primary" onClick={() => open(empty())}><Plus size={16} /> Nouveau produit</button>} />

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Tag, Users, Trash2, Plus } from 'lucide-react';
 import { api } from '../../lib/api';
 import { Field } from '../../components/Modal';
+import { useConfirm, useToast } from '../../components/Feedback';
 
 type Offer = { id: string; productName: string; packLabel: string; packPriceEur: string; inStock: boolean };
 type Tier = { id?: string; vendorOfferId: string; minPacks: number; packPriceEur: string | number };
@@ -14,6 +15,7 @@ export function Pricing() {
   const [offers, setOffers] = useState<Offer[]>([]); const [data, setData] = useState<{ tiers: Tier[]; customers: CP[]; clients: Client[] } | null>(null); const [err, setErr] = useState<string | null>(null); const [msg, setMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null); const [draft, setDraft] = useState<{ minPacks: string; packPriceEur: string }[]>([]);
   const [cp, setCp] = useState({ restaurantId: '', vendorOfferId: '', mode: 'pct' as 'pct' | 'price', value: '', validUntil: '', note: '' });
+  const confirmer = useConfirm(); const toast = useToast();
   const load = () => Promise.all([api<{ offers: Offer[] }>('/vendor/offers'), api<{ tiers: Tier[]; customers: CP[]; clients: Client[] }>('/vendor/pricing')]).then(([o, p]) => { setOffers(o.offers); setData(p); }).catch((e) => setErr((e as Error).message));
   useEffect(() => { void load(); }, []);
   const startEdit = (o: Offer) => { setEditing(o.id); setDraft((data?.tiers ?? []).filter((t) => t.vendorOfferId === o.id).map((t) => ({ minPacks: String(t.minPacks), packPriceEur: String(t.packPriceEur) }))); };
@@ -40,7 +42,12 @@ export function Pricing() {
           <Field label="Valable jusqu'au (optionnel)"><input type="date" className="input" value={cp.validUntil} onChange={(e) => setCp({ ...cp, validUntil: e.target.value })} /></Field>
           <div className="sm:col-span-5"><Field label="Note interne"><input className="input" value={cp.note} onChange={(e) => setCp({ ...cp, note: e.target.value })} placeholder="Ex. accord verbal du 12/09, volume 200 kg/mois" /></Field></div>
         </div>}
-        {data.customers.length > 0 && <table className="w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-2">Client</th><th className="p-2">Produit</th><th className="p-2">Accord</th><th className="p-2">Validité</th><th className="p-2"></th></tr></thead><tbody className="divide-y divide-stone-100">{data.customers.map((c) => { const o = offers.find((x) => x.id === c.vendorOfferId); return <tr key={c.id}><td className="p-2 font-semibold">{c.restaurantName}</td><td className="p-2">{o ? `${o.productName} · ${o.packLabel}` : <i>tout le catalogue</i>}</td><td className="p-2">{c.packPriceEur ? <b>{eur(c.packPriceEur)}</b> : <b>−{Number(c.discountPct)} %</b>}{c.note && <span className="ml-2 text-xs text-stone-500">{c.note}</span>}</td><td className="p-2 text-xs">{c.validUntil ? `jusqu'au ${new Date(c.validUntil + 'T00:00:00').toLocaleDateString('fr-FR')}` : 'sans limite'}</td><td className="p-2 text-right"><button className="text-red-600" onClick={async () => { if (confirm('Supprimer cet accord ?')) { await api(`/vendor/customer-prices/${c.id}`, { method: 'DELETE' }); await load(); } }}><Trash2 size={14} /></button></td></tr>; })}</tbody></table>}
+        {data.customers.length > 0 && <table className="w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-2">Client</th><th className="p-2">Produit</th><th className="p-2">Accord</th><th className="p-2">Validité</th><th className="p-2"></th></tr></thead><tbody className="divide-y divide-stone-100">{data.customers.map((c) => { const o = offers.find((x) => x.id === c.vendorOfferId); return <tr key={c.id}><td className="p-2 font-semibold">{c.restaurantName}</td><td className="p-2">{o ? `${o.productName} · ${o.packLabel}` : <i>tout le catalogue</i>}</td><td className="p-2">{c.packPriceEur ? <b>{eur(c.packPriceEur)}</b> : <b>−{Number(c.discountPct)} %</b>}{c.note && <span className="ml-2 text-xs text-stone-500">{c.note}</span>}</td><td className="p-2 text-xs">{c.validUntil ? `jusqu'au ${new Date(c.validUntil + 'T00:00:00').toLocaleDateString('fr-FR')}` : 'sans limite'}</td><td className="p-2 text-right"><button className="text-red-600" aria-label="Supprimer l’accord" onClick={async () => {
+                  const ok = await confirmer({ title: 'Supprimer cet accord de prix ?', body: <>{c.restaurantName} reviendra au prix public pour {o ? `${o.productName} · ${o.packLabel}` : 'tout votre catalogue'}.</>, confirmLabel: 'Supprimer l’accord', danger: true });
+                  if (!ok) return;
+                  try { await api(`/vendor/customer-prices/${c.id}`, { method: 'DELETE' }); toast.success('Accord supprimé.'); } catch (e) { toast.error('Suppression impossible', (e as Error).message); }
+                  await load();
+                }}><Trash2 size={14} /></button></td></tr>; })}</tbody></table>}
       </section>
     </div>
   );

@@ -27,9 +27,9 @@ interface Data {
 const dayLabel = (offset: number) => { const d = new Date(); d.setDate(d.getDate() + offset + 1); return d.toLocaleDateString('fr-FR', { weekday: 'short' }); };
 
 export default function Forecast() {
-  const { data, loading, error } = useApi<Data>('/forecast');
+  const { data, loading, error, reload } = useApi<Data>('/forecast');
   const [open, setOpen] = useState<string | null>(null);
-  if (loading) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
+  if (loading) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   const toOrder = data.products.filter((p) => p.recommendedOrder > 0);
   const ruptures = data.products.filter((p) => p.stockoutDay);
   const conf = data.products.length ? Math.round(data.products.reduce((a, p) => a + p.confidence, 0) / data.products.length * 100) : 0;
@@ -39,7 +39,7 @@ export default function Forecast() {
 
   return (
     <div className="animate-fade-up">
-      <PageTitle title="🔮 Prévision des besoins" subtitle={`Sur ${data.horizonDays} jours. Chaque chiffre indique sa source : vos ventes, vos couverts ou vos seuils.`}
+      <PageTitle title="🔮 Prévision des besoins (7 jours)" subtitle={`Sur ${data.horizonDays} jours. Chaque chiffre indique sa source : vos ventes, vos couverts ou vos seuils.`}
         action={<Link to="/app/achats/panier" className="btn-primary"><ShoppingCart size={16} /> Panier intelligent</Link>} />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-6">
         <Stat label="Produits à commander" value={toOrder.length} tone={toOrder.length ? 'warn' : 'good'} />

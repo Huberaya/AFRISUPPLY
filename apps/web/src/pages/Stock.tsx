@@ -4,6 +4,8 @@ import { ClipboardList, Settings2, Trash2, Plus, ClipboardCheck } from 'lucide-r
 import { api, fmtQty, CATEGORY_LABEL } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, StatusPill } from '../components/ui';
+import { Steps, FLOW_STEPS } from '../components/Steps';
+import { useConfirm, useToast } from '../components/Feedback';
 import { Modal, Field } from '../components/Modal';
 import { ProductPicker } from '../components/ProductPicker';
 
@@ -18,22 +20,34 @@ export default function Stock() {
   const [settings, setSettings] = useState<Item | null>(null); const [crit, setCrit] = useState(''); const [target, setTarget] = useState(''); const [pref, setPref] = useState('');
   const [inventory, setInventory] = useState(false); const [counts, setCounts] = useState<Record<string, string>>({}); const [invResult, setInvResult] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  // Chantier 11 : confirmations et notifications intégrées (déclarées ici, avant tout retour anticipé).
+  const confirmer = useConfirm(); const toast = useToast();
   const save = async (item: Item) => { await api(`/stock/${item.id}/movements`, { method: 'POST', json: { type: 'ajustement', quantity: Number(val.replace(',', '.')) } }); setEditing(null); await reload(); };
   const openSettings = (i: Item) => { setSettings(i); setCrit(String(i.criticalLevel)); setTarget(i.targetLevel != null ? String(i.targetLevel) : ''); setPref(i.preferredSupplierId ?? ''); };
   const saveSettings = async (e: React.FormEvent) => { e.preventDefault(); if (!settings) return; await api(`/stock/${settings.id}`, { method: 'PUT', json: { criticalLevel: Number(crit.replace(',', '.')), targetLevel: target ? Number(target.replace(',', '.')) : null, preferredSupplierId: pref || null } }); setSettings(null); await reload(); };
-  const untrack = async (i: Item) => { if (!confirm(`Ne plus suivre « ${i.name} » en stock ?`)) return; await api(`/stock/${i.id}`, { method: 'DELETE' }); setSettings(null); await reload(); };
+  const untrack = async (i: Item) => {
+    const ok = await confirmer({
+      title: `Ne plus suivre « ${i.name} » ?`,
+      body: <>La quantité et l'historique de ce produit seront retirés du stock suivi. Il ne déclenchera plus d'alerte de rupture. Vous pouvez le remettre en suivi à tout moment.</>,
+      confirmLabel: 'Arrêter le suivi', danger: true,
+    });
+    if (!ok) return;
+    try { await api(`/stock/${i.id}`, { method: 'DELETE' }); toast.success(`« ${i.name} » n’est plus suivi.`); } catch (e) { toast.error('Action impossible', (e as Error).message); }
+    setSettings(null); await reload();
+  };
   const submitInventory = async () => {
     const list = Object.entries(counts).filter(([, v]) => v !== '').map(([itemId, v]) => ({ itemId, quantity: Number(v.replace(',', '.')) }));
     if (!list.length) return;
     const r = await api<{ counted: number; adjusted: number; totalDelta: number }>('/stock/inventory', { method: 'POST', json: { counts: list, note: 'Inventaire' } });
     setInvResult(`${r.counted} article${r.counted > 1 ? 's' : ''} compté${r.counted > 1 ? 's' : ''}, ${r.adjusted} ajusté${r.adjusted > 1 ? 's' : ''}.`); setCounts({}); await reload();
   };
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />;
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   const all = data?.items ?? [];
   const items = all.filter((i) => filter === 'all' || i.status === filter);
   const groups = items.reduce<Record<string, Item[]>>((acc, i) => { (acc[i.category] ??= []).push(i); return acc; }, {});
   return (
-    <div className="animate-fade-up">
+    <div className="animate-fade-up space-y-6">
+      <Steps steps={FLOW_STEPS} current={0} title="Votre parcours d’achat" />
       <PageTitle title="📦 Stock" subtitle="Quantités, consommation moyenne et jours restants — cliquez sur une quantité pour la corriger, ou lancez l’inventaire du soir."
         action={<div className="flex flex-wrap gap-2">{(['all', 'critique', 'bas'] as const).map((f) => <button key={f} onClick={() => setFilter(f)} className={`btn ${filter === f ? 'bg-stone-900 text-white' : 'bg-stone-100'}`}>{f === 'all' ? `Tous (${all.length})` : f === 'critique' ? `🔴 ${all.filter((i) => i.status === 'critique').length}` : `🟠 ${all.filter((i) => i.status === 'bas').length}`}</button>)}<button className="btn-ghost" onClick={() => { setInventory(true); setInvResult(null); }}><ClipboardCheck size={16} /> Inventaire</button><button className="btn-primary" onClick={() => setAdding(true)}><Plus size={16} /> Suivre un produit</button></div>} />
       {invResult && <p className="mb-4 rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-900">{invResult}</p>}
@@ -64,7 +78,21 @@ export default function Stock() {
           </div>
         </section>
       ))}
-      {items.length === 0 && <p className="text-stone-500 flex items-center gap-2"><ClipboardList size={16} /> Aucun produit dans ce filtre.</p>}
+      {all.length === 0 && (
+        <div className="card border-dashed border-stone-300 text-center">
+          <h2 className="text-lg font-bold">Votre stock est vide</h2>
+          <p className="mx-auto mt-1 max-w-2xl text-sm text-stone-600">
+            Suivez d'abord vos produits principaux (riz, huile, poulet, piment, boissons…) : AFRISUPPLY calcule alors les jours restants,
+            prévient avant la rupture et prépare vos commandes. Vous pouvez aussi partir de votre carte, qui remplit le stock automatiquement.
+          </p>
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <button className="btn-primary" onClick={() => setAdding(true)}><Plus size={16} /> Suivre un produit</button>
+            <Link to="/app/demarrer" className="btn-ghost">👩🏾‍🍳 Configurer ma carte</Link>
+            <Link to="/app/import" className="btn-ghost">📥 Importer mes fournisseurs</Link>
+          </div>
+        </div>
+      )}
+      {all.length > 0 && items.length === 0 && <p className="text-stone-500 flex items-center gap-2"><ClipboardList size={16} /> Aucun produit dans ce filtre.</p>}
       {settings && <Modal title={settings.name} subtitle="Seuils utilisés par les alertes, la prévision et l’auto-reorder." onClose={() => setSettings(null)}>
         <form onSubmit={saveSettings} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">

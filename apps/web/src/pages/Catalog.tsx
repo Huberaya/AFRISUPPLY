@@ -28,7 +28,7 @@ export default function Catalog() {
         <button onClick={() => setCat('')} className={`btn ${!cat ? 'bg-stone-900 text-white' : 'bg-stone-100'}`}>Tous</button>
         {CATS.map((c) => <button key={c} onClick={() => setCat(c)} className={`btn ${cat === c ? 'bg-stone-900 text-white' : 'bg-stone-100'}`}>{CATEGORY_LABEL[c]}{counts[c] ? <span className="text-xs opacity-60">{counts[c]}</span> : null}</button>)}
       </div>
-      {loading && !data ? <Loader /> : error ? <ErrorBox message={error} /> : (
+      {loading && !data ? <Loader /> : error ? <ErrorBox message={error} onRetry={() => void reload()} /> : (
         <div className="card !p-0 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="px-4 py-2">Produit</th><th className="px-4 py-2">Aussi appelé</th><th className="px-4 py-2">Conditionnements</th><th className="px-4 py-2">Origine</th><th className="px-4 py-2 text-right">Meilleur prix</th><th className="px-4 py-2"></th></tr></thead>

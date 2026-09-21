@@ -6,6 +6,7 @@ import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox } from '../components/ui';
 import { Modal, Field } from '../components/Modal';
 import { SupplierForm } from '../components/SupplierForm';
+import { useConfirm, useToast } from '../components/Feedback';
 import { ProductPicker } from '../components/ProductPicker';
 
 type Sup = { id: string; name: string; contactName: string | null; phone: string | null; email: string | null; whatsapp: string | null; city: string | null; categories: string[]; leadTimeHours: number; minOrderEur: string; deliveryFeeEur: string; preferredChannel: 'email' | 'whatsapp' | 'telephone' | 'plateforme'; rating: string | null; notes: string | null; isActive: boolean };
@@ -20,7 +21,9 @@ export default function SupplierDetail() {
   const [product, setProduct] = useState<{ id: string; name: string; baseUnit: string } | null>(null);
   const [packLabel, setPackLabel] = useState(''); const [packQty, setPackQty] = useState(''); const [packPrice, setPackPrice] = useState(''); const [inStock, setInStock] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
+  // Chantier 11 : confirmations et notifications intégrées (déclarées ici, avant tout retour anticipé).
+  const confirmer = useConfirm(); const toast = useToast();
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   const { supplier: s, stats, offers, orders } = data;
   const openOffer = (offer?: Offer) => { setOfferModal({ offer }); setProduct(offer ? { id: offer.productId, name: offer.productName, baseUnit: offer.unit } : null); setPackLabel(offer?.packLabel ?? ''); setPackQty(offer ? String(Number(offer.packQty)) : ''); setPackPrice(offer ? String(Number(offer.packPriceEur)) : ''); setInStock(offer?.inStock ?? true); setMsg(null); };
   const saveOffer = async (e: React.FormEvent) => {
@@ -30,8 +33,26 @@ export default function SupplierDetail() {
     else await api(`/suppliers/${s.id}/offers`, { method: 'POST', json: { ...body, productId: product.id } });
     setOfferModal(null); await reload();
   };
-  const deleteOffer = async (o: Offer) => { if (!confirm(`Supprimer l’offre ${o.productName} — ${o.packLabel} ?`)) return; await api(`/offers/${o.id}`, { method: 'DELETE' }); await reload(); };
-  const deactivate = async () => { if (!confirm(`Désactiver ${s.name} ? L’historique de commandes est conservé.`)) return; await api(`/suppliers/${s.id}`, { method: 'DELETE' }); nav('/app/fournisseurs'); };
+  const deleteOffer = async (o: Offer) => {
+    const ok = await confirmer({
+      title: `Supprimer l’offre ${o.productName} — ${o.packLabel} ?`,
+      body: <>Ce fournisseur ne proposera plus ce conditionnement : le panier intelligent et le comparateur ne l'utiliseront plus.</>,
+      confirmLabel: 'Supprimer l’offre', danger: true,
+    });
+    if (!ok) return;
+    try { await api(`/offers/${o.id}`, { method: 'DELETE' }); toast.success('Offre supprimée.'); } catch (e) { toast.error('Suppression impossible', (e as Error).message); }
+    await reload();
+  };
+  const deactivate = async () => {
+    const ok = await confirmer({
+      title: `Désactiver ${s.name} ?`,
+      body: <>Le fournisseur n'apparaîtra plus dans les comparaisons ni dans le panier. L'historique de commandes et les factures sont conservés.</>,
+      confirmLabel: 'Désactiver ce fournisseur', danger: true,
+    });
+    if (!ok) return;
+    try { await api(`/suppliers/${s.id}`, { method: 'DELETE' }); toast.success(`${s.name} désactivé.`); } catch (e) { toast.error('Action impossible', (e as Error).message); }
+    nav('/app/fournisseurs');
+  };
   return (
     <div className="animate-fade-up space-y-6">
       <Link to="/app/fournisseurs" className="text-sm text-stone-500">← Fournisseurs</Link>

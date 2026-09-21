@@ -4,6 +4,8 @@ import { Check, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useApi } from '../lib/useApi';
 import { api, fmtEur, fmtQty } from '../lib/api';
 import { PageTitle, Loader, ErrorBox, Empty, Stat } from '../components/ui';
+import { Steps, FLOW_STEPS } from '../components/Steps';
+import { useToast } from '../components/Feedback';
 
 interface Offer { offerId: string; supplierId: string; supplierName: string; packLabel: string; packQty: number; packPrice: number; unitPrice: number; leadTimeHours: number; reliabilityPct: number }
 interface Line { productId: string; productName: string; unit: string; neededQty: number; offer: Offer; packs: number; quantity: number; lineTotal: number; alternativeSaving: number; reason: string }
@@ -13,22 +15,27 @@ interface Cart { suppliers: Sup[]; total: number; baselineTotal: number; saving:
 export default function SmartCart() {
   const { data, loading, error, reload } = useApi<Cart>('/smart-cart');
   const [packs, setPacks] = useState<Record<string, number>>({});
-  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
   const nav = useNavigate();
-  if (loading) return <Loader label="Construction du panier optimal…" />; if (error) return <ErrorBox message={error} />; if (!data) return null;
+  if (loading) return <Loader label="Construction du panier optimal…" />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   const qty = (l: Line) => packs[l.offer.offerId] ?? l.packs;
   const supTotal = (s: Sup) => s.lines.reduce((a, l) => a + qty(l) * l.offer.packPrice, 0);
   const total = data.suppliers.reduce((a, s) => a + supTotal(s) + (supTotal(s) > 0 ? s.deliveryFee : 0), 0);
   const checkout = async () => {
-    setBusy(true); setMsg(null);
+    setBusy(true);
     try {
       const suppliers = data.suppliers.map((s) => ({ supplierId: s.supplierId, lines: s.lines.filter((l) => qty(l) > 0).map((l) => ({ offerId: l.offer.offerId, packs: qty(l) })) })).filter((s) => s.lines.length);
-      const r = await api<{ message: string }>('/smart-cart/checkout', { method: 'POST', json: { suppliers } });
-      setMsg(r.message); setTimeout(() => nav('/app/achats'), 1200);
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+      await api<{ message: string }>('/smart-cart/checkout', { method: 'POST', json: { suppliers } });
+      // Chantier 11 : on dit ce qui vient de se passer et ce qui reste a faire, puis on emmene
+      // la personne a l'etape suivante (envoi au fournisseur), sans la laisser deviner.
+      toast.success('Commandes préparées.', 'Étape suivante : envoyez le message au fournisseur par WhatsApp ou e-mail.');
+      setTimeout(() => nav('/app/achats'), 900);
+    } catch (e) { toast.error('Impossible de préparer les commandes', (e as Error).message); } finally { setBusy(false); }
   };
   return (
-    <div className="animate-fade-up">
+    <div className="animate-fade-up space-y-6">
+      <Steps steps={FLOW_STEPS} current={1} title="Où en suis-je ?" />
       <PageTitle title="🧺 Panier intelligent" subtitle={`Commande recommandée pour les ${data.horizonDays} prochains jours, répartie entre vos fournisseurs au meilleur coût total (prix + livraison + délai + fiabilité).`}
         action={<button className="btn-secondary" onClick={() => void reload()}><RefreshCw size={16} /> Recalculer</button>} />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-6">
@@ -60,7 +67,6 @@ export default function SmartCart() {
       {data.unavailable.length > 0 && <div className="card mt-4 text-sm"><h3 className="font-semibold mb-1">Sans offre fournisseur</h3><p className="text-stone-600">{data.unavailable.map((u) => `${u.productName} (${fmtQty(u.neededQty, u.unit)})`).join(', ')}. Ajoutez une offre via <Link to="/app/import" className="underline">l’import CSV</Link> ou la fiche fournisseur.</p></div>}
       {data.suppliers.length > 0 && <div className="sticky bottom-4 mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-lg">
         <div><div className="text-xs text-stone-500">Total avec livraison</div><div className="text-xl font-bold">{fmtEur(total)}</div></div>
-        {msg && <div className="text-sm text-brand-800">{msg}</div>}
         <button className="btn-primary" disabled={busy} onClick={() => void checkout()}><Check size={16} /> Préparer les commandes</button>
       </div>}
       <p className="mt-3 text-xs text-stone-500">Les commandes sont créées en statut « Préparée » : rien n’est envoyé aux fournisseurs sans votre validation dans Achats.</p>

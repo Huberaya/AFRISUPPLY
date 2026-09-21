@@ -3,7 +3,8 @@
 #
 # Chaque script interroge une API RÉELLE (aucune valeur inventée) et vérifie ce qui se passe vraiment :
 # parcours d'achat, réception, prix facturé, alertes, e-mails réellement déposés, facturation, paiements
-# fournisseur, prévision. Les preuves (messages .outbox, PDF, journaux API) restent sur disque.
+# fournisseur, prévision, puis expérience réelle (navigation, dialogues, parcours guidé — chantier 11).
+# Les preuves (messages .outbox, PDF, journaux API) restent sur disque.
 #
 # Usage :
 #   npm run dev:api        # API sur :8787 (PGLITE_DIR + SEED_DEMO=true)
@@ -22,7 +23,7 @@ PAUSE="${AFS_PAUSE:-65}"     # espacement entre scripts : limites de débit d'in
 mkdir -p resultats
 SCRIPTS=(
   chantier1_verif.py chantier2_verif.py scenario_tests.py chantier3_verif.py chantier4_verif.py chantier5_verif.py
-  chantier6_verif.py chantier7_verif.py chantier8_verif.py chantier9_verif.py
+  chantier6_verif.py chantier7_verif.py chantier8_verif.py chantier9_verif.py chantier11_verif.py
 )
 
 echo "API : $AFS_API"

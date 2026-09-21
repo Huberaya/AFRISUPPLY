@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Repeat, CalendarClock, Play, Trash2, Pause } from 'lucide-react';
 import { api, fmtEur } from '../lib/api';
 import { Modal, Field } from './Modal';
+import { useConfirm, useToast } from './Feedback';
 
 type Preview = { vendor: { id: string; name: string; status: string; minOrderEur: string }; items: { productName: string; packLabel: string | null; packs: number; vendorOfferId: string | null; available: boolean; oldPackPrice: number; newPackPrice: number | null }[]; total: number; oldTotal: number };
 const DAYS = ['L', 'M', 'M', 'J', 'V', 'S', 'D']; const DAY_IDX = [1, 2, 3, 4, 5, 6, 0];
@@ -40,6 +41,7 @@ export function ReorderModal({ orderId, onClose, onDone }: { orderId: string; on
 type Rec = { id: string; name: string; vendorName: string; daysLabel: string; weekdays: number[]; enabled: boolean; mode: string; nextRunOn: string | null; lastRunAt: string | null; estimatedTotal: number; lines: { productName: string; packLabel: string | null; packs: number; available: boolean }[] };
 export function RecurringList({ onChanged }: { onChanged?: () => void }) {
   const [rows, setRows] = useState<Rec[] | null>(null); const [msg, setMsg] = useState<string | null>(null);
+  const confirmer = useConfirm(); const toast = useToast();
   const load = () => api<{ recurring: Rec[] }>('/recurring').then((r) => setRows(r.recurring)).catch(() => setRows([]));
   useEffect(() => { void load(); }, []);
   if (!rows?.length) return null;
@@ -49,7 +51,12 @@ export function RecurringList({ onChanged }: { onChanged?: () => void }) {
       <div className="grid gap-3 md:grid-cols-2">{rows.map((r) => <div key={r.id} className={`card space-y-2 ${!r.enabled ? 'opacity-60' : ''}`}>
         <div className="flex items-start justify-between gap-2"><div><p className="font-bold">{r.name}</p><p className="text-xs text-stone-500">{r.vendorName} · {r.daysLabel} · ≈ {fmtEur(r.estimatedTotal)}</p></div><span className="pill bg-stone-100 text-stone-700">{r.enabled ? (r.nextRunOn ? `prochaine : ${new Date(r.nextRunOn + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: 'short' })}` : '—') : 'en pause'}</span></div>
         <p className="text-xs text-stone-600">{r.lines.map((l) => `${l.packs} × ${l.productName}${l.available ? '' : ' (indispo.)'}`).join(' · ')}</p>
-        <div className="flex flex-wrap gap-1.5 text-xs"><button className="btn-ghost !py-1" onClick={async () => { try { const x = await api<{ message: string }>(`/recurring/${r.id}/run`, { method: 'POST', json: {} }); setMsg(x.message); onChanged?.(); } catch (e) { setMsg((e as Error).message); } }}><Play size={13} /> Envoyer maintenant</button><button className="btn-ghost !py-1" onClick={async () => { await api(`/recurring/${r.id}`, { method: 'PUT', json: { enabled: !r.enabled } }); void load(); }}>{r.enabled ? <><Pause size={13} /> Mettre en pause</> : <><Play size={13} /> Réactiver</>}</button><button className="btn-ghost !py-1 text-red-700" onClick={async () => { if (confirm(`Supprimer « ${r.name} » ?`)) { await api(`/recurring/${r.id}`, { method: 'DELETE' }); void load(); } }}><Trash2 size={13} /> Supprimer</button></div>
+        <div className="flex flex-wrap gap-1.5 text-xs"><button className="btn-ghost !py-1" onClick={async () => { try { const x = await api<{ message: string }>(`/recurring/${r.id}/run`, { method: 'POST', json: {} }); setMsg(x.message); onChanged?.(); } catch (e) { setMsg((e as Error).message); } }}><Play size={13} /> Envoyer maintenant</button><button className="btn-ghost !py-1" onClick={async () => { await api(`/recurring/${r.id}`, { method: 'PUT', json: { enabled: !r.enabled } }); void load(); }}>{r.enabled ? <><Pause size={13} /> Mettre en pause</> : <><Play size={13} /> Réactiver</>}</button><button className="btn-ghost !py-1 text-red-700" onClick={async () => {
+            const ok = await confirmer({ title: `Supprimer la commande récurrente « ${r.name} » ?`, body: <>Elle ne sera plus préparée automatiquement. Les commandes déjà créées ne sont pas touchées.</>, confirmLabel: 'Supprimer la récurrence', danger: true });
+            if (!ok) return;
+            try { await api(`/recurring/${r.id}`, { method: 'DELETE' }); toast.success('Récurrence supprimée.'); } catch (e) { toast.error('Suppression impossible', (e as Error).message); }
+            void load();
+          }}><Trash2 size={13} /> Supprimer</button></div>
       </div>)}</div>
     </section>
   );

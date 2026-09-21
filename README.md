@@ -20,10 +20,10 @@ Tout ce qui suit est exécuté par la CI (`.github/workflows/ci.yml`) **et** dis
 |---|---|---|
 | `npm run lint` | ESLint (flat config, plugin `react-hooks` inclus) | **0 erreur, 0 avertissement** |
 | `npm run typecheck` | `tsc` sur `packages/db`, `apps/api`, `apps/web` (séquentiel) | ✅ |
-| `npm test` | Vitest : base de données 5 · API 273 · web 43 | **321 tests** |
+| `npm test` | Vitest : base de données 5 · API 273 · web 53 | **331 tests** |
 | `npm run build` | Bundle web (`vite build`) | ✅ |
 | `npm run check:bundle` | `api/index.js` (bundle Vercel **committé**) correspond-il aux sources ? | ✅ |
-| `npm run verifs:e2e` | 9 scripts de vérification **contre une API réelle** (parcours, réception, prix, alertes, e-mail, facturation, paiements, prévision) | **356 vérifications** |
+| `npm run verifs:e2e` | 11 scripts de vérification **contre une API réelle** (parcours, réception, prix, alertes, e-mail, facturation, paiements, prévision, expérience) | **437 vérifications** |
 
 `npm run verify` enchaîne lint → typecheck → tests → build → bundle. Les scripts de bout en bout
 (`scripts/verifications/`) démarrent leur propre API (PGlite) et écrivent leurs preuves dans
@@ -138,7 +138,7 @@ Fonctions pures, testées (`npm test`), portées d'ethimarket (`alertsEngine`, `
 | `npm run verify` | **Porte de sortie** : lint → typecheck → tests → build → contrôle du bundle |
 | `npm run typecheck` / `npm test` / `npm run lint` | Qualité (un workspace à la fois, séquentiel) |
 | `npm run check:bundle` | Échoue si `api/index.js` n'est plus le bundle des sources |
-| `npm run verifs:e2e` | 9 scripts de vérification sur API réelle (~25 min, nécessite l'API sur :8787) |
+| `npm run verifs:e2e` | 11 scripts de vérification sur API réelle (~25 min, nécessite l'API sur :8787) |
 | `npm run db:generate` | Génère une migration SQL après modification de `schema.ts` |
 | `npm run db:migrate` / `npm run db:seed` | Applique / seed (PGlite ou Neon selon `DATABASE_URL`) |
 | `npm run build` | Typecheck des workspaces + build web (`apps/web/dist`) |
@@ -170,8 +170,8 @@ l'application fonctionne, mais plusieurs promesses n'étaient pas tenues. Les ch
 | 7 | Encaissement et offre commerciale honnête | ✅ livré | `8db3ecc` |
 | 8 | Parcours client et moyens de paiement | ✅ livré | `d145e72` |
 | 9 | Prévision robuste (audit 2) : cascade de sources, relances, saisonnalité | ✅ livré | `31caa76` |
-| 10 | Qualité, CI et dette : rendre le dépôt fiable et vérifiable | ✅ livré | voir `git log` |
-| — | UX : recentrer le produit sur le parcours d'achat | ⏳ à venir | — |
+| 10 | Qualité, CI et dette : rendre le dépôt fiable et vérifiable | ✅ livré | `f042307` |
+| 11 | UX : navigation par tâches, dialogues intégrés, parcours guidé, mobile | ✅ livré | voir `git log` |
 | — | Exploitation : sauvegardes, supervision, support | ⏳ à venir | — |
 
 Les rapports détaillés (fichiers, fonctionnalités, tests, ce qui reste) accompagnent l'audit hors dépôt.

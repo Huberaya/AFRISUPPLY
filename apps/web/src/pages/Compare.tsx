@@ -12,7 +12,7 @@ type D = { product: { name: string; baseUnit: string }; stock: { quantity: numbe
 export default function Compare() {
   const { productId } = useParams(); const nav = useNavigate();
   const [qty, setQty] = useState<string>('');
-  const { data, loading, error } = useApi<D>(`/compare/${productId}${qty ? `?qty=${qty}` : ''}`);
+  const { data, loading, error, reload } = useApi<D>(`/compare/${productId}${qty ? `?qty=${qty}` : ''}`);
   const [busy, setBusy] = useState<string | null>(null); const [done, setDone] = useState<string | null>(null);
   const order = async (o: Offer) => {
     setBusy(o.offerId);
@@ -22,7 +22,7 @@ export default function Compare() {
       setDone(r.message);
     } finally { setBusy(null); }
   };
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data) return null;
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data) return null;
   const unit = data.product.baseUnit;
   return (
     <div className="animate-fade-up space-y-6">

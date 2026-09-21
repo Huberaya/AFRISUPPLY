@@ -4,6 +4,7 @@ import { Plus, Phone, Mail, MapPin, Pencil, Trash2, Upload, Search, Send, Copy }
 import { api } from '../../lib/api';
 import { PageTitle, ErrorBox, Stat } from '../../components/ui';
 import { Modal, Field } from '../../components/Modal';
+import { useConfirm, useToast } from '../../components/Feedback';
 
 type Kind = 'restaurant' | 'fournisseur';
 type P = { id: string; kind: Kind; name: string; address: string | null; city: string | null; phone: string | null; email: string | null; contactName: string | null; status: string; notes: string | null; nextActionAt: string | null; updatedAt: string };
@@ -16,11 +17,17 @@ const empty = (kind: Kind): Partial<P> => ({ kind, name: '', address: '', city: 
 
 export default function AdminProspects() {
   const [kind, setKind] = useState<Kind>('restaurant'); const [d, setD] = useState<D | null>(null); const [err, setErr] = useState<string | null>(null);
+  const confirmer = useConfirm(); const toast = useToast();
   const [q, setQ] = useState(''); const [status, setStatus] = useState(''); const [edit, setEdit] = useState<Partial<P> | null>(null); const [importOpen, setImportOpen] = useState(false); const [csv, setCsv] = useState(''); const [msg, setMsg] = useState<string | null>(null);
   const load = () => api<D>(`/admin/prospects?kind=${kind}${q ? `&q=${encodeURIComponent(q)}` : ''}${status ? `&status=${status}` : ''}`).then(setD).catch((e) => setErr((e as Error).message));
   useEffect(() => { const t = setTimeout(() => void load(), 200); return () => clearTimeout(t); }, [kind, q, status]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async () => { if (!edit) return; const json = { ...edit, email: edit.email || null, nextActionAt: edit.nextActionAt || null }; if (edit.id) await api(`/admin/prospects/${edit.id}`, { method: 'PUT', json }); else await api('/admin/prospects', { method: 'POST', json }); setEdit(null); void load(); };
-  const remove = async (p: P) => { if (!confirm(`Supprimer ${p.name} ?`)) return; await api(`/admin/prospects/${p.id}`, { method: 'DELETE' }); void load(); };
+  const remove = async (p: P) => {
+    const ok = await confirmer({ title: `Supprimer la fiche ${p.name} ?`, body: <>Le contact et l'historique des relances seront perdus.</>, confirmLabel: 'Supprimer la fiche', danger: true });
+    if (!ok) return;
+    try { await api(`/admin/prospects/${p.id}`, { method: 'DELETE' }); toast.success('Fiche supprimée.'); } catch (e) { toast.error('Suppression impossible', (e as Error).message); }
+    void load();
+  };
   const [inv, setInv] = useState<{ p: P; url?: string; whatsapp?: string; sent?: boolean; message?: string; email: string; busy: boolean } | null>(null);
   const invite = async () => { if (!inv) return; setInv({ ...inv, busy: true }); try { const r = await api<{ url: string; whatsapp: string; sent: boolean; message: string; mailError: string | null }>(`/admin/prospects/${inv.p.id}/invite-vendor`, { method: 'POST', json: { email: inv.email || undefined, send: !!inv.email } }); setInv({ ...inv, ...r, busy: false, message: r.sent ? r.message : `${r.message}${r.mailError ? ` (e-mail : ${r.mailError})` : ''}` }); void load(); } catch (e) { setInv({ ...inv, busy: false, message: (e as Error).message }); } };
   const setSt = async (p: P, s: string) => { await api(`/admin/prospects/${p.id}`, { method: 'PUT', json: { status: s } }); void load(); };
@@ -29,7 +36,7 @@ export default function AdminProspects() {
     if (!rows.length) { setMsg('Aucune ligne reconnue. Format : Nom ; Adresse ; Ville ; Téléphone ; E-mail ; Contact (une ligne par établissement).'); return; }
     const r = await api<{ imported: number; ignored: number }>(`/admin/prospects/import?kind=${kind}`, { method: 'POST', json: { rows } }); setMsg(`${r.imported} ${kind}s importés${r.ignored ? `, ${r.ignored} ignorés` : ''}.`); setCsv(''); setImportOpen(false); void load();
   };
-  if (err) return <ErrorBox message={err} />;
+  if (err) return <ErrorBox message={err} onRetry={() => void load()} />;
   const count = (k: string, s?: string) => (d?.counts ?? []).filter((c) => c.kind === k && (!s || c.status === s)).reduce((a, c) => a + c.c, 0);
   const list = d?.prospects ?? []; const today = new Date().toISOString().slice(0, 10);
   return (

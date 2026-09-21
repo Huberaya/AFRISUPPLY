@@ -28,7 +28,7 @@ export default function Settings() {
   const [smsMsg, setSmsMsg] = useState<string | null>(null); const [del, setDel] = useState(false); const [delPw, setDelPw] = useState(''); const [delConfirm, setDelConfirm] = useState('');
   const [preview, setPreview] = useState<{ subject: string; text: string; html: string } | null>(null);
   useEffect(() => { if (data) setF({ ...data.settings, peakMonths: data.settings.peakMonths ?? [], peakCoef: data.settings.peakCoef ?? 1.2, billingEmail: data.settings.billingEmail ?? '', name: data.restaurant.name, city: data.restaurant.city ?? '', coversPerDay: data.restaurant.coversPerDay ? String(data.restaurant.coversPerDay) : '', recipientsText: data.settings.digestRecipients.join(', ') }); }, [data]);
-  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} />; if (!data || !f) return null;
+  if (loading && !data) return <Loader />; if (error) return <ErrorBox message={error} onRetry={() => void reload()} />; if (!data || !f) return null;
   const save = async () => {
     setBusy(true); setMsg(null);
     try {

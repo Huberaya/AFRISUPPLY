@@ -72,9 +72,9 @@ function IndexLine({ points }: { points: (number | null)[] }) {
 
 export default function Analysis() {
   const [months, setMonths] = useState(6);
-  const { data, loading, error } = useApi<Analysis>(`/analysis?months=${months}`);
+  const { data, loading, error, reload } = useApi<Analysis>(`/analysis?months=${months}`);
   if (loading && !data) return <Loader />;
-  if (error) return <ErrorBox message={error} />;
+  if (error) return <ErrorBox message={error} onRetry={() => void reload()} />;
   const a = data!;
   const hasData = a.spend.total > 0 || a.recipes.length > 0;
   const maxSpend = Math.max(...a.spend.totals, 1);
@@ -85,7 +85,7 @@ export default function Analysis() {
   return (
     <div className="animate-fade-up space-y-6">
       <PageTitle
-        title="📊 Analyse"
+        title="📊 Analyse des coûts"
         subtitle="Où part votre argent, et pourquoi ça bouge. Calculé sur vos commandes et sur les prix réellement facturés que vous saisissez à la réception."
         action={
           <div className="flex gap-1 rounded-xl bg-stone-100 p-1 text-sm">
