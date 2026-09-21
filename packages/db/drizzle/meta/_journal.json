@@ -148,6 +148,13 @@
       "when": 1789991906258,
       "tag": "0020_factures_abonnement",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789993707419,
+      "tag": "0021_facturation_fournisseur",
+      "breakpoints": true
     }
   ]
 }

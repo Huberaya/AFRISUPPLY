@@ -70,10 +70,11 @@ export async function requireRestaurant(c: Context<Env>, next: Next) {
   const wanted = c.req.header('x-restaurant-id');
   const memberships = await db.select({ restaurantId: restaurantMembers.restaurantId, role: restaurantMembers.role })
     .from(restaurantMembers).where(eq(restaurantMembers.userId, user.id));
-  if (!memberships.length) return c.json({ error: 'Aucun restaurant associé' }, 403);
+  // Chantier 8 : un code machine permet au web de recharger les établissements au lieu d'afficher une erreur sèche.
+  if (!memberships.length) return c.json({ error: 'Aucun restaurant associé à ce compte', code: 'no_restaurant' }, 403);
   const rid = wanted ?? memberships[0].restaurantId;
   const membership = memberships.find((m) => m.restaurantId === rid);
-  if (!membership) return c.json({ error: 'Accès refusé à ce restaurant' }, 403);
+  if (!membership) return c.json({ error: 'Accès refusé à cet établissement (votre accès a peut-être été modifié)', code: 'restaurant_forbidden' }, 403);
   c.set('restaurantId', rid);
   // Chantier 2 (audit) : le rôle du membre est désormais exposé et appliqué par les routeurs sensibles.
   c.set('role', membership.role);

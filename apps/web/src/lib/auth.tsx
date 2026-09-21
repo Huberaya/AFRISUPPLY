@@ -10,6 +10,7 @@ type Ctx = {
   login: (email: string, password: string) => Promise<void>;
   register: (p: { email: string; password: string; fullName: string; restaurantName: string; city?: string; coversPerDay?: number; inviteCode?: string }) => Promise<void>;
   logout: () => Promise<void>; refresh: () => Promise<void>; switchRestaurant: (id: string) => void;
+  accessNotice: string | null; clearAccessNotice: () => void;
 };
 const AuthContext = createContext<Ctx | undefined>(undefined);
 
@@ -18,6 +19,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [restaurantId, setRestaurantId] = useState<string | null>(tokenStore.restaurant());
   const [loading, setLoading] = useState(true);
+  // Chantier 8 : message explicite quand l'accès change (établissement retiré, plus aucun restaurant).
+  const [accessNotice, setAccessNotice] = useState<string | null>(null);
 
   const refresh = async () => {
     if (!tokenStore.get()) { setUser(null); setRestaurants([]); setLoading(false); return; }
@@ -30,6 +33,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     finally { setLoading(false); }
   };
   useEffect(() => { void refresh();   }, []);
+  // Chantier 8 : le serveur signale que l'établissement courant n'est plus accessible → on recharge
+  // les appartenances et on repart sur un établissement valide, avec un message clair.
+  useEffect(() => {
+    const onAccess = (e: Event) => {
+      const d = (e as CustomEvent<{ error?: string }>).detail;
+      tokenStore.clearRestaurant(); setRestaurantId(null);
+      setAccessNotice(`${d?.error ?? 'Accès modifié'} — nous avons rechargé la liste de vos établissements.`);
+      void refresh();
+    };
+    window.addEventListener('afs:access', onAccess as EventListener);
+    return () => window.removeEventListener('afs:access', onAccess as EventListener);
+  }, [refresh]);
 
   const login = async (email: string, password: string) => {
     const r = await api<{ token: string }>('/auth/login', { method: 'POST', json: { email, password } });
@@ -41,9 +56,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
   const logout = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => null); tokenStore.clear(); setUser(null); setRestaurants([]); };
   const switchRestaurant = (id: string) => { tokenStore.setRestaurant(id); setRestaurantId(id); window.location.reload(); };
+  const clearAccessNotice = () => setAccessNotice(null);
 
   const restaurant = restaurants.find((r) => r.id === restaurantId) ?? restaurants[0] ?? null;
-  return <AuthContext.Provider value={{ user, restaurants, restaurant, loading, login, register, logout, refresh, switchRestaurant }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, restaurants, restaurant, loading, accessNotice, clearAccessNotice, login, register, logout, refresh, switchRestaurant }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() { const c = useContext(AuthContext); if (!c) throw new Error('useAuth hors AuthProvider'); return c; }

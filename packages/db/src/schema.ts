@@ -520,6 +520,8 @@ export const vendors = pgTable('vendors', {
   cgvAcceptedAt: timestamp('cgv_accepted_at', { withTimezone: true }),
   cgvAcceptedBy: text('cgv_accepted_by'),
   stripeCustomerId: text('stripe_customer_id'),           // facturation mensuelle des commissions
+  stripeDefaultPaymentMethod: text('stripe_default_payment_method'), // chantier 8 : carte enregistrée → prélèvement
+  billingEmail: text('billing_email'),                    // chantier 8 : destinataire des factures de commission
   contactEmail: text('contact_email'),
   contactPhone: text('contact_phone'),
   whatsapp: text('whatsapp'),

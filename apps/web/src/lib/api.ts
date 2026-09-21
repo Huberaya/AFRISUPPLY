@@ -6,11 +6,14 @@ export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
   set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
   clear: () => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(RESTAURANT_KEY); },
+  clearRestaurant: () => { localStorage.removeItem(RESTAURANT_KEY); },
   restaurant: () => localStorage.getItem(RESTAURANT_KEY),
   setRestaurant: (id: string) => localStorage.setItem(RESTAURANT_KEY, id),
 };
 
-export class ApiError extends Error { constructor(public status: number, message: string, public details?: unknown, public code?: string) { super(message); } }
+export class ApiError extends Error {
+  constructor(public status: number, message: string, public details?: unknown, public code?: string, public retryAfterSec?: number) { super(message); }
+}
 
 export async function api<T = unknown>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> ?? {}) };
@@ -19,9 +22,17 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   let body = init.body;
   if (init.json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(init.json); }
   const res = await fetch(`/api${path}`, { ...init, headers, body, credentials: 'include' });
+  // Chantier 8 : quand l'accès au restaurant courant a changé (établissement retiré, rôle modifié),
+  // l'interface est prévenue pour se remettre d'aplomb au lieu d'afficher une erreur incompréhensible.
+  if (res.status === 403) {
+    res.clone().json().then((d: { code?: string; error?: string }) => {
+      if (d?.code === 'restaurant_forbidden' || d?.code === 'no_restaurant') window.dispatchEvent(new CustomEvent('afs:access', { detail: d }));
+    }).catch(() => null);
+  }
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (res.status === 402 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('afs:paywall', { detail: data?.error ?? 'Abonnement requis' }));
-  if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`, data?.details, data?.code);
+  const retryAfter = Number(res.headers.get('retry-after') ?? 0);
+  if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`, data?.details, data?.code, retryAfter > 0 ? retryAfter : undefined);
   return data as T;
 }
 

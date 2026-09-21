@@ -36,6 +36,7 @@ const Sales = lazy(() => import('./pages/Sales'));
 const Discrepancies = lazy(() => import('./pages/Discrepancies'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Team = lazy(() => import('./pages/Team'));
+const Establishments = lazy(() => import('./pages/Establishments'));   // chantier 8 : mes établissements
 const VerifyEmail = lazy(() => import('./pages/VerifyEmail'));   // chantier 5 : confirmation d'adresse
 const Forgot = lazy(() => import('./pages/Forgot'));
 const Reset = lazy(() => import('./pages/Reset'));
@@ -110,6 +111,7 @@ export default function App() {
                 <Route path="admin" element={<AdminDashboard />} />
                 <Route path="admin/litiges" element={<AdminClaims />} />
                 <Route path="abonnement" element={<Billing />} />
+                <Route path="etablissements" element={<Establishments />} />
                 <Route path="fournisseurs/:id" element={<SupplierDetail />} />
                 <Route path="recettes" element={<Recipes />} />
                 <Route path="analyse" element={<Analysis />} />

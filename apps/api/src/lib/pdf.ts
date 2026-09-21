@@ -116,3 +116,46 @@ export function invoicePdf(d: InvoiceDoc): Buffer {
   p.cursor = 30; p.text(`Facture ${d.number} — générée par AFRISUPPLY le ${fd(new Date())}. Service client : ${e.email}.`, m, 7, { color: '0.5 0.5 0.5' });
   return p.build();
 }
+
+// ---------- Facture de commission fournisseur (chantier 8) ----------
+export type CommissionDoc = {
+  number: string;                       // FC-2026-0007
+  periodLabel: string;                  // « juillet 2026 »
+  issuedAt: Date; dueAt?: Date | null;  // échéance (15 jours en général)
+  vendor: { name: string; city?: string | null; address?: string | null; email?: string | null; siret?: string | null; vat?: string | null };
+  orders: number; baseEur: number; pct: number; amountHt: number; vatRate: number;
+  payment: { mode: 'prelevement' | 'virement'; card?: string | null; stripeUrl?: string | null };
+};
+
+/** Facture de commission AFRISUPPLY → fournisseur (sur ses ventes confirmées du mois). */
+export function commissionPdf(d: CommissionDoc): Buffer {
+  const p = new Pdf(); const m = p.margin; const W = p.w - 2 * m; const e = emitter();
+  const ttc = Math.round(d.amountHt * (1 + d.vatRate / 100) * 100) / 100;
+  const vat = Math.round((ttc - d.amountHt) * 100) / 100;
+  p.rect(0, 812, p.w, 30, 0.93); p.cursor = 822;
+  p.text('AFRISUPPLY', m, 14, { bold: true, color: '0.76 0.25 0.05' }); p.text('Marketplace des restaurants africains', m + 110, 9, { color: '0.4 0.4 0.4' });
+  p.cursor = 780; p.text('FACTURE DE COMMISSION', m, 16, { bold: true }); p.text(d.number, m, 16, { bold: true, align: 'right', width: W });
+  p.down(15); p.text(`Période : ${d.periodLabel} · émise le ${fd(d.issuedAt)}${d.dueAt ? ` · à régler avant le ${fd(d.dueAt)}` : ''}`, m, 9, { color: '0.35 0.35 0.35' });
+  p.down(26); p.text('ÉMETTEUR', m, 8, { bold: true, color: '0.5 0.5 0.5' }); p.text('FOURNISSEUR', m + W / 2, 8, { bold: true, color: '0.5 0.5 0.5' });
+  p.down(13); p.text(e.company, m, 11, { bold: true }); p.text(d.vendor.name, m + W / 2, 11, { bold: true });
+  const left = [e.address, e.siret ? `SIRET ${e.siret}` : 'SIRET non renseigné (INVOICE_SIRET)', e.vat ? `TVA ${e.vat}` : 'N° TVA non renseigné (INVOICE_VAT)', e.email];
+  const right = [d.vendor.address, d.vendor.city, d.vendor.email, d.vendor.siret ? `SIRET ${d.vendor.siret}` : null, d.vendor.vat ? `TVA ${d.vendor.vat}` : null].filter(Boolean) as string[];
+  for (let i = 0; i < Math.max(left.length, right.length); i++) { p.down(12); if (left[i]) p.text(left[i], m, 9); if (right[i]) p.text(right[i], m + W / 2, 9); }
+  p.down(30);
+  p.rect(m, p.cursor - 5, W, 16, 0.92);
+  p.row([{ text: 'Désignation', x: m + 5, w: 250, bold: true }, { text: 'Base', x: m + 260, w: 90, align: 'right', bold: true }, { text: 'Taux', x: m + 355, w: 45, align: 'right', bold: true }, { text: 'Montant HT', x: m + 410, w: 70, align: 'right', bold: true }, { text: 'Total TTC', x: m + 490, w: 65, align: 'right', bold: true }]);
+  p.down(17);
+  p.row([{ text: `Commission sur commandes confirmées (${d.orders} commande${d.orders > 1 ? 's' : ''})`, x: m + 5, w: 250 }, { text: eur(d.baseEur), x: m + 260, w: 90, align: 'right' }, { text: `${d.pct.toFixed(2).replace('.', ',')} %`, x: m + 355, w: 45, align: 'right' }, { text: eur(d.amountHt), x: m + 410, w: 70, align: 'right' }, { text: eur(ttc), x: m + 490, w: 65, align: 'right' }]);
+  p.line(m, p.cursor - 5, m + W, p.cursor - 5, 0.9);
+  p.down(20); p.text('Total HT', m + 410, 10, { align: 'right', width: 70 }); p.text(eur(d.amountHt), m + 490, 10, { align: 'right', width: 65 });
+  p.down(14); p.text(`TVA ${d.vatRate.toFixed(0)} %`, m + 410, 10, { align: 'right', width: 70 }); p.text(eur(vat), m + 490, 10, { align: 'right', width: 65 });
+  p.down(16); p.text('TOTAL À PAYER TTC', m + 380, 12, { bold: true, align: 'right', width: 100 }); p.text(eur(ttc), m + 490, 12, { bold: true, align: 'right', width: 65 });
+  p.down(22);
+  p.text(d.payment.mode === 'prelevement'
+    ? `Règlement : prélèvement automatique sur la carte enregistrée${d.payment.card ? ` (${d.payment.card})` : ''} — aucun virement à effectuer.`
+    : `Règlement par virement : ${e.iban || 'IBAN communiqué sur demande (INVOICE_IBAN)'} — merci d'indiquer la référence ${d.number}.${d.payment.stripeUrl ? ' Un lien de paiement en ligne figure dans l’e-mail accompagnant cette facture.' : ''}`, m, 9, { color: '0.3 0.3 0.3' });
+  p.down(14); p.text('Commission de mise en relation commerciale (marketplace). En cas de retard de paiement : pénalités au taux légal + indemnité forfaitaire de 40 € (art. L441-10 du Code de commerce).', m, 8, { color: '0.35 0.35 0.35' });
+  if (!emitterComplete()) { p.down(14); p.rect(m, p.cursor - 4, W, 22, 0.95); p.text('⚠ Mentions légales incomplètes : renseignez INVOICE_SIRET et INVOICE_VAT pour une facture conforme.', m + 5, 8, { bold: true, color: '0.6 0.3 0.05' }); }
+  p.cursor = 30; p.text(`Facture de commission ${d.number} — AFRISUPPLY · service fournisseurs : ${e.email}.`, m, 7, { color: '0.5 0.5 0.5' });
+  return p.build();
+}

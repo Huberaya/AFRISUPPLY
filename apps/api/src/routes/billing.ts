@@ -8,8 +8,9 @@ import { PLANS, FOUNDER_OFFER } from './public.js';
 import {
   accessState, applySubscription, createCheckout, createPortal, stripe, stripeConfigured, verifyStripeSignature,
   priceIdFor, billingEnforced, billingHealth, seatsFor, planPrice, billingRecipient, effectivePrice, mrr, recentInvoices,
-  recordSubscriptionInvoice, type PlanId,
+  recordSubscriptionInvoice, applyVendorSetup, vendorBillingRecipient, vendorCommissionInvoices, type PlanId,
 } from '../lib/billing.js';
+import { commissionPdf } from '../lib/pdf.js';
 import { invoicePdf, emitterComplete } from '../lib/pdf.js';
 import { recordJobRun } from '../lib/job-runs.js';
 import { sendMail } from '../lib/mailer.js';
@@ -112,6 +113,10 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
   try {
     if (evt.type === 'checkout.session.completed' && o.mode === 'subscription' && typeof o.subscription === 'string') {
       const sub = await stripe<Parameters<typeof applySubscription>[0]>('GET', `/subscriptions/${o.subscription}`); rid = (await applySubscription(sub)).rid;
+    } else if (evt.type === 'checkout.session.completed' && o.mode === 'setup') {
+      // Chantier 8 : un fournisseur vient d'enregistrer sa carte pour les commissions.
+      const res = await applyVendorSetup(o as { customer?: string; mode?: string; setup_intent?: string; metadata?: Record<string, string> });
+      if (!res.applied) throw new Error(`Session « enregistrer une carte » non appliquée : ${res.reason}`);
     } else if (evt.type.startsWith('customer.subscription.')) {
       rid = (await applySubscription(o as unknown as Parameters<typeof applySubscription>[0])).rid;
     } else if ((evt.type === 'invoice.paid' || evt.type === 'invoice.payment_succeeded') && o.id) {
@@ -292,29 +297,49 @@ export async function invoiceCommissions(period: string, opts: { dryRun?: boolea
   const db = await getDb();
   const rows = await db.select({ vendorId: commissions.vendorId, orders: sql<number>`count(*)`, base: sql<number>`sum(${commissions.orderTotalEur})`, amount: sql<number>`sum(${commissions.amountEur})` })
     .from(commissions).where(and(eq(commissions.period, period), eq(commissions.invoiced, false))).groupBy(commissions.vendorId);
-  const out: { vendorId: string; vendorName: string; orders: number; base: number; amount: number; via: 'stripe' | 'mail' | 'skip'; stripeInvoiceId?: string }[] = [];
+  const out: { vendorId: string; vendorName: string; orders: number; base: number; amount: number; via: 'stripe' | 'mail' | 'skip'; stripeInvoiceId?: string; mode?: string; recipient?: string | null }[] = [];
   for (const r of rows) {
     const amount = Number(r.amount); const [v] = await db.select().from(vendors).where(eq(vendors.id, r.vendorId));
     if (!v || amount < 1) { out.push({ vendorId: r.vendorId, vendorName: v?.name ?? '?', orders: Number(r.orders), base: Number(r.base), amount, via: 'skip' }); continue; }
-    if (opts.dryRun) { out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via: v.stripeCustomerId && stripeConfigured() ? 'stripe' : 'mail' }); continue; }
+    const chargeable = !!(v.stripeCustomerId && v.stripeDefaultPaymentMethod && stripeConfigured());
+    if (opts.dryRun) { out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via: chargeable ? 'stripe' : 'mail', mode: chargeable ? 'prelevement' : 'releve' }); continue; }
     const [existing] = await db.select().from(commissionInvoices).where(and(eq(commissionInvoices.vendorId, v.id), eq(commissionInvoices.period, period))); if (existing) continue;
-    let stripeInvoiceId: string | undefined; let via: 'stripe' | 'mail' = 'mail';
+    let stripeInvoiceId: string | undefined; let via: 'stripe' | 'mail' = 'mail'; let mode: 'prelevement' | 'releve' = 'releve';
     if (v.stripeCustomerId && stripeConfigured()) {
       try {
         await stripe('POST', '/invoiceitems', { customer: v.stripeCustomerId, amount: Math.round(amount * 100), currency: 'eur', description: `Commission AFRISUPPLY ${period} — ${r.orders} commande(s), base ${eur(Number(r.base))}` }, { idempotencyKey: `ci-${v.id}-${period}` });
-        const inv = await stripe<{ id: string }>('POST', '/invoices', { customer: v.stripeCustomerId, collection_method: 'send_invoice', days_until_due: 15, auto_advance: true, metadata: { vendorId: v.id, period } }, { idempotencyKey: `inv-${v.id}-${period}` });
-        await stripe('POST', `/invoices/${inv.id}/finalize`); await stripe('POST', `/invoices/${inv.id}/send`);
-        stripeInvoiceId = inv.id; via = 'stripe';
+        // Carte enregistrée → prélèvement automatique ; sinon relevé à régler sous 15 jours (inchangé).
+        const prelevement = !!v.stripeDefaultPaymentMethod;
+        const inv = await stripe<{ id: string }>('POST', '/invoices', prelevement
+          ? { customer: v.stripeCustomerId, collection_method: 'charge_automatically', auto_advance: true, metadata: { vendorId: v.id, period } }
+          : { customer: v.stripeCustomerId, collection_method: 'send_invoice', days_until_due: 15, auto_advance: true, metadata: { vendorId: v.id, period } }, { idempotencyKey: `inv-${v.id}-${period}` });
+        await stripe('POST', `/invoices/${inv.id}/finalize`);
+        if (!prelevement) await stripe('POST', `/invoices/${inv.id}/send`);
+        stripeInvoiceId = inv.id; via = 'stripe'; mode = prelevement ? 'prelevement' : 'releve';
       } catch (e) { console.error('[commissions] stripe', e); }
     }
-    if (via === 'mail') {
-      const [m] = await db.select({ email: users.email }).from(vendorMembers).innerJoin(users, eq(users.id, vendorMembers.userId)).where(eq(vendorMembers.vendorId, v.id)).limit(1);
-      const to = v.contactEmail ?? m?.email;
-      if (to) await sendMail({ to, subject: `AFRISUPPLY — relevé de commission ${period} : ${eur(amount)}`, text: `Bonjour,\n\nRelevé de commission ${period} pour ${v.name} :\n- ${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}\n- Commission ${Number(v.commissionPct)} % : ${eur(amount)}\n\nRèglement sous 15 jours par virement (RIB dans votre espace) — ou activez le prélèvement automatique dans votre espace fournisseur.\n\nMerci de votre confiance,\nL'équipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Relevé de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur(amount)}</b></li></ul><p>Règlement sous 15 jours par virement — ou activez le prélèvement automatique dans votre espace fournisseur.</p><p>L'équipe AFRISUPPLY</p>`, tags: { type: 'commission' } });
-    }
-    await db.insert(commissionInvoices).values({ vendorId: v.id, period, orders: Number(r.orders), baseEur: Number(r.base).toFixed(2), amountEur: amount.toFixed(2), stripeInvoiceId, status: via === 'stripe' ? 'emise' : 'envoyee_par_mail' });
+    // Dans tous les cas, le fournisseur reçoit une vraie facture PDF (même quand Stripe l'a envoyée).
+    const to = await vendorBillingRecipient({ id: v.id, billingEmail: v.billingEmail, contactEmail: v.contactEmail });
+    const monthLabel = new Date(`${period}-01T00:00:00Z`).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const ttc = Math.round(amount * 1.2 * 100) / 100;
+    const pdf = commissionPdf({
+      number: `FC-${period}`, periodLabel: monthLabel, issuedAt: new Date(), dueAt: new Date(Date.now() + 15 * 86_400_000),
+      vendor: { name: v.name, city: v.city, email: to }, orders: Number(r.orders), baseEur: Number(r.base),
+      pct: Number(v.commissionPct), amountHt: amount, vatRate: 20,
+      payment: { mode: mode === 'prelevement' ? 'prelevement' : 'virement' },
+    });
+    if (to) await sendMail({
+      to,
+      subject: mode === 'prelevement' ? `AFRISUPPLY — commission ${period} : ${eur(amount)} HT (prélevée sur votre carte)` : `AFRISUPPLY — facture de commission ${period} : ${eur(amount)} HT (${eur(ttc)} TTC)`,
+      text: `Bonjour,\n\nFacture de commission ${period} pour ${v.name} :\n- ${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}\n- Commission ${Number(v.commissionPct).toFixed(2).replace('.', ',')} % : ${eur(amount)} HT — ${eur(ttc)} TTC\n\n${mode === 'prelevement' ? 'Prélèvement automatique sur la carte enregistrée dans votre espace fournisseur : aucune action de votre part.' : "Règlement sous 15 jours par virement (ou activez le prélèvement automatique dans votre espace fournisseur)."}\n\nLa facture est jointe à ce message (PDF).\n\nMerci de votre confiance,\nL'équipe AFRISUPPLY`,
+      html: `<p>Bonjour,</p><p>Facture de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur(amount)} HT</b> — ${eur(ttc)} TTC</li></ul><p>${mode === 'prelevement' ? 'Prélèvement automatique sur la carte enregistrée : aucune action de votre part.' : 'Règlement sous 15 jours par virement, ou activez le prélèvement automatique dans votre espace fournisseur.'}</p><p>La facture est jointe à ce message (PDF).</p><p>L'équipe AFRISUPPLY</p>`,
+      tags: { type: 'commission', vendor: v.id }, attachments: [{ filename: `commission-${period}.pdf`, content: pdf, contentType: 'application/pdf' }],
+    });
+    await db.insert(commissionInvoices).values({ vendorId: v.id, period, orders: Number(r.orders), baseEur: Number(r.base).toFixed(2), amountEur: amount.toFixed(2), stripeInvoiceId, // « emise » tant que Stripe n'a pas confirmé l'encaissement (le webhook invoice.paid passe en « payee ») :
+    // on ne prétend jamais qu'une commission est réglée avant l'encaissement réel.
+    status: via === 'stripe' ? 'emise' : 'envoyee_par_mail' });
     await db.update(commissions).set({ invoiced: true }).where(and(eq(commissions.vendorId, v.id), eq(commissions.period, period)));
-    out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via, stripeInvoiceId });
+    out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via, mode, stripeInvoiceId, recipient: to });
   }
   return { period, invoices: out, dryRun: !!opts.dryRun };
 }

@@ -13,6 +13,8 @@ import { Propose } from './Propose';
 import { VendorClaims } from './VendorClaims';
 import { Pricing } from './Pricing';
 import VendorReviews from './VendorReviews';
+// Chantier 8 : panneau de commissions extrait (moyen de paiement, factures PDF, état honnête).
+import { Commissions } from './CommissionsPanel';
 
 type Vendor = { id: string; name: string; status: 'en_attente' | 'actif' | 'suspendu'; cgvUpToDate?: boolean; cgvVersion?: string | null; city: string | null; commissionPct: string; deliveryZones: string[]; minOrderEur: string; leadTimeHours: number };
 type Tab = 'dashboard' | 'offers' | 'pricing' | 'reviews' | 'orders' | 'fulfillment' | 'claims' | 'groupbuys' | 'commissions' | 'analytics';
@@ -21,7 +23,9 @@ const STATUS: Record<string, string> = { envoyee: '🕒 À confirmer', confirmee
 
 export default function VendorSpace() {
   const nav = useNavigate(); const [sp] = useSearchParams(); const invite = sp.get('invite');
-  const [me, setMe] = useState<{ vendors: Vendor[]; isAdmin: boolean } | null>(null); const [err, setErr] = useState<string | null>(null); const [tab, setTab] = useState<Tab>('orders');
+  const [me, setMe] = useState<{ vendors: Vendor[]; isAdmin: boolean } | null>(null); const [err, setErr] = useState<string | null>(null);
+  // Au retour de Stripe (enregistrement de carte), on ouvre directement l'onglet Commissions.
+  const [tab, setTab] = useState<Tab>(sp.get('paiement') ? 'commissions' : 'orders');
   const load = () => api<{ vendors: Vendor[]; isAdmin: boolean }>('/vendor/me').then(setMe).catch((e) => { if ((e as { status?: number }).status === 401) nav('/connexion?next=/fournisseur'); else setErr((e as Error).message); });
   useEffect(() => { if (!tokenStore.get()) { if (!invite) nav('/connexion?next=/fournisseur'); return; } void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (invite && (!tokenStore.get() || (me && !me.vendors.length))) return <Shell><InviteLanding token={invite} onDone={load} /></Shell>;
@@ -75,12 +79,12 @@ function Register({ onDone }: { onDone: () => void }) {
 }
 
 function Dashboard() {
-  const [d, setD] = useState<{ vendor: Vendor & { description: string | null; deliveryFeeEur: string; contactEmail: string | null; contactPhone: string | null; whatsapp: string | null }; stats: Record<string, number> } | null>(null);
+  const [d, setD] = useState<{ vendor: Vendor & { description: string | null; deliveryFeeEur: string; contactEmail: string | null; contactPhone: string | null; whatsapp: string | null; billingEmail: string | null }; stats: Record<string, number> } | null>(null);
   const [zones, setZones] = useState(''); const [msg, setMsg] = useState<string | null>(null);
   useEffect(() => { api<typeof d>('/vendor/dashboard').then((r) => { setD(r); setZones(r!.vendor.deliveryZones.join(', ')); }); }, []);
   if (!d) return <p className="text-stone-500">Chargement…</p>;
   const s = d.stats; const v = d.vendor;
-  const save = async () => { await api('/vendor/profile', { method: 'PUT', json: { description: v.description, city: v.city, deliveryZones: zones.split(/[,;]+/).map((x) => x.trim()).filter(Boolean), leadTimeHours: v.leadTimeHours, minOrderEur: Number(v.minOrderEur), deliveryFeeEur: Number(v.deliveryFeeEur), contactEmail: v.contactEmail, contactPhone: v.contactPhone, whatsapp: v.whatsapp } }); setMsg('Fiche mise à jour.'); };
+  const save = async () => { await api('/vendor/profile', { method: 'PUT', json: { description: v.description, city: v.city, deliveryZones: zones.split(/[,;]+/).map((x) => x.trim()).filter(Boolean), leadTimeHours: v.leadTimeHours, minOrderEur: Number(v.minOrderEur), deliveryFeeEur: Number(v.deliveryFeeEur), contactEmail: v.contactEmail, contactPhone: v.contactPhone, whatsapp: v.whatsapp, billingEmail: v.billingEmail ?? '' } }); setMsg('Fiche mise à jour.'); };
   const up = (k: string, val: unknown) => setD({ ...d, vendor: { ...v, [k]: val } });
   return (
     <div className="space-y-4">
@@ -89,7 +93,8 @@ function Dashboard() {
         <Field label="Présentation"><textarea className="input" rows={2} value={v.description ?? ''} onChange={(e) => up('description', e.target.value)} /></Field>
         <div className="grid gap-3 sm:grid-cols-2"><Field label="Ville"><input className="input" value={v.city ?? ''} onChange={(e) => up('city', e.target.value)} /></Field><Field label="Zones livrées"><input className="input" value={zones} onChange={(e) => setZones(e.target.value)} /></Field></div>
         <div className="grid gap-3 sm:grid-cols-3"><Field label="Délai (h)"><input className="input" type="number" value={v.leadTimeHours} onChange={(e) => up('leadTimeHours', Number(e.target.value))} /></Field><Field label="Minimum (€)"><input className="input" type="number" value={v.minOrderEur} onChange={(e) => up('minOrderEur', e.target.value)} /></Field><Field label="Port (€)"><input className="input" type="number" value={v.deliveryFeeEur} onChange={(e) => up('deliveryFeeEur', e.target.value)} /></Field></div>
-        <div className="grid gap-3 sm:grid-cols-3"><Field label="E-mail commandes"><input className="input" value={v.contactEmail ?? ''} onChange={(e) => up('contactEmail', e.target.value)} /></Field><Field label="Téléphone"><input className="input" value={v.contactPhone ?? ''} onChange={(e) => up('contactPhone', e.target.value)} /></Field><Field label="WhatsApp"><input className="input" value={v.whatsapp ?? ''} onChange={(e) => up('whatsapp', e.target.value)} /></Field></div>
+        <div className="grid gap-3 sm:grid-cols-2"><Field label="E-mail facturation des commissions" hint="Sinon l'e-mail de contact est utilisé"><input className="input" type="email" value={v.billingEmail ?? ''} onChange={(e) => up('billingEmail', e.target.value)} /></Field><Field label="E-mail commandes"><input className="input" value={v.contactEmail ?? ''} onChange={(e) => up('contactEmail', e.target.value)} /></Field></div>
+        <div className="grid gap-3 sm:grid-cols-3"><Field label="Téléphone"><input className="input" value={v.contactPhone ?? ''} onChange={(e) => up('contactPhone', e.target.value)} /></Field><Field label="WhatsApp"><input className="input" value={v.whatsapp ?? ''} onChange={(e) => up('whatsapp', e.target.value)} /></Field></div>
         <div className="flex justify-end"><button className="btn-primary" onClick={() => void save()}>Enregistrer</button></div></div>
     </div>
   );
@@ -166,15 +171,5 @@ function GroupBuys() {
         {g.participants.length > 0 && <p className="text-sm text-stone-600">{g.participants.map((p) => `${p.restaurantName} (${p.packs})`).join(' · ')}</p>}
         {['ouvert', 'atteint'].includes(g.status) && <button className="btn-ghost" onClick={() => void close(g.id)}>Clôturer maintenant</button>}</div>)}
     </div>
-  );
-}
-
-function Commissions() {
-  const [p, setP] = useState<{ period: string; orders: number; base: number; amount: number; invoiced: boolean }[]>([]);
-  useEffect(() => { api<{ periods: typeof p }>('/vendor/commissions').then((r) => setP(r.periods)); }, []);
-  return (
-    <div className="card overflow-x-auto p-0"><table className="w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-3">Mois</th><th className="p-3 text-right">Commandes confirmées</th><th className="p-3 text-right">Chiffre d’affaires</th><th className="p-3 text-right">Commission</th><th className="p-3">Facture</th></tr></thead><tbody className="divide-y divide-stone-100">
-      {p.map((r) => <tr key={r.period}><td className="p-3 font-semibold">{r.period}</td><td className="p-3 text-right">{r.orders}</td><td className="p-3 text-right">{eur(r.base)}</td><td className="p-3 text-right font-bold">{eur(r.amount)}</td><td className="p-3">{r.invoiced ? 'Émise' : 'En fin de mois'}</td></tr>)}
-      {!p.length && <tr><td colSpan={5} className="p-6 text-center text-stone-500">Aucune commission : la première commande confirmée apparaîtra ici. Vous ne payez que sur ce que vous vendez.</td></tr>}</tbody></table></div>
   );
 }

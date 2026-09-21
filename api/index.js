@@ -569,6 +569,10 @@ var init_schema = __esm({
       cgvAcceptedBy: text("cgv_accepted_by"),
       stripeCustomerId: text("stripe_customer_id"),
       // facturation mensuelle des commissions
+      stripeDefaultPaymentMethod: text("stripe_default_payment_method"),
+      // chantier 8 : carte enregistrée → prélèvement
+      billingEmail: text("billing_email"),
+      // chantier 8 : destinataire des factures de commission
       contactEmail: text("contact_email"),
       contactPhone: text("contact_phone"),
       whatsapp: text("whatsapp"),
@@ -2134,6 +2138,39 @@ var init_src = __esm({
 });
 
 // apps/api/src/lib/billing.ts
+var billing_exports = {};
+__export(billing_exports, {
+  PLAN_PRICES: () => PLAN_PRICES,
+  PLAN_RANK: () => PLAN_RANK,
+  PLAN_SEATS: () => PLAN_SEATS,
+  accessState: () => accessState,
+  applySubscription: () => applySubscription,
+  applyVendorSetup: () => applyVendorSetup,
+  billingEnforced: () => billingEnforced,
+  billingHealth: () => billingHealth,
+  billingRecipient: () => billingRecipient,
+  createCheckout: () => createCheckout,
+  createPortal: () => createPortal,
+  createVendorSetupSession: () => createVendorSetupSession,
+  effectivePrice: () => effectivePrice,
+  ensureCustomer: () => ensureCustomer,
+  ensureVendorCustomer: () => ensureVendorCustomer,
+  mrr: () => mrr,
+  nextInvoiceNumber: () => nextInvoiceNumber,
+  planPrice: () => planPrice,
+  priceIdFor: () => priceIdFor,
+  recentInvoices: () => recentInvoices,
+  recordSubscriptionInvoice: () => recordSubscriptionInvoice,
+  seatsFor: () => seatsFor,
+  stripe: () => stripe,
+  stripeApiBase: () => stripeApiBase,
+  stripeConfigured: () => stripeConfigured,
+  sweepTrials: () => sweepTrials,
+  vendorBillingRecipient: () => vendorBillingRecipient,
+  vendorCommissionInvoices: () => vendorCommissionInvoices,
+  vendorPaymentState: () => vendorPaymentState,
+  verifyStripeSignature: () => verifyStripeSignature
+});
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { and as and2, desc, eq as eq3, isNull, sql as sql3 } from "drizzle-orm";
 async function stripe(method, path3, params = {}, opts = {}) {
@@ -2328,6 +2365,78 @@ async function recentInvoices(limit = 30) {
   const db = await getDb();
   return db.select().from(subscriptionInvoices).orderBy(desc(subscriptionInvoices.issuedAt)).limit(limit);
 }
+async function vendorBillingRecipient(v) {
+  if (v.billingEmail) return v.billingEmail;
+  if (v.contactEmail) return v.contactEmail;
+  const db = await getDb();
+  const [owner] = await db.select({ email: users.email }).from(vendorMembers).innerJoin(users, eq3(users.id, vendorMembers.userId)).where(eq3(vendorMembers.vendorId, v.id)).limit(1);
+  return owner?.email ?? null;
+}
+async function ensureVendorCustomer(vid, email) {
+  const db = await getDb();
+  const [v] = await db.select().from(vendors).where(eq3(vendors.id, vid));
+  if (!v) throw new Error("Fournisseur introuvable");
+  if (v.stripeCustomerId) return v.stripeCustomerId;
+  const cus = await stripe("POST", "/customers", { email, name: v.name, metadata: { vendorId: vid } }, { idempotencyKey: `vnd-${vid}` });
+  await db.update(vendors).set({ stripeCustomerId: cus.id }).where(eq3(vendors.id, vid));
+  return cus.id;
+}
+async function createVendorSetupSession(vid, email) {
+  const customer = await ensureVendorCustomer(vid, email);
+  return stripe("POST", "/checkout/sessions", {
+    mode: "setup",
+    customer,
+    locale: "fr",
+    currency: "eur",
+    payment_method_types: ["card"],
+    setup_intent_data: { metadata: { vendorId: vid } },
+    success_url: `${APP()}/fournisseur?paiement=ok&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${APP()}/fournisseur?paiement=annule`,
+    metadata: { vendorId: vid, usage: "commission" }
+  });
+}
+async function applyVendorSetup(session) {
+  const vid = session.metadata?.vendorId;
+  if (!vid) return { applied: false, reason: "metadata.vendorId absente" };
+  const db = await getDb();
+  const [v] = await db.select().from(vendors).where(eq3(vendors.id, vid));
+  if (!v) return { applied: false, reason: "fournisseur inconnu" };
+  if (session.customer && v.stripeCustomerId !== session.customer) await db.update(vendors).set({ stripeCustomerId: session.customer }).where(eq3(vendors.id, vid));
+  let pmId;
+  if (session.setup_intent) {
+    const si = await stripe("GET", `/setup_intents/${session.setup_intent}`);
+    pmId = si.payment_method ?? void 0;
+    if (pmId && session.customer) await stripe("POST", `/customers/${session.customer}`, { invoice_settings: { default_payment_method: pmId } });
+  }
+  if (pmId) await db.update(vendors).set({ stripeDefaultPaymentMethod: pmId }).where(eq3(vendors.id, vid));
+  return { applied: true, vendorId: vid, paymentMethod: pmId ?? null };
+}
+async function vendorPaymentState(vid) {
+  const db = await getDb();
+  const [v] = await db.select().from(vendors).where(eq3(vendors.id, vid));
+  const stripeOn = stripeConfigured();
+  let card = null;
+  if (v?.stripeCustomerId && v.stripeDefaultPaymentMethod && stripeOn) {
+    try {
+      const pm = await stripe("GET", `/payment_methods/${v.stripeDefaultPaymentMethod}`);
+      card = { id: pm.id, brand: pm.card?.brand ?? null, last4: pm.card?.last4 ?? null };
+    } catch {
+      card = null;
+    }
+  }
+  const mode = card ? "prelevement" : "releve_mail";
+  return {
+    stripe: stripeOn,
+    customer: v?.stripeCustomerId ?? null,
+    card,
+    mode,
+    message: !stripeOn ? "Pr\xE9l\xE8vement automatique indisponible sur cette installation : vos commissions sont factur\xE9es par e-mail, \xE0 r\xE9gler par virement (15 jours)." : card ? `Pr\xE9l\xE8vement automatique actif sur votre carte ${card.brand ?? ""} \u2022\u2022\u2022\u2022 ${card.last4 ?? "????"} : la facture de commission est r\xE9gl\xE9e automatiquement chaque mois.` : "Aucun moyen de paiement enregistr\xE9 : vous recevez chaque mois une facture de commission par e-mail, \xE0 r\xE9gler par virement (15 jours). Enregistrez une carte pour basculer en pr\xE9l\xE8vement automatique."
+  };
+}
+async function vendorCommissionInvoices(vid, limit = 36) {
+  const db = await getDb();
+  return db.select().from(commissionInvoices).where(eq3(commissionInvoices.vendorId, vid)).orderBy(desc(commissionInvoices.period)).limit(limit);
+}
 var PLAN_RANK, PLAN_PRICES, stripeConfigured, stripeApiBase, PLAN_SEATS, seatsFor, billingEnforced, priceIdFor, APP, STATUS_MAP, planPrice, effectivePrice;
 var init_billing = __esm({
   "apps/api/src/lib/billing.ts"() {
@@ -2495,10 +2604,10 @@ async function requireRestaurant(c, next) {
   const user = c.get("user");
   const wanted = c.req.header("x-restaurant-id");
   const memberships = await db.select({ restaurantId: restaurantMembers.restaurantId, role: restaurantMembers.role }).from(restaurantMembers).where(eq4(restaurantMembers.userId, user.id));
-  if (!memberships.length) return c.json({ error: "Aucun restaurant associ\xE9" }, 403);
+  if (!memberships.length) return c.json({ error: "Aucun restaurant associ\xE9 \xE0 ce compte", code: "no_restaurant" }, 403);
   const rid = wanted ?? memberships[0].restaurantId;
   const membership = memberships.find((m) => m.restaurantId === rid);
-  if (!membership) return c.json({ error: "Acc\xE8s refus\xE9 \xE0 ce restaurant" }, 403);
+  if (!membership) return c.json({ error: "Acc\xE8s refus\xE9 \xE0 cet \xE9tablissement (votre acc\xE8s a peut-\xEAtre \xE9t\xE9 modifi\xE9)", code: "restaurant_forbidden" }, 403);
   c.set("restaurantId", rid);
   c.set("role", membership.role);
   const [r] = await db.select({ plan: restaurants.plan, trialEndsAt: restaurants.trialEndsAt, subscriptionStatus: restaurants.subscriptionStatus, currentPeriodEnd: restaurants.currentPeriodEnd }).from(restaurants).where(eq4(restaurants.id, rid));
@@ -5010,6 +5119,63 @@ function invoicePdf(d) {
   p.text(`Facture ${d.number} \u2014 g\xE9n\xE9r\xE9e par AFRISUPPLY le ${fd(/* @__PURE__ */ new Date())}. Service client : ${e.email}.`, m, 7, { color: "0.5 0.5 0.5" });
   return p.build();
 }
+function commissionPdf(d) {
+  const p = new Pdf();
+  const m = p.margin;
+  const W = p.w - 2 * m;
+  const e = emitter();
+  const ttc = Math.round(d.amountHt * (1 + d.vatRate / 100) * 100) / 100;
+  const vat = Math.round((ttc - d.amountHt) * 100) / 100;
+  p.rect(0, 812, p.w, 30, 0.93);
+  p.cursor = 822;
+  p.text("AFRISUPPLY", m, 14, { bold: true, color: "0.76 0.25 0.05" });
+  p.text("Marketplace des restaurants africains", m + 110, 9, { color: "0.4 0.4 0.4" });
+  p.cursor = 780;
+  p.text("FACTURE DE COMMISSION", m, 16, { bold: true });
+  p.text(d.number, m, 16, { bold: true, align: "right", width: W });
+  p.down(15);
+  p.text(`P\xE9riode : ${d.periodLabel} \xB7 \xE9mise le ${fd(d.issuedAt)}${d.dueAt ? ` \xB7 \xE0 r\xE9gler avant le ${fd(d.dueAt)}` : ""}`, m, 9, { color: "0.35 0.35 0.35" });
+  p.down(26);
+  p.text("\xC9METTEUR", m, 8, { bold: true, color: "0.5 0.5 0.5" });
+  p.text("FOURNISSEUR", m + W / 2, 8, { bold: true, color: "0.5 0.5 0.5" });
+  p.down(13);
+  p.text(e.company, m, 11, { bold: true });
+  p.text(d.vendor.name, m + W / 2, 11, { bold: true });
+  const left = [e.address, e.siret ? `SIRET ${e.siret}` : "SIRET non renseign\xE9 (INVOICE_SIRET)", e.vat ? `TVA ${e.vat}` : "N\xB0 TVA non renseign\xE9 (INVOICE_VAT)", e.email];
+  const right = [d.vendor.address, d.vendor.city, d.vendor.email, d.vendor.siret ? `SIRET ${d.vendor.siret}` : null, d.vendor.vat ? `TVA ${d.vendor.vat}` : null].filter(Boolean);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    p.down(12);
+    if (left[i]) p.text(left[i], m, 9);
+    if (right[i]) p.text(right[i], m + W / 2, 9);
+  }
+  p.down(30);
+  p.rect(m, p.cursor - 5, W, 16, 0.92);
+  p.row([{ text: "D\xE9signation", x: m + 5, w: 250, bold: true }, { text: "Base", x: m + 260, w: 90, align: "right", bold: true }, { text: "Taux", x: m + 355, w: 45, align: "right", bold: true }, { text: "Montant HT", x: m + 410, w: 70, align: "right", bold: true }, { text: "Total TTC", x: m + 490, w: 65, align: "right", bold: true }]);
+  p.down(17);
+  p.row([{ text: `Commission sur commandes confirm\xE9es (${d.orders} commande${d.orders > 1 ? "s" : ""})`, x: m + 5, w: 250 }, { text: eur6(d.baseEur), x: m + 260, w: 90, align: "right" }, { text: `${d.pct.toFixed(2).replace(".", ",")} %`, x: m + 355, w: 45, align: "right" }, { text: eur6(d.amountHt), x: m + 410, w: 70, align: "right" }, { text: eur6(ttc), x: m + 490, w: 65, align: "right" }]);
+  p.line(m, p.cursor - 5, m + W, p.cursor - 5, 0.9);
+  p.down(20);
+  p.text("Total HT", m + 410, 10, { align: "right", width: 70 });
+  p.text(eur6(d.amountHt), m + 490, 10, { align: "right", width: 65 });
+  p.down(14);
+  p.text(`TVA ${d.vatRate.toFixed(0)} %`, m + 410, 10, { align: "right", width: 70 });
+  p.text(eur6(vat), m + 490, 10, { align: "right", width: 65 });
+  p.down(16);
+  p.text("TOTAL \xC0 PAYER TTC", m + 380, 12, { bold: true, align: "right", width: 100 });
+  p.text(eur6(ttc), m + 490, 12, { bold: true, align: "right", width: 65 });
+  p.down(22);
+  p.text(d.payment.mode === "prelevement" ? `R\xE8glement : pr\xE9l\xE8vement automatique sur la carte enregistr\xE9e${d.payment.card ? ` (${d.payment.card})` : ""} \u2014 aucun virement \xE0 effectuer.` : `R\xE8glement par virement : ${e.iban || "IBAN communiqu\xE9 sur demande (INVOICE_IBAN)"} \u2014 merci d'indiquer la r\xE9f\xE9rence ${d.number}.${d.payment.stripeUrl ? " Un lien de paiement en ligne figure dans l\u2019e-mail accompagnant cette facture." : ""}`, m, 9, { color: "0.3 0.3 0.3" });
+  p.down(14);
+  p.text("Commission de mise en relation commerciale (marketplace). En cas de retard de paiement : p\xE9nalit\xE9s au taux l\xE9gal + indemnit\xE9 forfaitaire de 40 \u20AC (art. L441-10 du Code de commerce).", m, 8, { color: "0.35 0.35 0.35" });
+  if (!emitterComplete()) {
+    p.down(14);
+    p.rect(m, p.cursor - 4, W, 22, 0.95);
+    p.text("\u26A0 Mentions l\xE9gales incompl\xE8tes : renseignez INVOICE_SIRET et INVOICE_VAT pour une facture conforme.", m + 5, 8, { bold: true, color: "0.6 0.3 0.05" });
+  }
+  p.cursor = 30;
+  p.text(`Facture de commission ${d.number} \u2014 AFRISUPPLY \xB7 service fournisseurs : ${e.email}.`, m, 7, { color: "0.5 0.5 0.5" });
+  return p.build();
+}
 var Pdf, eur6, fd, emitter, emitterComplete, PLAN_LABEL;
 var init_pdf = __esm({
   "apps/api/src/lib/pdf.ts"() {
@@ -5226,43 +5392,78 @@ async function invoiceCommissions(period, opts = {}) {
       out.push({ vendorId: r.vendorId, vendorName: v?.name ?? "?", orders: Number(r.orders), base: Number(r.base), amount, via: "skip" });
       continue;
     }
+    const chargeable = !!(v.stripeCustomerId && v.stripeDefaultPaymentMethod && stripeConfigured());
     if (opts.dryRun) {
-      out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via: v.stripeCustomerId && stripeConfigured() ? "stripe" : "mail" });
+      out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via: chargeable ? "stripe" : "mail", mode: chargeable ? "prelevement" : "releve" });
       continue;
     }
     const [existing] = await db.select().from(commissionInvoices).where(and13(eq16(commissionInvoices.vendorId, v.id), eq16(commissionInvoices.period, period)));
     if (existing) continue;
     let stripeInvoiceId;
     let via = "mail";
+    let mode = "releve";
     if (v.stripeCustomerId && stripeConfigured()) {
       try {
         await stripe("POST", "/invoiceitems", { customer: v.stripeCustomerId, amount: Math.round(amount * 100), currency: "eur", description: `Commission AFRISUPPLY ${period} \u2014 ${r.orders} commande(s), base ${eur7(Number(r.base))}` }, { idempotencyKey: `ci-${v.id}-${period}` });
-        const inv = await stripe("POST", "/invoices", { customer: v.stripeCustomerId, collection_method: "send_invoice", days_until_due: 15, auto_advance: true, metadata: { vendorId: v.id, period } }, { idempotencyKey: `inv-${v.id}-${period}` });
+        const prelevement = !!v.stripeDefaultPaymentMethod;
+        const inv = await stripe("POST", "/invoices", prelevement ? { customer: v.stripeCustomerId, collection_method: "charge_automatically", auto_advance: true, metadata: { vendorId: v.id, period } } : { customer: v.stripeCustomerId, collection_method: "send_invoice", days_until_due: 15, auto_advance: true, metadata: { vendorId: v.id, period } }, { idempotencyKey: `inv-${v.id}-${period}` });
         await stripe("POST", `/invoices/${inv.id}/finalize`);
-        await stripe("POST", `/invoices/${inv.id}/send`);
+        if (!prelevement) await stripe("POST", `/invoices/${inv.id}/send`);
         stripeInvoiceId = inv.id;
         via = "stripe";
+        mode = prelevement ? "prelevement" : "releve";
       } catch (e) {
         console.error("[commissions] stripe", e);
       }
     }
-    if (via === "mail") {
-      const [m] = await db.select({ email: users.email }).from(vendorMembers).innerJoin(users, eq16(users.id, vendorMembers.userId)).where(eq16(vendorMembers.vendorId, v.id)).limit(1);
-      const to = v.contactEmail ?? m?.email;
-      if (to) await sendMail({ to, subject: `AFRISUPPLY \u2014 relev\xE9 de commission ${period} : ${eur7(amount)}`, text: `Bonjour,
+    const to = await vendorBillingRecipient({ id: v.id, billingEmail: v.billingEmail, contactEmail: v.contactEmail });
+    const monthLabel = (/* @__PURE__ */ new Date(`${period}-01T00:00:00Z`)).toLocaleDateString("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" });
+    const ttc = Math.round(amount * 1.2 * 100) / 100;
+    const pdf = commissionPdf({
+      number: `FC-${period}`,
+      periodLabel: monthLabel,
+      issuedAt: /* @__PURE__ */ new Date(),
+      dueAt: new Date(Date.now() + 15 * 864e5),
+      vendor: { name: v.name, city: v.city, email: to },
+      orders: Number(r.orders),
+      baseEur: Number(r.base),
+      pct: Number(v.commissionPct),
+      amountHt: amount,
+      vatRate: 20,
+      payment: { mode: mode === "prelevement" ? "prelevement" : "virement" }
+    });
+    if (to) await sendMail({
+      to,
+      subject: mode === "prelevement" ? `AFRISUPPLY \u2014 commission ${period} : ${eur7(amount)} HT (pr\xE9lev\xE9e sur votre carte)` : `AFRISUPPLY \u2014 facture de commission ${period} : ${eur7(amount)} HT (${eur7(ttc)} TTC)`,
+      text: `Bonjour,
 
-Relev\xE9 de commission ${period} pour ${v.name} :
+Facture de commission ${period} pour ${v.name} :
 - ${r.orders} commande(s) confirm\xE9e(s), base ${eur7(Number(r.base))}
-- Commission ${Number(v.commissionPct)} % : ${eur7(amount)}
+- Commission ${Number(v.commissionPct).toFixed(2).replace(".", ",")} % : ${eur7(amount)} HT \u2014 ${eur7(ttc)} TTC
 
-R\xE8glement sous 15 jours par virement (RIB dans votre espace) \u2014 ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur.
+${mode === "prelevement" ? "Pr\xE9l\xE8vement automatique sur la carte enregistr\xE9e dans votre espace fournisseur : aucune action de votre part." : "R\xE8glement sous 15 jours par virement (ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur)."}
+
+La facture est jointe \xE0 ce message (PDF).
 
 Merci de votre confiance,
-L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Relev\xE9 de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirm\xE9e(s), base ${eur7(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur7(amount)}</b></li></ul><p>R\xE8glement sous 15 jours par virement \u2014 ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur.</p><p>L'\xE9quipe AFRISUPPLY</p>`, tags: { type: "commission" } });
-    }
-    await db.insert(commissionInvoices).values({ vendorId: v.id, period, orders: Number(r.orders), baseEur: Number(r.base).toFixed(2), amountEur: amount.toFixed(2), stripeInvoiceId, status: via === "stripe" ? "emise" : "envoyee_par_mail" });
+L'\xE9quipe AFRISUPPLY`,
+      html: `<p>Bonjour,</p><p>Facture de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirm\xE9e(s), base ${eur7(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur7(amount)} HT</b> \u2014 ${eur7(ttc)} TTC</li></ul><p>${mode === "prelevement" ? "Pr\xE9l\xE8vement automatique sur la carte enregistr\xE9e : aucune action de votre part." : "R\xE8glement sous 15 jours par virement, ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur."}</p><p>La facture est jointe \xE0 ce message (PDF).</p><p>L'\xE9quipe AFRISUPPLY</p>`,
+      tags: { type: "commission", vendor: v.id },
+      attachments: [{ filename: `commission-${period}.pdf`, content: pdf, contentType: "application/pdf" }]
+    });
+    await db.insert(commissionInvoices).values({
+      vendorId: v.id,
+      period,
+      orders: Number(r.orders),
+      baseEur: Number(r.base).toFixed(2),
+      amountEur: amount.toFixed(2),
+      stripeInvoiceId,
+      // « emise » tant que Stripe n'a pas confirmé l'encaissement (le webhook invoice.paid passe en « payee ») :
+      // on ne prétend jamais qu'une commission est réglée avant l'encaissement réel.
+      status: via === "stripe" ? "emise" : "envoyee_par_mail"
+    });
     await db.update(commissions).set({ invoiced: true }).where(and13(eq16(commissions.vendorId, v.id), eq16(commissions.period, period)));
-    out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via, stripeInvoiceId });
+    out.push({ vendorId: v.id, vendorName: v.name, orders: Number(r.orders), base: Number(r.base), amount, via, mode, stripeInvoiceId, recipient: to });
   }
   return { period, invoices: out, dryRun: !!opts.dryRun };
 }
@@ -5274,6 +5475,7 @@ var init_billing2 = __esm({
     init_auth();
     init_public();
     init_billing();
+    init_pdf();
     init_pdf();
     init_job_runs();
     init_mailer();
@@ -5302,6 +5504,9 @@ var init_billing2 = __esm({
         if (evt.type === "checkout.session.completed" && o.mode === "subscription" && typeof o.subscription === "string") {
           const sub = await stripe("GET", `/subscriptions/${o.subscription}`);
           rid = (await applySubscription(sub)).rid;
+        } else if (evt.type === "checkout.session.completed" && o.mode === "setup") {
+          const res = await applyVendorSetup(o);
+          if (!res.applied) throw new Error(`Session \xAB enregistrer une carte \xBB non appliqu\xE9e : ${res.reason}`);
         } else if (evt.type.startsWith("customer.subscription.")) {
           rid = (await applySubscription(o)).rid;
         } else if ((evt.type === "invoice.paid" || evt.type === "invoice.payment_succeeded") && o.id) {
@@ -7742,6 +7947,7 @@ L'\xE9quipe AFRISUPPLY`;
 
 // apps/api/src/routes/vendor.ts
 init_pdf();
+init_billing();
 init_marketplace();
 init_src();
 init_src();
@@ -7979,11 +8185,26 @@ vendorRoutes.get("/vendor/dashboard", async (c) => {
   return c.json({ vendor: v, stats: { pendingOrders: n9(stats3.pending), confirmedOrders: n9(stats3.confirmed), monthRevenue: n9(stats3.month), restaurantsServed: n9(stats3.restaurants), offers: n9(offers), restaurantsFollowing: n9(linked), commissionThisMonth: n9(commission), commissionPct: n9(v.commissionPct) } });
 });
 vendorRoutes.put("/vendor/profile", async (c) => {
-  const body3 = z10.object({ name: z10.string().min(2).optional(), description: z10.string().max(500).nullable().optional(), city: z10.string().nullable().optional(), deliveryZones: z10.array(z10.string()).max(30).optional(), leadTimeHours: z10.number().int().positive().optional(), deliveryDays: z10.array(z10.number().int().min(1).max(7)).optional(), minOrderEur: z10.number().nonnegative().optional(), deliveryFeeEur: z10.number().nonnegative().optional(), contactEmail: z10.string().email().nullable().optional(), contactPhone: z10.string().nullable().optional(), whatsapp: z10.string().nullable().optional() }).safeParse(await c.req.json());
+  const body3 = z10.object({
+    name: z10.string().min(2).optional(),
+    description: z10.string().max(500).nullable().optional(),
+    city: z10.string().nullable().optional(),
+    deliveryZones: z10.array(z10.string()).max(30).optional(),
+    leadTimeHours: z10.number().int().positive().optional(),
+    deliveryDays: z10.array(z10.number().int().min(1).max(7)).optional(),
+    minOrderEur: z10.number().nonnegative().optional(),
+    deliveryFeeEur: z10.number().nonnegative().optional(),
+    contactEmail: z10.string().email().nullable().optional(),
+    contactPhone: z10.string().nullable().optional(),
+    whatsapp: z10.string().nullable().optional(),
+    // Chantier 8 : adresse de facturation (comptabilité) — sinon l'e-mail de contact est utilisé.
+    billingEmail: z10.union([z10.string().email(), z10.literal(""), z10.null()]).optional()
+  }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const d = body3.data;
-  const [v] = await db.update(vendors).set({ ...d, deliveryZones: d.deliveryZones?.map((z21) => z21.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq23(vendors.id, c.get("vendorId"))).returning();
+  const { billingEmail, ...rest } = d;
+  const [v] = await db.update(vendors).set({ ...rest, ...billingEmail !== void 0 ? { billingEmail: billingEmail || null } : {}, deliveryZones: d.deliveryZones?.map((z21) => z21.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq23(vendors.id, c.get("vendorId"))).returning();
   return c.json({ vendor: v });
 });
 vendorRoutes.get("/vendor/offers", async (c) => {
@@ -8334,6 +8555,66 @@ vendorRoutes.post("/vendor/group-buys/:id/close", async (c) => {
   }
   await db.update(groupBuys).set({ status: "cloture" }).where(eq23(groupBuys.id, id));
   return c.json({ ok: true, status: "cloture", committed, ordersCreated: created });
+});
+vendorRoutes.get("/vendor/billing", async (c) => {
+  const db = await getDb();
+  const vid = c.get("vendorId");
+  const [v] = await db.select().from(vendors).where(eq23(vendors.id, vid));
+  const [state, invoices, rows] = await Promise.all([vendorPaymentState(vid), vendorCommissionInvoices(vid), db.select({ period: commissions.period, orders: sql17`count(*)`, base: sql17`sum(${commissions.orderTotalEur})`, amount: sql17`sum(${commissions.amountEur})`, invoiced: sql17`bool_and(${commissions.invoiced})` }).from(commissions).where(eq23(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc11(commissions.period))]);
+  return c.json({
+    commissionPct: n9(v?.commissionPct),
+    billingEmail: v?.billingEmail ?? null,
+    contactEmail: v?.contactEmail ?? null,
+    recipient: await vendorBillingRecipient({ id: vid, billingEmail: v?.billingEmail, contactEmail: v?.contactEmail }),
+    payment: state,
+    periods: rows.map((r) => ({ ...r, orders: n9(r.orders), base: n9(r.base), amount: n9(r.amount) })),
+    invoices: invoices.map((i) => ({ id: i.id, period: i.period, orders: i.orders, baseEur: n9(i.baseEur), amountEur: n9(i.amountEur), status: i.status, stripeInvoiceId: i.stripeInvoiceId, createdAt: i.createdAt }))
+  });
+});
+vendorRoutes.post("/vendor/billing/setup", async (c) => {
+  if (!stripeConfigured()) return c.json({ error: "Enregistrement de carte indisponible sur cette installation \u2014 vos commissions sont factur\xE9es par e-mail, \xE0 r\xE9gler par virement. \xC9crivez \xE0 bonjour@afrisupply.fr pour toute question." }, 503);
+  try {
+    const session = await createVendorSetupSession(c.get("vendorId"), c.get("user").email);
+    await audit("vendor.billing.setup", { actorEmail: c.get("user").email, target: c.get("vendorId") });
+    return c.json({ url: session.url });
+  } catch (e) {
+    return c.json({ error: e.message }, 502);
+  }
+});
+vendorRoutes.post("/vendor/billing/sync", async (c) => {
+  const body3 = z10.object({ sessionId: z10.string().optional() }).parse(await c.req.json().catch(() => ({})));
+  if (!stripeConfigured()) return c.json({ synced: false });
+  if (!body3.sessionId) return c.json({ synced: false, error: "sessionId manquant" }, 400);
+  try {
+    const s = await (await Promise.resolve().then(() => (init_billing(), billing_exports))).stripe("GET", `/checkout/sessions/${body3.sessionId}`);
+    if (s.metadata?.vendorId !== c.get("vendorId")) return c.json({ synced: false, error: "session inconnue pour ce fournisseur" }, 403);
+    const res = await applyVendorSetup(s);
+    return c.json({ synced: res.applied, ...res, payment: await vendorPaymentState(c.get("vendorId")) });
+  } catch (e) {
+    return c.json({ synced: false, error: e.message }, 502);
+  }
+});
+vendorRoutes.get("/vendor/billing/invoices/:id/pdf", async (c) => {
+  const db = await getDb();
+  const [inv] = await db.select().from(commissionInvoices).where(and20(eq23(commissionInvoices.id, c.req.param("id")), eq23(commissionInvoices.vendorId, c.get("vendorId"))));
+  if (!inv) return c.json({ error: "Facture introuvable" }, 404);
+  const [v] = await db.select().from(vendors).where(eq23(vendors.id, inv.vendorId));
+  const state = await vendorPaymentState(inv.vendorId);
+  const monthLabel = (/* @__PURE__ */ new Date(`${inv.period}-01T00:00:00Z`)).toLocaleDateString("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" });
+  const pdf = commissionPdf({
+    number: `FC-${inv.period}-${String(inv.id).slice(0, 4).toUpperCase()}`,
+    periodLabel: monthLabel,
+    issuedAt: inv.createdAt,
+    dueAt: new Date(inv.createdAt.getTime() + 15 * 864e5),
+    vendor: { name: v?.name ?? "Fournisseur", city: v?.city, email: v?.billingEmail ?? v?.contactEmail ?? null },
+    orders: inv.orders,
+    baseEur: n9(inv.baseEur),
+    pct: Number(v?.commissionPct ?? 3),
+    amountHt: n9(inv.amountEur),
+    vatRate: 20,
+    payment: { mode: state.mode === "prelevement" ? "prelevement" : "virement", card: state.card ? `${state.card.brand ?? "carte"} \u2022\u2022\u2022\u2022 ${state.card.last4 ?? "????"}` : null }
+  });
+  return new Response(new Uint8Array(pdf), { headers: { "content-type": "application/pdf", "content-disposition": `inline; filename="${inv.period}-commission.pdf"` } });
 });
 vendorRoutes.get("/vendor/commissions", async (c) => {
   const db = await getDb();

@@ -3,7 +3,7 @@
 import { Hono, type Context, type Next } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { getDb, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
+import { getDb, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, commissionInvoices, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
 import { similarity } from '../lib/quick.js';
 import { nextOrderReference } from '../lib/reference.js';
 import { requireAuth, type Env } from '../lib/auth.js';
@@ -15,7 +15,9 @@ import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
 import { vendorPriceTiers, vendorCustomerPrices } from '@afrisupply/db';
 import { audit } from '../lib/ops.js';
 import { readVendorInvite } from './prospects.js';
-import { orderPdf } from '../lib/pdf.js';
+import { orderPdf, commissionPdf } from '../lib/pdf.js';
+// Chantier 8 de l'audit 2 : moyen de paiement du fournisseur (commissions par prélèvement ou relevé).
+import { stripeConfigured, vendorPaymentState, vendorBillingRecipient, createVendorSetupSession, applyVendorSetup, vendorCommissionInvoices } from '../lib/billing.js';
 import { restaurantZones } from './marketplace.js';
 import { inventoryItems, leads } from '@afrisupply/db';
 import { prospects } from '@afrisupply/db';
@@ -92,10 +94,13 @@ vendorRoutes.get('/vendor/dashboard', async (c) => {
 });
 
 vendorRoutes.put('/vendor/profile', async (c) => {
-  const body = z.object({ name: z.string().min(2).optional(), description: z.string().max(500).nullable().optional(), city: z.string().nullable().optional(), deliveryZones: z.array(z.string()).max(30).optional(), leadTimeHours: z.number().int().positive().optional(), deliveryDays: z.array(z.number().int().min(1).max(7)).optional(), minOrderEur: z.number().nonnegative().optional(), deliveryFeeEur: z.number().nonnegative().optional(), contactEmail: z.string().email().nullable().optional(), contactPhone: z.string().nullable().optional(), whatsapp: z.string().nullable().optional() }).safeParse(await c.req.json());
+  const body = z.object({ name: z.string().min(2).optional(), description: z.string().max(500).nullable().optional(), city: z.string().nullable().optional(), deliveryZones: z.array(z.string()).max(30).optional(), leadTimeHours: z.number().int().positive().optional(), deliveryDays: z.array(z.number().int().min(1).max(7)).optional(), minOrderEur: z.number().nonnegative().optional(), deliveryFeeEur: z.number().nonnegative().optional(), contactEmail: z.string().email().nullable().optional(), contactPhone: z.string().nullable().optional(), whatsapp: z.string().nullable().optional(),
+    // Chantier 8 : adresse de facturation (comptabilité) — sinon l'e-mail de contact est utilisé.
+    billingEmail: z.union([z.string().email(), z.literal(''), z.null()]).optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const db = await getDb(); const d = body.data;
-  const [v] = await db.update(vendors).set({ ...d, deliveryZones: d.deliveryZones?.map((z) => z.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq(vendors.id, c.get('vendorId'))).returning();
+  const { billingEmail, ...rest } = d;
+  const [v] = await db.update(vendors).set({ ...rest, ...(billingEmail !== undefined ? { billingEmail: billingEmail || null } : {}), deliveryZones: d.deliveryZones?.map((z) => z.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq(vendors.id, c.get('vendorId'))).returning();
   return c.json({ vendor: v });
 });
 
@@ -363,6 +368,65 @@ vendorRoutes.post('/vendor/group-buys/:id/close', async (c) => {
   }
   await db.update(groupBuys).set({ status: 'cloture' }).where(eq(groupBuys.id, id));
   return c.json({ ok: true, status: 'cloture', committed, ordersCreated: created });
+});
+
+// ---- facturation fournisseur (chantier 8) : moyen de paiement + factures de commission ----
+/**
+ * État réel du règlement des commissions : carte enregistrée (prélèvement) ou relevé par e-mail.
+ * Jamais de bouton trompeur : si Stripe n'est pas configuré, on le dit et on propose le virement.
+ */
+vendorRoutes.get('/vendor/billing', async (c) => {
+  const db = await getDb(); const vid = c.get('vendorId');
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
+  const [state, invoices, rows] = await Promise.all([vendorPaymentState(vid), vendorCommissionInvoices(vid), db.select({ period: commissions.period, orders: sql<number>`count(*)`, base: sql<number>`sum(${commissions.orderTotalEur})`, amount: sql<number>`sum(${commissions.amountEur})`, invoiced: sql<boolean>`bool_and(${commissions.invoiced})` }).from(commissions).where(eq(commissions.vendorId, vid)).groupBy(commissions.period).orderBy(desc(commissions.period))]);
+  return c.json({
+    commissionPct: n(v?.commissionPct), billingEmail: v?.billingEmail ?? null, contactEmail: v?.contactEmail ?? null,
+    recipient: await vendorBillingRecipient({ id: vid, billingEmail: v?.billingEmail, contactEmail: v?.contactEmail }),
+    payment: state,
+    periods: rows.map((r) => ({ ...r, orders: n(r.orders), base: n(r.base), amount: n(r.amount) })),
+    invoices: invoices.map((i) => ({ id: i.id, period: i.period, orders: i.orders, baseEur: n(i.baseEur), amountEur: n(i.amountEur), status: i.status, stripeInvoiceId: i.stripeInvoiceId, createdAt: i.createdAt })),
+  });
+});
+
+/** Enregistrer une carte (Stripe Checkout en mode « setup ») : aucun débit à cette étape. */
+vendorRoutes.post('/vendor/billing/setup', async (c) => {
+  if (!stripeConfigured()) return c.json({ error: 'Enregistrement de carte indisponible sur cette installation — vos commissions sont facturées par e-mail, à régler par virement. Écrivez à bonjour@afrisupply.fr pour toute question.' }, 503);
+  try {
+    const session = await createVendorSetupSession(c.get('vendorId'), c.get('user').email);
+    await audit('vendor.billing.setup', { actorEmail: c.get('user').email, target: c.get('vendorId') });
+    return c.json({ url: session.url });
+  } catch (e) { return c.json({ error: (e as Error).message }, 502); }
+});
+
+/** Retour de Checkout : on applique le moyen de paiement sans attendre le webhook. */
+vendorRoutes.post('/vendor/billing/sync', async (c) => {
+  const body = z.object({ sessionId: z.string().optional() }).parse(await c.req.json().catch(() => ({})));
+  if (!stripeConfigured()) return c.json({ synced: false });
+  if (!body.sessionId) return c.json({ synced: false, error: 'sessionId manquant' }, 400);
+  try {
+    const s = await (await import('../lib/billing.js')).stripe<{ id: string; mode?: string; customer?: string; setup_intent?: string; metadata?: Record<string, string> }>('GET', `/checkout/sessions/${body.sessionId}`);
+    if (s.metadata?.vendorId !== c.get('vendorId')) return c.json({ synced: false, error: 'session inconnue pour ce fournisseur' }, 403);
+    const res = await applyVendorSetup(s);
+    return c.json({ synced: res.applied, ...res, payment: await vendorPaymentState(c.get('vendorId')) });
+  } catch (e) { return c.json({ synced: false, error: (e as Error).message }, 502); }
+});
+
+/** Facture de commission PDF (le fournisseur ne voit que les siennes). */
+vendorRoutes.get('/vendor/billing/invoices/:id/pdf', async (c) => {
+  const db = await getDb();
+  const [inv] = await db.select().from(commissionInvoices).where(and(eq(commissionInvoices.id, c.req.param('id')), eq(commissionInvoices.vendorId, c.get('vendorId'))));
+  if (!inv) return c.json({ error: 'Facture introuvable' }, 404);
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, inv.vendorId));
+  const state = await vendorPaymentState(inv.vendorId);
+  const monthLabel = new Date(`${inv.period}-01T00:00:00Z`).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const pdf = commissionPdf({
+    number: `FC-${inv.period}-${String(inv.id).slice(0, 4).toUpperCase()}`,
+    periodLabel: monthLabel, issuedAt: inv.createdAt, dueAt: new Date(inv.createdAt.getTime() + 15 * 86_400_000),
+    vendor: { name: v?.name ?? 'Fournisseur', city: v?.city, email: v?.billingEmail ?? v?.contactEmail ?? null },
+    orders: inv.orders, baseEur: n(inv.baseEur), pct: Number(v?.commissionPct ?? 3), amountHt: n(inv.amountEur), vatRate: 20,
+    payment: { mode: state.mode === 'prelevement' ? 'prelevement' : 'virement', card: state.card ? `${state.card.brand ?? 'carte'} •••• ${state.card.last4 ?? '????'}` : null },
+  });
+  return new Response(new Uint8Array(pdf), { headers: { 'content-type': 'application/pdf', 'content-disposition': `inline; filename="${inv.period}-commission.pdf"` } });
 });
 
 // ---- commissions ----

@@ -1,7 +1,7 @@
 // Port de ethimarket/src/components/DashboardLayout.tsx — navigation à 6 entrées du concept AFRISUPPLY
 import { useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users, Building2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { FeedbackWidget, UsageBeacon } from './Pilot';
 import { useAuth } from '../lib/auth';
@@ -26,6 +26,7 @@ const NAV = [
   { to: '/app/analyse', icon: BarChart3, label: 'Analyse' },
   { to: '/app/ia', icon: Sparkles, label: 'Demander à l’IA' },
   { to: '/app/demarrer', icon: Rocket, label: 'Configurer ma carte' },
+  { to: '/app/etablissements', icon: Building2, label: 'Mes établissements' },
   { to: '/app/equipe', icon: Users, label: 'Équipe & sécurité' },
   { to: '/app/parametres', icon: SettingsIcon, label: 'Paramètres', minRole: 'manager' as const },
 ];
@@ -43,7 +44,7 @@ export function Logo({ light = false, to = '/app' }: { light?: boolean; to?: str
 }
 
 export default function AppLayout() {
-  const { user, restaurant, restaurants, logout, switchRestaurant } = useAuth();
+  const { user, restaurant, restaurants, logout, switchRestaurant, accessNotice, clearAccessNotice } = useAuth();
   const myRole = restaurant?.role ?? 'owner';
   const visibleNav = NAV.filter((item) => ROLE_RANK[myRole] >= ROLE_RANK[(item as { minRole?: string }).minRole ?? 'staff']);
   const [open, setOpen] = useState(false);
@@ -108,6 +109,16 @@ export default function AppLayout() {
           </div>
         </header>
         <TrialBanner />
+        {accessNotice && (
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+            <div className="mx-auto flex max-w-7xl items-start justify-between gap-3">
+              <p>⚠️ {accessNotice}{' '}
+                {restaurants.length > 1 && <Link to="/app/etablissements" className="underline">Choisir un autre établissement</Link>}
+              </p>
+              <button className="shrink-0 text-xs underline" onClick={clearAccessNotice}>Fermer</button>
+            </div>
+          </div>
+        )}
         <EmailVerifyBanner />
         <main id="main-content" className="px-4 py-6 lg:px-8 lg:py-8 max-w-7xl"><Outlet /></main>
         <FeedbackWidget /><UsageBeacon />

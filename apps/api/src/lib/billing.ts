@@ -2,7 +2,7 @@
 // des fournisseurs plateforme. Client Stripe minimal en fetch (pas de SDK : bundle Vercel léger, API stable).
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import { getDb, restaurants, restaurantMembers, subscriptionInvoices, users } from '@afrisupply/db';
+import { getDb, restaurants, restaurantMembers, subscriptionInvoices, users, vendors, vendorMembers, commissionInvoices } from '@afrisupply/db';
 
 export type PlanId = 'starter' | 'pro' | 'business';
 export const PLAN_RANK: Record<string, number> = { trial: 2, starter: 1, pro: 2, business: 3 }; // l'essai donne les fonctions Pro
@@ -231,4 +231,104 @@ export async function mrr() {
 export async function recentInvoices(limit = 30) {
   const db = await getDb();
   return db.select().from(subscriptionInvoices).orderBy(desc(subscriptionInvoices.issuedAt)).limit(limit);
+}
+
+// ---------------------------------------------------------------- Fournisseurs (chantier 8)
+// Les fournisseurs paient une commission à AFRISUPPLY (3 % par défaut). Jusqu'ici, le chemin
+// « prélèvement automatique » de `invoiceCommissions` ne pouvait jamais s'activer : aucun
+// identifiant client Stripe n'était créé. Ces fonctions le rendent réel et vérifiable.
+
+/** Adresse à qui envoyer les factures de commission (facturation, sinon contact, sinon propriétaire du compte). */
+export async function vendorBillingRecipient(v: { billingEmail?: string | null; contactEmail?: string | null; id: string }): Promise<string | null> {
+  if (v.billingEmail) return v.billingEmail;
+  if (v.contactEmail) return v.contactEmail;
+  const db = await getDb();
+  const [owner] = await db.select({ email: users.email }).from(vendorMembers).innerJoin(users, eq(users.id, vendorMembers.userId))
+    .where(eq(vendorMembers.vendorId, v.id)).limit(1);
+  return owner?.email ?? null;
+}
+
+/** Client Stripe du fournisseur (créé au besoin, idempotent). */
+export async function ensureVendorCustomer(vid: string, email: string) {
+  const db = await getDb();
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
+  if (!v) throw new Error('Fournisseur introuvable');
+  if (v.stripeCustomerId) return v.stripeCustomerId;
+  const cus = await stripe<{ id: string }>('POST', '/customers', { email, name: v.name, metadata: { vendorId: vid } }, { idempotencyKey: `vnd-${vid}` });
+  await db.update(vendors).set({ stripeCustomerId: cus.id }).where(eq(vendors.id, vid));
+  return cus.id;
+}
+
+/** Session Checkout « enregistrer une carte » (mode setup) — aucun débit à cette étape. */
+export async function createVendorSetupSession(vid: string, email: string) {
+  const customer = await ensureVendorCustomer(vid, email);
+  return stripe<{ id: string; url: string }>('POST', '/checkout/sessions', {
+    mode: 'setup', customer, locale: 'fr', currency: 'eur',
+    payment_method_types: ['card'],
+    setup_intent_data: { metadata: { vendorId: vid } },
+    success_url: `${APP()}/fournisseur?paiement=ok&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${APP()}/fournisseur?paiement=annule`,
+    metadata: { vendorId: vid, usage: 'commission' },
+  });
+}
+
+/**
+ * Applique le retour d'une session « enregistrer une carte » : le fournisseur garde un moyen de
+ * paiement par défaut, ce qui autorise le prélèvement automatique des commissions.
+ */
+export async function applyVendorSetup(session: { id?: string; customer?: string; mode?: string; setup_intent?: string; metadata?: Record<string, string> }) {
+  const vid = session.metadata?.vendorId;
+  if (!vid) return { applied: false as const, reason: 'metadata.vendorId absente' };
+  const db = await getDb();
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
+  if (!v) return { applied: false as const, reason: 'fournisseur inconnu' };
+  if (session.customer && v.stripeCustomerId !== session.customer) await db.update(vendors).set({ stripeCustomerId: session.customer }).where(eq(vendors.id, vid));
+  let pmId: string | undefined;
+  if (session.setup_intent) {
+    const si = await stripe<{ payment_method?: string; status?: string }>('GET', `/setup_intents/${session.setup_intent}`);
+    pmId = si.payment_method ?? undefined;
+    if (pmId && session.customer) await stripe('POST', `/customers/${session.customer}`, { invoice_settings: { default_payment_method: pmId } });
+  }
+  if (pmId) await db.update(vendors).set({ stripeDefaultPaymentMethod: pmId }).where(eq(vendors.id, vid));
+  return { applied: true as const, vendorId: vid, paymentMethod: pmId ?? null };
+}
+
+export type VendorPaymentState = {
+  stripe: boolean;
+  customer: string | null;
+  card: { id: string; brand: string | null; last4: string | null } | null;
+  mode: 'prelevement' | 'releve_mail';
+  message: string;
+};
+
+/** État réel du moyen de paiement d'un fournisseur — jamais une intention. */
+export async function vendorPaymentState(vid: string): Promise<VendorPaymentState> {
+  const db = await getDb();
+  const [v] = await db.select().from(vendors).where(eq(vendors.id, vid));
+  const stripeOn = stripeConfigured();
+  let card: VendorPaymentState['card'] = null;
+  if (v?.stripeCustomerId && v.stripeDefaultPaymentMethod && stripeOn) {
+    try {
+      const pm = await stripe<{ id: string; card?: { brand?: string; last4?: string } }>('GET', `/payment_methods/${v.stripeDefaultPaymentMethod}`);
+      card = { id: pm.id, brand: pm.card?.brand ?? null, last4: pm.card?.last4 ?? null };
+    } catch { card = null; } // la carte a pu être supprimée côté Stripe : on ne prétend rien
+  }
+  const mode: VendorPaymentState['mode'] = card ? 'prelevement' : 'releve_mail';
+  return {
+    stripe: stripeOn,
+    customer: v?.stripeCustomerId ?? null,
+    card,
+    mode,
+    message: !stripeOn
+      ? 'Prélèvement automatique indisponible sur cette installation : vos commissions sont facturées par e-mail, à régler par virement (15 jours).'
+      : card
+        ? `Prélèvement automatique actif sur votre carte ${card.brand ?? ''} •••• ${card.last4 ?? '????'} : la facture de commission est réglée automatiquement chaque mois.`
+        : 'Aucun moyen de paiement enregistré : vous recevez chaque mois une facture de commission par e-mail, à régler par virement (15 jours). Enregistrez une carte pour basculer en prélèvement automatique.',
+  };
+}
+
+/** Factures de commission émises pour un fournisseur (chantier 8 : visibles et téléchargeables par lui). */
+export async function vendorCommissionInvoices(vid: string, limit = 36) {
+  const db = await getDb();
+  return db.select().from(commissionInvoices).where(eq(commissionInvoices.vendorId, vid)).orderBy(desc(commissionInvoices.period)).limit(limit);
 }
