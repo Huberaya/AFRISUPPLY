@@ -640,3 +640,21 @@ export const orderEvents = pgTable('order_events', {
   label: text('label').notNull(),
   meta: jsonb('meta').$type<Record<string, unknown>>(),
 }, (t) => [index('order_events_order_idx').on(t.orderId)]);
+
+// ---------- Chantier 24 : commandes récurrentes ----------
+export const recurringOrders = pgTable('recurring_orders', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  restaurantId: uuid('restaurant_id').notNull().references(() => restaurants.id, { onDelete: 'cascade' }),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),                                   // « Commande du lundi »
+  weekdays: jsonb('weekdays').$type<number[]>().notNull(),        // 0=dim … 6=sam
+  lines: jsonb('lines').$type<{ vendorOfferId: string; packs: number }[]>().notNull(),
+  mode: text('mode').default('auto').notNull(),                   // auto : envoyée directement | confirm : e-mail « valider en 1 clic »
+  enabled: boolean('enabled').default(true).notNull(),
+  notes: text('notes'),
+  lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+  lastOrderId: uuid('last_order_id'),
+  nextRunOn: date('next_run_on'),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('recurring_restaurant_idx').on(t.restaurantId)]);

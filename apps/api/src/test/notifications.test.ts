@@ -103,3 +103,26 @@ describe('chantier 21 — ruptures & substitutions', () => {
     const tl = await call('GET', `/api/orders/${oid3}/timeline`, undefined, R); expect(tl.json.events.map((e: Json) => e.type)).toEqual(['sent', 'note', 'cancelled']);
   });
 });
+
+describe('chantier 24 — recommander & récurrent', () => {
+  it('aperçu au prix du jour, recommande, programmation, exécution par le job', async () => {
+    const mine = (await call('GET', '/api/orders', undefined, R)).json.orders.filter((o: Json) => o.vendorId && o.status === 'confirmee'); const src = mine[0]; expect(src).toBeTruthy();
+    const pv = await call('GET', `/api/orders/${src.id}/reorder-preview`, undefined, R); expect(pv.status).toBe(200); expect(pv.json.items.length).toBeGreaterThan(0); expect(pv.json.total).toBeGreaterThan(0);
+    const re = await call('POST', `/api/orders/${src.id}/reorder`, {}, R); expect(re.status).toBe(201); expect(re.json.order.source).toBe('recommande'); expect(re.json.order.status).toBe('envoyee');
+    const bad = await call('POST', '/api/recurring', { fromOrderId: src.id, name: 'Lundi', weekdays: [] }, R); expect(bad.status).toBe(400);
+    const today = new Date().getDay(); const tomorrow = (today + 1) % 7;
+    const rec = await call('POST', '/api/recurring', { fromOrderId: src.id, name: 'Commande du lendemain', weekdays: [tomorrow] }, R); expect(rec.status).toBe(201);
+    const exp = new Date(); exp.setDate(exp.getDate() + 1); expect(rec.json.recurring.nextRunOn).toBe(exp.toISOString().slice(0, 10));
+    const list = await call('GET', '/api/recurring', undefined, R); expect(list.json.recurring.length).toBe(1); expect(list.json.recurring[0].estimatedTotal).toBeGreaterThan(0);
+    // job : rien aujourd'hui, puis exécution « demain »
+    const { runRecurringOrders } = await import('../routes/marketplace.js');
+    expect((await runRecurringOrders()).due).toBe(0);
+    const run = await runRecurringOrders(exp); expect(run.due).toBe(1); expect(run.results[0].ok).toBe(true);
+    const again = await runRecurringOrders(exp); expect(again.due).toBe(0); // nextRunOn a avancé d'une semaine
+    const after = (await call('GET', '/api/recurring', undefined, R)).json.recurring[0]; expect(after.lastOrderId).toBeTruthy();
+    const ord = (await call('GET', '/api/orders', undefined, R)).json.orders.find((o: Json) => o.id === after.lastOrderId); expect(ord.source).toBe('recurrente');
+    expect((await call('PUT', `/api/recurring/${after.id}`, { enabled: false }, R)).json.recurring.enabled).toBe(false);
+    expect((await call('POST', `/api/recurring/${after.id}/run`, {}, R)).status).toBe(201);
+    expect((await call('DELETE', `/api/recurring/${after.id}`, undefined, R)).json.ok).toBe(true);
+  });
+});

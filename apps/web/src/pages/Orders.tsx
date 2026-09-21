@@ -5,6 +5,7 @@ import { api, fmtEur, fmtQty, fmtDate, STATUS_LABEL, openPdf } from '../lib/api'
 import { useApi } from '../lib/useApi';
 import { PageTitle, Loader, ErrorBox, Empty } from '../components/ui';
 import { Modal } from '../components/Modal';
+import { ReorderModal, RecurringList } from '../components/Reorder';
 
 type Line = { id: string; productId?: string; productName: string; packLabel: string | null; packs: number; quantity: string; unitPriceEur: string; lineTotalEur: string; receivedQty: string | null };
 type O = { id: string; reference: string; supplierName: string; status: string; channel: string; expectedAt: string | null; totalEur: string; source: string; createdAt: string; lines: Line[]; vendorId?: string | null; fulfillment?: string | null; deliverySlot?: string | null; hasProof?: boolean; proposal?: Proposal | null };
@@ -28,7 +29,7 @@ const STATUS_TONE: Record<string, string> = { preparee: 'bg-sky-100 text-sky-800
 const SOURCE_LABEL: Record<string, string> = { manuel: 'manuelle', comparateur: 'comparateur', panier_ia: '🧺 panier IA', auto_reorder: '🤖 auto-reorder' };
 
 export default function Orders() {
-  const { data, loading, error, reload } = useApi<{ orders: O[] }>('/orders');
+  const { data, loading, error, reload } = useApi<{ orders: O[] }>('/orders'); const [reorder, setReorder] = useState<string | null>(null); const [flash, setFlash] = useState<string | null>(null);
   const disc = useApi<{ items: unknown[]; openValue: number }>('/discrepancies');
   const [receiving, setReceiving] = useState<O | null>(null);
   const [received, setReceived] = useState<Record<string, string>>({});
@@ -70,6 +71,7 @@ export default function Orders() {
           {o.status === 'preparee' && <><button onClick={() => void openSend(o)} className="btn-primary !py-1.5"><Send size={14} /> Envoyer au fournisseur</button><button onClick={() => openEdit(o)} className="btn-ghost !py-1.5"><Pencil size={14} /> Modifier</button></>}
           {['envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void openSend(o)} className="btn-ghost !py-1.5"><Copy size={14} /> Revoir le message</button>}
           {!['brouillon', 'annulee'].includes(o.status) && <button onClick={() => void openPdf(`/orders/${o.id}/pdf`)} className="btn-ghost !py-1.5">📄 PDF</button>}
+          {o.vendorId && !['brouillon', 'preparee'].includes(o.status) && <button onClick={() => setReorder(o.id)} className="btn-ghost !py-1.5 text-brand-800">🔁 Recommander</button>}
           {['envoyee', 'confirmee', 'preparee'].includes(o.status) && <button onClick={() => openReceive(o)} className="btn-ghost !py-1.5"><PackageCheck size={14} /> Réceptionner</button>}
           {['preparee', 'envoyee', 'confirmee'].includes(o.status) && <button onClick={() => void cancel(o)} className="btn-ghost !py-1.5 text-red-700 ml-auto"><XCircle size={14} /> Annuler</button>}
         </div>
@@ -80,6 +82,9 @@ export default function Orders() {
     <div className="animate-fade-up space-y-8">
       <PageTitle title="🛒 Achats" subtitle="Commandes en cours et historique. Rien ne part sans vous : vous envoyez le message par WhatsApp ou e-mail, puis la réception met le stock à jour."
         action={<div className="flex gap-2"><Link to="/app/achats/ecarts" className={`btn-ghost ${disc.data?.items.length ? '!bg-orange-50 !text-orange-800' : ''}`}><AlertTriangle size={16} /> Écarts{disc.data?.items.length ? ` (${disc.data.items.length} · ${fmtEur(disc.data.openValue, 0)})` : ''}</Link><Link to="/app/achats/panier" className="btn-primary">🧺 Panier intelligent</Link></div>} />
+      {flash && <p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{flash}</p>}
+      {reorder && <ReorderModal orderId={reorder} onClose={() => setReorder(null)} onDone={(m) => { setReorder(null); setFlash(m); void reload(); }} />}
+      <RecurringList onChanged={() => void reload()} />
       <section><h2 className="mb-3 text-lg font-bold">En cours ({open.length})</h2><div className="space-y-3">{open.map((o) => <Row key={o.id} o={o} />)}{open.length === 0 && <Empty>Aucune commande en cours. Passez par le <Link to="/app/achats/panier" className="underline">panier intelligent</Link> ou le comparateur depuis le stock.</Empty>}</div></section>
       <section><h2 className="mb-3 text-lg font-bold">Historique</h2><div className="space-y-3">{past.map((o) => <Row key={o.id} o={o} />)}</div></section>
 
