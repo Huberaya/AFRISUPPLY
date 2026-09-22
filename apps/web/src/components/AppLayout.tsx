@@ -83,7 +83,7 @@ const MOBILE_TABS: NavItem[] = [
   { to: '/app/ia', icon: Sparkles, label: 'IA', hint: '' },
 ];
 
-export function Logo({ light = false, to = '/app' }: { light?: boolean; to?: string }) {
+export function Logo({ light = false, to = '/' }: { light?: boolean; to?: string }) {
   return (
     <Link to={to} className="flex items-center gap-2">
       <svg viewBox="0 0 64 64" className="h-8 w-8"><rect width="64" height="64" rx="14" fill="#c2410c" /><path d="M18 44 L32 16 L46 44 Z" fill="none" stroke="#fff7ed" strokeWidth="5" strokeLinejoin="round" /><circle cx="32" cy="38" r="4" fill="#facc15" /></svg>
@@ -120,7 +120,7 @@ export default function AppLayout() {
 
   const Sidebar = (
     <aside className="flex h-full w-64 flex-col bg-stone-900 text-stone-200">
-      <div className="px-5 py-5 border-b border-stone-800"><Logo light /></div>
+      <div className="px-5 py-5 border-b border-stone-800"><span onClick={() => setOpen(false)} className="inline-flex cursor-pointer"><Logo light /></span></div>
       <div className="px-4 py-4 border-b border-stone-800">
         <p className="text-[11px] uppercase tracking-wide text-stone-500">Restaurant</p>
         {restaurants.length > 1 ? (

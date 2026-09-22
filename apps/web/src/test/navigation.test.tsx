@@ -25,6 +25,9 @@ describe('navigation', () => {
     expect(await screen.findByText('Commander')).toBeInTheDocument();
     expect(screen.getAllByText(/Écarts & réclamations/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Abonnement').length).toBeGreaterThan(0);
+    // Le logo ramène TOUJOURS à la page d’accueil, quel que soit l’écran
+    const logos = await screen.findAllByRole('link', { name: /afri/i });
+    logos.forEach((l) => expect(l).toHaveAttribute('href', '/'));
     expect(screen.queryByText('Admin AFRISUPPLY')).not.toBeInTheDocument();
   });
 
