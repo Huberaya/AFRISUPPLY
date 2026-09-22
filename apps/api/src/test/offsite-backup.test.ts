@@ -355,12 +355,18 @@ describe('7. L’exploitation voit l’état hors site', () => {
     mkdirSync(backupDir(), { recursive: true });
     const meta = await sauvegardeLocale(backupDir());
     // Le nom porte le restaurant et l'horodatage : c'est ce qui permet la rétention distante sans
-    // dépendre du disque local.
-    expect(meta.name).toMatch(/^afs-[0-9a-f]{8}-\d{8}T\d{6,7}-admin\.json\.gz$/);
+    // dépendre du disque local. Le suffixe `-2`, `-3`… est NORMAL : deux sauvegardes du même
+    // restaurant dans la même seconde ne doivent jamais s'écraser (la CI l'a fait remarquer, à
+    // raison : le test précédent écrit dans le même dossier par défaut, quelques millisecondes avant).
+    expect(meta.name).toMatch(/^afs-[0-9a-f]{8}-\d{8}T\d{6,7}-admin(-\d+)?\.json\.gz$/);
     expect(readFileSync(path.join(backupDir(), meta.name)).length).toBeGreaterThan(0);
     // Et il se relit : une sauvegarde qu'on ne peut pas relire n'en est pas une.
     const { readBackupFile } = await import('../lib/backup.js');
     const relu = await readBackupFile(meta.name);
     expect(relu.totals.rows).toBeGreaterThan(10);
+    // Le nom suffixé doit rester reconnu par la rétention distante, sinon la copie ne serait jamais
+    // purgée : elle s'accumulerait indéfiniment hors site.
+    const { offsiteKey } = await import('../lib/offsite.js');
+    expect(offsiteKey(meta.name)).toMatch(/afrisupply\/backups\/afs-[0-9a-f]{8}-\d{8}T\d{6,7}-admin(-\d+)?\.json\.gz$/);
   });
 });
