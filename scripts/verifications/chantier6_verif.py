@@ -222,7 +222,7 @@ try:
     crons = [f"{c['path']} {c['schedule']}" for c in cfg.get("crons", [])]
 except Exception as e:
     crons = []; cfg = {}
-check("vercel.json déclare le cron horaire des rappels", "/api/jobs/reminders 0 * * * *" in crons, " | ".join(crons) or f"illisible: {e}")
+check("vercel.json déclare le cron des rappels (compatible Hobby)", "/api/jobs/reminders 0 14 * * *" in crons, " | ".join(crons) or f"illisible: {e}")
 check("vercel.json garde le job quotidien", "/api/jobs/daily 30 4 * * *" in crons)
 
 # ---------------------------------------------------------------- synthèse

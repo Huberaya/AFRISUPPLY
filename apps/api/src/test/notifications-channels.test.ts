@@ -200,10 +200,10 @@ describe('4. Supervision : chaque job laisse une trace', () => {
     expect(st.json.checks.sms.configured).toBe(false);
   });
 
-  it('le cron horaire des rappels est déclaré dans vercel.json', () => {
+  it('le cron des rappels est déclaré dans vercel.json (quotidien, compatible Hobby)', () => {
     const cfg = JSON.parse(readFileSync(path.resolve(process.cwd(), '../../vercel.json'), 'utf8'));
     const paths = (cfg.crons ?? []).map((c: Json) => `${c.path} ${c.schedule}`);
-    expect(paths).toContain('/api/jobs/reminders 0 * * * *');
+    expect(paths).toContain('/api/jobs/reminders 0 14 * * *');
     expect(paths).toContain('/api/jobs/daily 30 4 * * *');
   });
 });
