@@ -12,7 +12,7 @@ import {
   exportRestaurant, verifyBackup, restoreBackup, restoreDrill, checksumOf, writeBackupFile,
   listBackups, readBackupFile, pruneBackups, backupAllRestaurants, backupStorageStats, type BackupFile,
 } from '../lib/backup.js';
-import { jobHealth, watchdog, SUPPORT, JOB_MAX_HOURS } from '../lib/ops-health.js';
+import { jobHealth, watchdog, SUPPORT, jobsSurveilles } from '../lib/ops-health.js';
 
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.CRON_SECRET = 'cron-test';
 process.env.PGLITE_DIR = 'memory://ops-backup'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr';
@@ -270,7 +270,10 @@ describe('5. Back-office d’exploitation — réservé aux administrateurs, ave
   it('l’administrateur voit la santé des jobs, les sauvegardes et le journal d’audit', async () => {
     const ops = await call('GET', '/api/admin/ops', undefined, authAdmin);
     expect(ops.status).toBe(200);
-    expect(Object.keys(ops.json.jobs).sort()).toEqual(Object.keys(JOB_MAX_HOURS).sort());
+    // Chantier 13 : la liste supervisée est celle de `jobsSurveilles()` — la copie hors site n'y
+    // figure que si elle est en service (sinon ce serait une configuration à faire, pas une panne :
+    // elle est annoncée comme problème d'exploitation, pas comme job en retard).
+    expect(Object.keys(ops.json.jobs).sort()).toEqual(Object.keys(jobsSurveilles()).sort());
     expect(ops.json.backup.version).toBe(1);
     expect(ops.json.backup.files).toBeGreaterThanOrEqual(1);
     expect(ops.json.support.email).toBe('support-banc@afrisupply.fr');
@@ -343,7 +346,7 @@ describe('6. Supervision des tâches planifiées — un cron silencieux ne reste
     expect(w.late).toEqual([]);
     const viaApi = await call('POST', '/api/admin/ops/watchdog', {}, authAdmin);
     expect(viaApi.status).toBe(200);
-    expect(viaApi.json.checked).toBe(Object.keys(JOB_MAX_HOURS).length);
+    expect(viaApi.json.checked).toBe(Object.keys(jobsSurveilles()).length);
     expect((await call('POST', '/api/admin/ops/watchdog', {}, authA)).status).toBe(403);
   }, 60_000);
   it('le statut public ne divulgue AUCUN détail interne (chemins de fichiers, volumes, erreurs)', async () => {

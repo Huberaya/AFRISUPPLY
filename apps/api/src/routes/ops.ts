@@ -85,6 +85,9 @@ adminOpsRoutes.get('/admin/ops', requireAuth, adminOnly, async (c) => {
     // Chantier 13 (audit n°3) : sans copie hors site, la sauvegarde disparaît avec l'instance.
     ...(horsSite.configured ? [] : [horsSite.pourquoi]),
     ...(horsSite.error ? [`Sauvegarde hors site : ${horsSite.error}`] : []),
+    // Chantier 13 : en serverless, le disque du projet est en lecture seule et le dossier temporaire
+    // est effacé. Le dire évite de croire qu'un fichier local suffit à protéger les données.
+    ...(storage.ephemere ? [String(storage.note ?? 'Sauvegardes locales sur un disque éphémère : seule la copie hors site est durable.')] : []),
     ...(horsSite.configured && horsSite.lastUploadAt && (Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 3_600_000 > 36 ? [`Aucune copie hors site depuis ${Math.round((Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 3_600_000)} h : la copie externe ne se fait plus.`] : []),
     ...(mc.transport !== 'resend' ? [`Envoi d'e-mails en mode « ${mc.transport} » : aucun e-mail ne part vers l'extérieur.`] : []),
     ...(sentryEnabled() ? [] : ['Suivi d\'erreurs (Sentry) non configuré : les incidents ne sont visibles que dans les journaux du serveur.']),

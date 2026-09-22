@@ -8,6 +8,7 @@
 import { desc } from 'drizzle-orm';
 import { getDb, jobRuns } from '@afrisupply/db';
 import { alertAdmin } from './ops.js';
+import { offsiteConfigured } from './offsite.js';
 
 /** Adresse de support unique (surchargeable par SUPPORT_EMAIL). */
 export const SUPPORT = {
@@ -19,8 +20,35 @@ export const SUPPORT = {
   phone: () => process.env.SUPPORT_PHONE ?? null,
 };
 
-/** Fraîcheur attendue de chaque tâche planifiée (heures) : au-delà, elle est signalée en retard. */
-export const JOB_MAX_HOURS: Record<string, number> = { daily: 30, reminders: 3, 'alerts-notify': 3, backup: 30 };
+/**
+ * Fraîcheur attendue de chaque tâche planifiée (heures) : au-delà, elle est signalée en retard.
+ *
+ * Ces seuils DOIVENT correspondre à la cadence réellement déclarée des crons, sinon la supervision
+ * ment dans un sens ou dans l'autre :
+ *   • trop courts → une plateforme qui fonctionne est signalée en retard plusieurs fois par jour
+ *     (cris d'alarme quotidiens qui finissent par être ignorés — le pire des états) ;
+ *   • trop longs → un cron mort reste invisible pendant des jours.
+ *
+ * Constat de la mise en ligne réelle : le plan Vercel Hobby n'autorise qu'UN passage par jour et par
+ * cron. `reminders` et `alerts-notify` tournent donc une fois par jour, pas toutes les heures : les
+ * attendre en 3 h garantissait une fausse alerte quotidienne. Les valeurs par défaut reflètent cette
+ * réalité, et chaque seuil reste ajustable par variable d'environnement le jour où la cadence change
+ * (`JOB_MAX_HOURS_REMINDERS=3` pour un cron horaire, par exemple).
+ */
+const seuil = (job: string, defaut: number) => {
+  const brut = process.env[`JOB_MAX_HOURS_${job.toUpperCase().replace(/-/g, '_')}`];
+  const n = Number(brut);
+  return Number.isFinite(n) && n > 0 ? n : defaut;
+};
+export const JOB_MAX_HOURS: Record<string, number> = {
+  daily: seuil('daily', 30),
+  // Cron quotidien (plan Hobby) : 26 h laisse une marge d'une heure sur la fenêtre de la plateforme.
+  reminders: seuil('reminders', 26),
+  'alerts-notify': seuil('alerts-notify', 26),
+  backup: seuil('backup', 30),
+  // Chantier 13 : la copie hors site est supervisée comme les autres — si elle cesse, on le sait.
+  'offsite-backup': seuil('offsite-backup', 30),
+};
 
 export type JobState = 'ok' | 'never' | 'degraded' | 'stale';
 export interface JobHealth {
@@ -29,17 +57,34 @@ export interface JobHealth {
   lastRun: null | { status: string; finishedAt: string; durationMs: number; hoursAgo: number; summary: unknown; error: string | null };
 }
 
+/**
+ * Tâches réellement supervisées.
+ *
+ * La copie hors site n'est supervisée QUE si elle est en service : tant que `BACKUP_S3_*` n'est pas
+ * renseigné, il n'y a rien à surveiller — seulement une configuration à faire, et elle est déjà
+ * annoncée comme problème dans l'exploitation (`/api/admin/ops`) et dans l'état public. Superviser
+ * une tâche non configurée ferait sonner la surveillance tous les jours pour la même raison : au bout
+ * d'une semaine, plus personne ne lit les alertes — c'est ce qu'on veut éviter.
+ *
+ * Dès que la copie externe est configurée, elle redevient une promesse mesurée : si les envois
+ * s'arrêtent, la supervision le dit.
+ */
+export function jobsSurveilles(): Record<string, number> {
+  return Object.fromEntries(Object.entries(JOB_MAX_HOURS).filter(([job]) => job !== 'offsite-backup' || offsiteConfigured()));
+}
+
 /** Santé de chaque job supervisé, calculée à partir des passages réellement enregistrés (job_runs). */
 export async function jobHealth(): Promise<Record<string, JobHealth>> {
   const db = await getDb();
   const runs = await db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(400);
   const out: Record<string, JobHealth> = {};
-  for (const job of Object.keys(JOB_MAX_HOURS)) {
+  const surveilles = jobsSurveilles();
+  for (const job of Object.keys(surveilles)) {
     const last = runs.find((r) => r.job === job) ?? null;
     const hoursAgo = last ? (Date.now() - new Date(last.finishedAt).getTime()) / 3_600_000 : null;
-    const state: JobState = !last ? 'never' : last.status !== 'ok' ? 'degraded' : hoursAgo! > JOB_MAX_HOURS[job] ? 'stale' : 'ok';
+    const state: JobState = !last ? 'never' : last.status !== 'ok' ? 'degraded' : hoursAgo! > surveilles[job] ? 'stale' : 'ok';
     out[job] = {
-      state, maxHours: JOB_MAX_HOURS[job],
+      state, maxHours: surveilles[job],
       lastRun: last ? { status: last.status, finishedAt: new Date(last.finishedAt).toISOString(), durationMs: last.durationMs, hoursAgo: Math.round(hoursAgo! * 10) / 10, summary: last.summary ?? null, error: last.error ?? null } : null,
     };
   }

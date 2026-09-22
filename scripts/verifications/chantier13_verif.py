@@ -250,6 +250,13 @@ def main():
 
     st, ops2 = call("GET", "/admin/ops", t_admin)
     hs2 = (ops2 or {}).get("offsite") or {}
+    # La promesse « les données sont copiées ailleurs » est désormais MESURÉE : la tâche hors site
+    # apparaît dans la surveillance dès lors qu'elle est en service.
+    st, ops3 = call("GET", "/admin/ops", t_admin)
+    check("dès que le hors site est en service, sa tâche est supervisée (et échouerait visiblement)",
+          st == 200 and "offsite-backup" in ((ops3 or {}).get("jobs") or {}),
+          f"tâches : {sorted(((ops3 or {}).get('jobs') or {}).keys())}")
+
     check("l'exploitation reflète l'état réel du hors site (objets, octets, dernier envoi)",
           st == 200 and int(hs2.get("objects") or 0) >= 1 and int(hs2.get("bytes") or 0) > 0 and bool(hs2.get("lastUploadAt")),
           f"objets : {hs2.get('objects')} · octets : {hs2.get('bytes')} · dernier envoi : {hs2.get('lastUploadAt')}")

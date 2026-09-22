@@ -229,9 +229,14 @@ print("\nD. Supervision : un cron muet ne reste pas invisible")
 
 st, ops, _ = call("GET", "/admin/ops", T_ADMIN)
 jobs = (ops or {}).get("jobs") or {}
-check("le back-office expose la santé des 4 tâches planifiées",
-      st == 200 and sorted(jobs) == ["alerts-notify", "backup", "daily", "reminders"],
-      f"HTTP {st} · {sorted(jobs)}")
+# Chantier 13 : la copie hors site est supervisée SEULEMENT si elle est en service. Tant que le
+# stockage externe n'est pas configuré, il n'y a pas de panne à signaler — seulement une
+# configuration à faire, annoncée comme problème d'exploitation. La liste attendue en dépend donc.
+hors_site_actif = bool(((ops or {}).get("offsite") or {}).get("configured"))
+attendus = ["alerts-notify", "backup", "daily", "reminders"] + (["offsite-backup"] if hors_site_actif else [])
+check("le back-office expose la santé des tâches planifiées réellement supervisées",
+      st == 200 and sorted(jobs) == sorted(attendus),
+      f"HTTP {st} · supervisées : {sorted(jobs)} · hors site actif : {hors_site_actif}")
 check("chaque tâche indique son délai maximum et son dernier passage réel",
       all("maxHours" in j and "state" in j and ("lastRun" in j) for j in jobs.values()),
       f"daily ≤ {jobs.get('daily', {}).get('maxHours')} h · reminders ≤ {jobs.get('reminders', {}).get('maxHours')} h")
@@ -241,7 +246,8 @@ check("les sauvegardes sont supervisées comme une tâche à part entière (disq
 
 st, wd1, _ = call("POST", "/admin/ops/watchdog", T_ADMIN, body={})
 check("la surveillance croisée s'exécute et dit combien de tâches elle a regardées",
-      st == 200 and (wd1 or {}).get("checked") == 4, f"HTTP {st} · {len((wd1 or {}).get('late') or [])} en problème")
+      st == 200 and (wd1 or {}).get("checked") == len(attendus),
+      f"HTTP {st} · {len((wd1 or {}).get('late') or [])} en problème sur {len(attendus)} supervisée(s)")
 
 st, cron, _ = call("GET", "/jobs/daily", headers={"X-Cron-Secret": CRON})
 check("le job quotidien réel tourne (digest, essais, relances, sauvegarde)",
@@ -250,13 +256,13 @@ check("il écrit réellement les sauvegardes (pas seulement le bloc « digest »
       (cron or {}).get("backup", {}).get("written", 0) >= 1,
       f"{(cron or {}).get('backup', {}).get('written')} fichier(s) · {len((cron or {}).get('backup', {}).get('files') or [])} détaillé(s)")
 check("il exécute la surveillance croisée en fin de passe",
-      isinstance((cron or {}).get("watchdog"), dict) and (cron or {}).get("watchdog", {}).get("checked") == 4,
+      isinstance((cron or {}).get("watchdog"), dict) and (cron or {}).get("watchdog", {}).get("checked") == len(attendus),
       f"{((cron or {}).get('watchdog') or {}).get('late', [])}")
 
 st, sante2, _ = call("GET", "/status")
 jobs2 = ((sante2 or {}).get("checks") or {}).get("jobs") or {}
 check("la page publique lit la même source de vérité que l'exploitation",
-      st == 200 and sorted(jobs2) == ["alerts-notify", "backup", "daily", "reminders"]
+      st == 200 and sorted(jobs2) == sorted(attendus)
       and jobs2.get("daily", {}).get("state") == "ok" and jobs2.get("backup", {}).get("state") == "ok",
       f"daily {jobs2.get('daily', {}).get('state')} · backup {jobs2.get('backup', {}).get('state')}")
 check("plus rien n'est signalé en retard après une passe saine (pas de fausse alerte)",

@@ -11,6 +11,7 @@
 // restaurées seulement si le grossiste existe).
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { and, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm';
@@ -401,7 +402,24 @@ export async function restoreDrill(backup: BackupFile) {
 
 const exists = async (p: string) => { try { await fs.access(p); return true; } catch { return false; } };
 
-export const backupDir = () => process.env.BACKUP_DIR ?? path.join(process.cwd(), '.backups');
+/**
+ * Dossier des sauvegardes locales.
+ *
+ * En production serverless, le disque du projet est en LECTURE SEULE : `process.cwd()/.backups` est
+ * impossible à créer, et la sauvegarde échoue à chaque passage. Comme cela a été constaté sur la mise
+ * en ligne réelle, le dossier par défaut bascule donc sur `/tmp`, le seul espace inscriptible de la
+ * plateforme — le temps de l'exécution. Ce disque reste **éphémère** : la copie durable est celle du
+ * stockage hors site (`lib/offsite.ts`), et l'exploitation le dit explicitement.
+ */
+export const backupDir = () =>
+  process.env.BACKUP_DIR ?? (process.env.VERCEL ? path.join(tmpdir(), 'afrisupply-backups') : path.join(process.cwd(), '.backups'));
+
+/**
+ * Le dossier est-il éphémère (donc sans valeur de conservation) ? Vrai sur la plateforme serverless
+ * tant qu'aucun `BACKUP_DIR` persistant n'a été déclaré : la copie hors site est alors la seule
+ * garantie, et l'interface doit le dire au lieu de laisser croire qu'un fichier local suffit.
+ */
+export const backupDiskEphemere = () => !process.env.BACKUP_DIR && Boolean(process.env.VERCEL);
 export const retentionDays = () => Math.max(1, Number(process.env.BACKUP_KEEP ?? 14));
 
 export interface BackupStored { name: string; sizeBytes: number; createdAt: string; restaurantId: string | null; restaurantName: string | null; rows: number; tables: number; checksum: string | null; version: number | null; mode: string | null }
@@ -484,5 +502,10 @@ export async function backupStorageStats(dir = backupDir()) {
   return {
     dir, files: list.length, bytes: list.reduce((a, b) => a + b.sizeBytes, 0),
     last: list[0] ?? null, restaurants: rows.length ? Number(rows[0].n) : 0, keep: retentionDays(),
+    // Chantier 13 : un dossier éphémère ne conserve rien. Mieux vaut le dire que le laisser croire.
+    ephemere: backupDiskEphemere(),
+    note: backupDiskEphemere()
+      ? 'Les sauvegardes locales sont écrites dans un dossier temporaire, effacé par la plateforme : seule la copie hors site est durable. Configurez BACKUP_S3_* et vérifiez l’essai de restauration.'
+      : null,
   };
 }
