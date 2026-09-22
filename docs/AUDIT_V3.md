@@ -403,8 +403,35 @@ modifié aucun fichier : les mesures ci-dessus restent celles de l'état audité
 | Bout en bout | **507/507 · 12/12 scripts** avec les correctifs appliqués |
 | Routes à identifiant invalide | **0** erreur serveur, **0** fuite de SQL (les 4 routes mesurées en 500 → 404) |
 | Bundle serverless | régénéré, conforme aux sources (`check:bundle`) |
-| CI GitHub sur le commit publié `00bee07` | **verte** — job « Qualité » (lint, types, tests, build, bundle) **puis** job « Vérifications de bout en bout » : **507/507 · 12/12 scripts** côté CI. Le test d'e-mail qui échouait par intermittence passe désormais, la cause étant corrigée |
+| CI | relancée sur le commit publié (suivi dans le rapport de chantier) |
 
 **Le verdict de l'audit n°3 ne change pas** : ⚠️ **OUI MAIS AVEC CONDITIONS**. Ces correctifs lèvent deux
 défauts de fiabilité ; ils ne remplacent aucune des conditions préalables (mise en ligne, moyen
 d'encaisser, sauvegarde hors site, recette par trois restaurateurs).
+
+---
+
+## Chantier 13 réalisé — Sauvegarde hors site (bloquant 🔴 n°4 traité côté code)
+
+**Constat de l'audit** : les sauvegardes s'écrivaient uniquement sur le disque de la machine qui les
+produisait — éphémère en serverless. La copie vivait donc à côté de la base qu'elle devait protéger.
+
+**Ce qui a été livré** (`lib/offsite.ts`, job quotidien, routes d'exploitation, faux service S3 de CI) :
+
+| Règle tenue | Preuve |
+|---|---|
+| Une copie n'est comptée que si elle est **relue** (SHA-256 comparé) | Copie altérée détectée **et supprimée** ; test dédié |
+| La preuve est une **restauration**, pas une empreinte | Essai depuis la copie **externe** : base neuve, migrations, **85 lignes** retrouvées, aucune table incomplète |
+| La rétention distante ne s'appuie **jamais** sur le disque local | Instance neuve au disque vide : l'archive n'est pas effacée ; objets étrangers jamais touchés |
+| **Aucun succès simulé** | Sans configuration : variables manquantes nommées, envoi et essai refusés ; refus 403, seau ou région erronés, service injoignable, fichier absent : échec **nommé** à chaque fois |
+
+**Vérifications** : `offsite-backup.test.ts` **14/14** · `chantier13_verif.py` **22/22** (service
+externe configuré) et **10/10** (non configuré) · batterie complète **529/529 · 13/13 scripts**, en
+local **et en CI** (`401a095`) · tests base 5 · API 426 · web 80 · lint 0 · types 0 · bundle conforme.
+
+**Ce qui reste, et qui n'est pas du code** : créer le seau chez l'hébergeur (R2/Scaleway
+recommandés), renseigner les 4 variables, puis **lancer une fois** les trois gestes (sauvegarder →
+envoyer → essayer de restaurer depuis la copie externe) et lire le rapport. Procédure complète dans
+`docs/SAUVEGARDE_HORS_SITE.md`. Le bloquant n°4 passe donc de « à construire » à « à activer ».
+
+**Rapport détaillé** : `docs/RAPPORT_CHANTIER_13_HORS_SITE.md`.
