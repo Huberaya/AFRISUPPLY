@@ -13,7 +13,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
           <p className="text-4xl">😕</p>
           <h1 className="mt-3 text-xl font-bold">Quelque chose s’est mal passé</h1>
           <p className="mt-2 text-sm text-stone-600">L’erreur a été signalée à notre équipe. Vous pouvez recharger la page ; vos données ne sont pas perdues.</p>
-          <div className="mt-5 flex justify-center gap-2"><button className="btn-primary" onClick={() => location.reload()}>Recharger</button><a className="btn-ghost" href="/app">Retour à l’accueil</a></div>
+          <div className="mt-5 flex justify-center gap-2"><button className="btn-primary" onClick={() => location.reload()}>Recharger</button><a className="btn-ghost" href="/">Retour à l’accueil</a></div>
           <p className="mt-4 text-xs text-stone-400">{this.state.error.message}</p>
         </div>
       </div>

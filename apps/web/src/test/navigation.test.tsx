@@ -40,6 +40,9 @@ describe('navigation', () => {
     // Le logo ramène TOUJOURS à la page d’accueil, quel que soit l’écran
     const logos = await screen.findAllByRole('link', { name: /afri/i });
     logos.forEach((l) => expect(l).toHaveAttribute('href', '/'));
+    // Et il y a un bouton explicite « Retour à l’accueil » → la vitrine /
+    const homeBtn = screen.getByRole('link', { name: /retour à l.accueil/i });
+    expect(homeBtn).toHaveAttribute('href', '/');
     expect(screen.queryByText('Admin AFRISUPPLY')).not.toBeInTheDocument();
   });
 
@@ -80,5 +83,9 @@ describe('navigation', () => {
     expect(await screen.findAllByRole('link', { name: 'FAQ' })).toHaveLength(2); // en-tête + pied de page
     expect(screen.getAllByRole('link', { name: 'Mon espace' }).length).toBeGreaterThan(0);
     expect(screen.queryByRole('link', { name: 'Se connecter' })).not.toBeInTheDocument();
+    // Bouton « Retour à l’accueil » dans l’en-tête du site (desktop + mobile) → /
+    const homeBtns = screen.getAllByRole('link', { name: /retour à l.accueil/i });
+    expect(homeBtns.length).toBeGreaterThan(0);
+    homeBtns.forEach((l) => expect(l).toHaveAttribute('href', '/'));
   });
 });

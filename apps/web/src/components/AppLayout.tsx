@@ -8,7 +8,7 @@
 // barre d'onglets en bas pour les 4 gestes du quotidien.
 import { useMemo, useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users, Building2, CreditCard, Search, Scale, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, Home, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users, Building2, CreditCard, Search, Scale, type LucideIcon } from 'lucide-react';
 import { api } from '../lib/api';
 import { FeedbackWidget, UsageBeacon } from './Pilot';
 import { useAuth } from '../lib/auth';
@@ -196,6 +196,7 @@ export default function AppLayout() {
           <div className="lg:hidden"><Logo /></div>
           <div className="hidden lg:block text-sm text-stone-500">{new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
           <div className="flex items-center gap-2">
+            <Link to="/" className="btn-ghost !py-1.5" aria-label="Retour à l’accueil"><Home size={16} /> <span className="hidden sm:inline">Retour à l’accueil</span></Link>
             <Link to="/app" className="relative rounded-xl p-2 hover:bg-stone-100" aria-label={unread > 0 ? `${unread} alerte(s) non lue(s)` : 'Alertes'}><Bell size={18} />{unread > 0 && <span className="absolute -right-0.5 -top-0.5 h-4 min-w-4 rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-4 text-white">{unread}</span>}</Link>
             <Link to="/app/ia" className="btn-primary !py-1.5"><Sparkles size={16} /> <span className="hidden sm:inline">Demander à l’IA</span></Link>
           </div>
