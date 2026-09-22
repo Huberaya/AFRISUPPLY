@@ -20,8 +20,8 @@ export default function Express() {
   return (
     <div className="animate-fade-up mx-auto max-w-xl space-y-4 pb-24">
       <PageTitle title="⚡ Saisie express" subtitle="Le soir, en 20 secondes, depuis votre téléphone." />
-      <div className="grid grid-cols-3 gap-1 rounded-2xl bg-stone-100 p-1 text-sm font-semibold">
-        {([['phrase', 'Une phrase'], ['inventaire', 'Inventaire'], ['facture', 'Photo facture']] as const).map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`rounded-xl py-2.5 ${tab === k ? 'bg-white shadow-sm text-brand-800' : 'text-stone-600'}`}>{l}</button>)}
+      <div className="grid grid-cols-3 gap-1 rounded-2xl bg-stone-100 p-1 text-xs sm:text-sm font-semibold">
+        {([['phrase', 'Une phrase'], ['inventaire', 'Inventaire'], ['facture', 'Photo facture']] as const).map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`rounded-xl py-2 sm:py-2.5 touch-manipulation transition ${tab === k ? 'bg-white shadow-sm text-brand-800' : 'text-stone-600'}`}>{l}</button>)}
       </div>
       {tab === 'phrase' && <Phrase />}
       {tab === 'inventaire' && <Inventory />}
