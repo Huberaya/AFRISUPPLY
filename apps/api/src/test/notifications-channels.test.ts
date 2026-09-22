@@ -39,8 +39,32 @@ import { remindPendingVendorOrders } from '../jobs/reminders.js';
 
 type Json = Record<string, any>;
 const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, json: (await r.clone().json().catch(() => ({}))) as Json }; };
-const outboxFiles = () => { try { return readdirSync(OUTBOX); } catch { return []; } };
-const outboxText = (needle: string) => outboxFiles().filter((f) => f.endsWith('.txt')).map((f) => readFileSync(path.join(OUTBOX, f), 'utf8')).filter((t) => t.includes(needle));
+// Audit n°3 — lecture de la boîte d'envoi rendue DÉTERMINISTE.
+//
+// Avant : le test relisait le dossier figé `OUTBOX` avec une seule tentative. En CI, un run a échoué
+// ici (« expected 0 to be greater than 0 », job Qualité du 22/09) alors que l'alerte était bien
+// marquée comme notifiée — donc que l'e-mail avait été remis — et que le fichier de test n'avait
+// jamais été modifié. Un test qui rougit sans raison finit par masquer une vraie régression.
+//
+// Maintenant : le dossier interrogé est celui que le mailer utilise réellement (`mailerConfig().outbox`,
+// la même source que l'envoi, plutôt qu'une constante posée à côté), on laisse jusqu'à 2 s au système
+// de fichiers, et si rien n'arrive le message d'échec affiche le dossier réellement utilisé et son
+// contenu — pour que la prochaine occurrence soit diagnosticable au lieu d'être un mystère.
+const outboxDuMailer = () => { try { return mailerConfig().outbox; } catch { return OUTBOX; } };
+const outboxFiles = () => { try { return readdirSync(outboxDuMailer()); } catch { return []; } };
+const outboxText = (needle: string) => outboxFiles().filter((f) => f.endsWith('.txt'))
+  .map((f) => readFileSync(path.join(outboxDuMailer(), f), 'utf8')).filter((t) => t.includes(needle));
+/** Attend qu'un texte apparaisse dans la boîte d'envoi (2 s maximum), puis renvoie ce qui est trouvé. */
+const outboxTextAttendu = async (needle: string, ms = 2000) => {
+  const fin = Date.now() + ms;
+  for (;;) {
+    const trouve = outboxText(needle);
+    if (trouve.length || Date.now() >= fin) return trouve;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
+/** Message d'échec exploitable : quel dossier, quels fichiers. */
+const diagnosticOutbox = () => `boîte « ${outboxDuMailer()} » — fichiers : ${outboxFiles().join(', ') || '(vide)'}`;
 
 let A: Record<string, string>;        // propriétaire / manager du restaurant
 let rid = ''; let productId = ''; let orderId = ''; let lineId = '';
@@ -123,7 +147,7 @@ describe('2. Écart de livraison : e-mail tout de suite, une seule fois', () => 
     expect(ecart.kind).toBe('ecart_livraison');
     // La réception elle-même a prévenu : plus besoin d'attendre le mail du matin.
     expect(ecart.notifiedAt).toBeTruthy();
-    expect(outboxText('Écart sur la livraison').length).toBeGreaterThan(0);
+    expect((await outboxTextAttendu('Écart sur la livraison')).length, diagnosticOutbox()).toBeGreaterThan(0);
     const runs = await db.select().from(jobRuns).where(eq(jobRuns.job, 'alerts-notify'));
     expect(runs.length).toBeGreaterThan(0);
     expect(runs.some((r) => (r.summary as Json)?.restaurantId === rid && (r.summary as Json)?.sent === true)).toBe(true);
@@ -148,7 +172,7 @@ describe('3. Rupture de stock : l’alerte part par e-mail à la détection', ()
     if (!rupture) throw new Error('aucune alerte de rupture créée');
     expect(rupture.notifiedAt).toBeTruthy();
     expect(refresh.json.immediate?.sent).toBe(true);
-    expect(outboxText(rupture.title).length).toBeGreaterThan(0);
+    expect((await outboxTextAttendu(rupture.title)).length, diagnosticOutbox()).toBeGreaterThan(0);
   });
 });
 
@@ -234,7 +258,7 @@ describe('6. Réglages : tester l’envoi pour de vrai, sans arrondir', () => {
     const t = await call('POST', '/api/settings/test-email', {}, A);
     expect(t.status).toBe(200); expect(t.json.delivered).toBe(true); expect(t.json.transport).toBe('file');
     expect(t.json.message).toMatch(/écrit|envoyé/i);
-    expect(outboxText('Test des notifications AFRISUPPLY').length).toBeGreaterThan(0);
+    expect((await outboxTextAttendu('Test des notifications AFRISUPPLY')).length, diagnosticOutbox()).toBeGreaterThan(0);
     const db = await getDb();
     const runs = await db.select().from(jobRuns).where(eq(jobRuns.job, 'mail-test'));
     expect(runs.length).toBeGreaterThan(0); expect(runs[0].status).toBe('ok');
@@ -272,7 +296,10 @@ describe('7. Le mail du matin ne fait pas doublon avec l’alerte immédiate', (
     expect(run.digest).toBe('sent');
     const [after] = await db.select().from(alerts).where(eq(alerts.id, a.id));
     expect(after.notifiedAt).toBeTruthy();                                    // couverte par le mail du matin
-    expect(outboxText('Rupture couverte').length).toBe(0);                    // pas de second e-mail
+    // Pas de second e-mail : on laisse un court délai pour qu'un envoi tardif serait vu,
+    // plutôt que de conclure « rien » sur une lecture instantanée.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(outboxText('Rupture couverte').length, diagnosticOutbox()).toBe(0);
   });
 });
 
