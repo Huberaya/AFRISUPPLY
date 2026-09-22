@@ -736,6 +736,9 @@ var init_schema = __esm({
       page: text("page"),
       status: text("status").default("nouveau").notNull(),
       // nouveau | traite
+      // Chantier 6 (audit) — preuve sociale : publication sur le site UNIQUEMENT avec accord du pilote
+      // (la case est cochée par l'admin au moment de la collecte). Jamais de témoignage inventé.
+      published: boolean("published").default(false).notNull(),
       createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
     }, (t) => [index("feedback_restaurant_idx").on(t.restaurantId, t.createdAt)]);
     usageEvents = pgTable("usage_events", {
@@ -1474,316 +1477,6 @@ var init_products = __esm({
   }
 });
 
-// packages/db/src/seed.ts
-import { eq as eq2 } from "drizzle-orm";
-import bcrypt from "bcryptjs";
-async function seedDemo(opts = {}) {
-  const prod = process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
-  if (prod && process.env.ALLOW_DEMO_SEED !== "true") {
-    const msg = "Seed de d\xE9monstration refus\xE9 en production (compte awa@chezawa.fr / demo1234 accessible publiquement). Utilisez ALLOW_DEMO_SEED=true si c\u2019est volontaire.";
-    console.error(`[seed] ${msg}`);
-    return { skipped: true, reason: msg };
-  }
-  const db = await getDb();
-  const existing = await db.select().from(restaurants).where(eq2(restaurants.slug, "chez-awa")).limit(1);
-  if (existing.length && !opts.force) {
-    console.log("[seed] Restaurant d\xE9mo d\xE9j\xE0 pr\xE9sent \u2014 rien \xE0 faire.");
-    return { restaurantId: existing[0].id };
-  }
-  if (existing.length && opts.force) {
-    await db.delete(restaurants).where(eq2(restaurants.slug, "chez-awa"));
-  }
-  const existingRef = await db.select({ id: products.id, name: products.name }).from(products);
-  const byName = new Map(existingRef.map((p) => [p.name, p.id]));
-  const missing = REFERENCE_PRODUCTS.filter((p) => !byName.has(p.name));
-  if (missing.length) {
-    const inserted = await db.insert(products).values(
-      missing.map((p) => ({ name: p.name, category: p.category, baseUnit: p.baseUnit, origin: p.origin, aliases: [...p.aliases, ...p.tags ?? []], shelfLifeDays: p.shelfLifeDays, seasonality: p.season?.length ? JSON.stringify(p.season) : null }))
-    ).returning({ id: products.id, name: products.name });
-    inserted.forEach((p) => byName.set(p.name, p.id));
-  }
-  const pid = (name) => {
-    const id = byName.get(name);
-    if (!id) throw new Error(`Produit r\xE9f\xE9rentiel manquant : ${name}`);
-    return id;
-  };
-  const passwordHash = await bcrypt.hash("demo1234", 10);
-  const [user] = await db.insert(users).values({
-    email: "awa@chezawa.fr",
-    passwordHash,
-    fullName: "Awa Diallo",
-    phone: "+33 6 12 34 56 78"
-  }).onConflictDoUpdate({ target: users.email, set: { fullName: "Awa Diallo" } }).returning();
-  const [restaurant] = await db.insert(restaurants).values({
-    name: "Chez Awa",
-    slug: "chez-awa",
-    city: "Nantes",
-    postalCode: "44100",
-    address: "12 rue de la Bastille",
-    cuisine: "s\xE9n\xE9galaise & ivoirienne",
-    coversPerDay: 60,
-    plan: "pro",
-    trialEndsAt: daysAgo(-30),
-    settings: { priceIncreaseAlertPct: 8, forecastHorizonDays: 7 }
-  }).returning();
-  const rid2 = restaurant.id;
-  await db.insert(restaurantMembers).values({ restaurantId: rid2, userId: user.id, role: "owner" });
-  const supplierRows = await db.insert(suppliers).values([
-    { restaurantId: rid2, name: "Afro Distribution Nantes", contactName: "Moussa K.", phone: "+33 2 40 00 11 22", whatsapp: "+33 6 00 11 22 33", city: "Nantes", categories: ["feculents", "epicerie", "boissons"], leadTimeHours: 24, minOrderEur: "80", deliveryFeeEur: "0", preferredChannel: "whatsapp", rating: "4.8" },
-    { restaurantId: rid2, name: "Tropic Import Paris", contactName: "Service commandes", email: "commandes@tropic-import.example", phone: "+33 1 40 00 22 33", city: "Paris", categories: ["feculents", "epicerie", "boissons", "viandes_poissons"], leadTimeHours: 72, minOrderEur: "150", deliveryFeeEur: "25", preferredChannel: "email", rating: "4.3" },
-    { restaurantId: rid2, name: "Primeurs du March\xE9 (MIN Nantes)", contactName: "Jean-Luc", phone: "+33 2 40 33 44 55", city: "Rez\xE9", categories: ["frais"], leadTimeHours: 24, deliveryDays: [1, 2, 3, 4, 5, 6], minOrderEur: "50", deliveryFeeEur: "10", preferredChannel: "telephone", rating: "4.5" },
-    { restaurantId: rid2, name: "Volailles Loire Atlantique", contactName: "Mme Gu\xE9rin", email: "contact@volailles-la.example", phone: "+33 2 40 66 77 88", city: "Ancenis", categories: ["viandes_poissons"], leadTimeHours: 48, deliveryDays: [2, 5], minOrderEur: "120", deliveryFeeEur: "0", preferredChannel: "email", rating: "4.9" },
-    { restaurantId: rid2, name: "Sahel \xC9pices (en ligne)", email: "pro@sahel-epices.example", city: "Lyon", categories: ["epicerie", "boissons"], leadTimeHours: 120, minOrderEur: "60", deliveryFeeEur: "15", preferredChannel: "plateforme", rating: "4.1" }
-  ]).returning();
-  const sup = Object.fromEntries(supplierRows.map((r) => [r.name, r.id]));
-  const AFRO = sup["Afro Distribution Nantes"], TROPIC = sup["Tropic Import Paris"], PRIM = sup["Primeurs du March\xE9 (MIN Nantes)"], VOL = sup["Volailles Loire Atlantique"], SAHEL = sup["Sahel \xC9pices (en ligne)"];
-  const offers = [
-    [AFRO, "Riz parfum\xE9", "Sac 25 kg", 25, 42],
-    [TROPIC, "Riz parfum\xE9", "Sac 25 kg", 25, 45],
-    [SAHEL, "Riz parfum\xE9", "Sac 25 kg", 25, 39, false],
-    [AFRO, "Riz bris\xE9", "Sac 25 kg", 25, 38.5],
-    [TROPIC, "Riz bris\xE9", "Sac 25 kg", 25, 36.9],
-    [AFRO, "Atti\xE9k\xE9", "Carton 10 kg", 10, 34],
-    [TROPIC, "Atti\xE9k\xE9", "Carton 10 kg", 10, 31, false],
-    [AFRO, "Plantain", "Carton 18 kg", 18, 27],
-    [PRIM, "Plantain", "Carton 18 kg", 18, 29.5],
-    [AFRO, "Igname", "Carton 20 kg", 20, 46],
-    [PRIM, "Tomate", "Plateau 6 kg", 6, 9.6],
-    [PRIM, "Oignon jaune", "Sac 10 kg", 10, 8.9],
-    [PRIM, "Piment frais fort (habanero / antillais)", "Barquette 1 kg", 1, 7.8],
-    [PRIM, "Gombo frais", "Carton 4 kg", 4, 18],
-    [PRIM, "Feuilles de manioc", "Sachet 1 kg", 1, 6.5],
-    [PRIM, "Ndol\xE9 (feuilles)", "Sachet 1 kg", 1, 7.9],
-    [PRIM, "Manioc frais", "Carton 10 kg", 10, 16],
-    [PRIM, "Patate douce", "Carton 10 kg", 10, 14],
-    [TROPIC, "Crevettes s\xE9ch\xE9es", "Sachet 500 g", 0.5, 9.5],
-    [PRIM, "Aubergine africaine (djakatou)", "Carton 5 kg", 5, 16.5],
-    [PRIM, "Gingembre frais", "Carton 5 kg", 5, 17.5],
-    [PRIM, "Citron vert", "Carton 4 kg", 4, 9.2],
-    [PRIM, "Persil plat", "Botte", 1, 0.9],
-    [PRIM, "Chou blanc", "Pi\xE8ce 2 kg", 2, 2.4],
-    [PRIM, "Carotte", "Sac 10 kg", 10, 7.5],
-    [VOL, "Poulet entier PAC", "Carton 10 kg", 10, 48],
-    [TROPIC, "Poulet entier PAC", "Carton 10 kg", 10, 44],
-    [VOL, "Cuisses de poulet", "Carton 10 kg", 10, 42],
-    [VOL, "B\u0153uf \xE0 braiser (paleron / macreuse)", "Colis 5 kg", 5, 54.5],
-    [VOL, "Mouton (\xE9paule / gigot)", "Colis 5 kg", 5, 62],
-    [TROPIC, "Capitaine (thiof / m\xE9rou)", "Carton 10 kg", 10, 129],
-    [TROPIC, "Tilapia entier", "Carton 10 kg", 10, 58],
-    [TROPIC, "Poisson fum\xE9 (guedj / kong fum\xE9)", "Carton 5 kg", 5, 72],
-    [AFRO, "Poisson fum\xE9 (guedj / kong fum\xE9)", "Carton 5 kg", 5, 75],
-    [AFRO, "Huile de palme rouge", "Bidon 5 L", 5, 24.5],
-    [TROPIC, "Huile de palme rouge", "Bidon 5 L", 5, 22],
-    [SAHEL, "Huile de palme rouge", "Bidon 5 L", 5, 21.5],
-    [AFRO, "Huile de tournesol", "Bidon 10 L", 10, 19.9],
-    [AFRO, "P\xE2te d'arachide", "Seau 5 kg", 5, 27.5],
-    [SAHEL, "P\xE2te d'arachide", "Seau 5 kg", 5, 25],
-    [AFRO, "Double concentr\xE9 de tomate", "Bo\xEEte 4,5 kg", 4.5, 9.8],
-    [AFRO, "Cube bouillon (volaille / b\u0153uf)", "Carton 240 cubes", 240, 19],
-    [SAHEL, "Graines de n\xE9r\xE9 (soumbala)", "Sachet 1 kg", 1, 14],
-    [AFRO, "Ail frais", "Filet 5 kg", 5, 17],
-    [AFRO, "Moutarde de Dijon", "Seau 5 kg", 5, 12.5],
-    [AFRO, "Vinaigre blanc", "Bidon 5 L", 5, 6.5],
-    [AFRO, "Sel fin", "Sac 25 kg", 25, 9],
-    [AFRO, "Sucre en poudre", "Sac 25 kg", 25, 26],
-    [SAHEL, "Tamarin (pulpe)", "Bloc 1 kg", 1, 6.8],
-    [AFRO, "Tamarin (pulpe)", "Bloc 1 kg", 1, 7.2],
-    [AFRO, "Fleurs de bissap s\xE9ch\xE9es", "Sac 5 kg", 5, 39],
-    [SAHEL, "Fleurs de bissap s\xE9ch\xE9es", "Sac 5 kg", 5, 34.5],
-    [TROPIC, "Fleurs de bissap s\xE9ch\xE9es", "Sac 5 kg", 5, 37],
-    [SAHEL, "Poudre de baobab (bouye)", "Sac 1 kg", 1, 11],
-    [SAHEL, "Gingembre s\xE9ch\xE9 (tranches / poudre)", "Sac 1 kg", 1, 8.5],
-    [PRIM, "Menthe fra\xEEche", "Botte", 1, 0.8],
-    [AFRO, "Eau min\xE9rale 50 cl", "Pack 24", 24, 7.2],
-    [AFRO, "Bi\xE8re Flag 33 cl", "Carton 24", 24, 31],
-    [AFRO, "Barquette aluminium 1000 mL + couvercle", "Carton 500", 500, 62],
-    [AFRO, "Sac kraft \xE0 poign\xE9es", "Carton 500", 500, 38],
-    [AFRO, "Gobelet PET 33 cl / 50 cl (froid)", "Carton 1000", 1e3, 45]
-  ];
-  const offerRows = await db.insert(supplierOffers).values(
-    offers.map(([supplierId, product, packLabel, packQty, packPrice, inStock = true]) => ({
-      restaurantId: rid2,
-      supplierId,
-      productId: pid(product),
-      packLabel,
-      packQty: num(packQty),
-      packPriceEur: num(packPrice, 2),
-      inStock
-    }))
-  ).returning();
-  const ph = [];
-  for (const o of offerRows) {
-    const unitNow = Number(o.packPriceEur) / Number(o.packQty);
-    const prodName = [...byName.entries()].find(([, id]) => id === o.productId)?.[0];
-    const hike = o.supplierId === AFRO && prodName === "Huile de palme rouge" ? 0.12 : o.supplierId === VOL && prodName === "Poulet entier PAC" ? 0.09 : 0;
-    for (const d of [90, 60, 30, 7, 0]) {
-      const factor = hike && d >= 7 ? 1 / (1 + hike) : 1;
-      ph.push({ restaurantId: rid2, offerId: o.id, unitPriceEur: num(unitNow * factor, 4), source: d === 0 ? "catalogue" : "reception", recordedAt: daysAgo(d) });
-    }
-  }
-  await db.insert(priceHistory).values(ph);
-  const RECIPES = [
-    { name: "Poulet brais\xE9", price: 18, ing: [["Poulet entier PAC", 0.45], ["Riz parfum\xE9", 0.12], ["Oignon jaune", 0.08], ["Huile de tournesol", 0.03], ["Piment frais fort (habanero / antillais)", 0.01], ["Moutarde de Dijon", 0.015], ["Cube bouillon (volaille / b\u0153uf)", 1], ["Plantain", 0.15]] },
-    { name: "Maf\xE9 b\u0153uf", price: 16, ing: [["B\u0153uf \xE0 braiser (paleron / macreuse)", 0.2], ["P\xE2te d'arachide", 0.08], ["Riz parfum\xE9", 0.15], ["Tomate", 0.08], ["Double concentr\xE9 de tomate", 0.02], ["Oignon jaune", 0.06], ["Patate douce", 0.08], ["Carotte", 0.05], ["Huile de tournesol", 0.02], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
-    { name: "Yassa poulet", price: 16, ing: [["Cuisses de poulet", 0.35], ["Oignon jaune", 0.25], ["Citron vert", 0.06], ["Moutarde de Dijon", 0.02], ["Riz parfum\xE9", 0.15], ["Huile de tournesol", 0.03], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
-    { name: "Thi\xE9boudienne", price: 17, ing: [["Capitaine (thiof / m\xE9rou)", 0.25], ["Riz bris\xE9", 0.18], ["Tomate", 0.08], ["Double concentr\xE9 de tomate", 0.03], ["Chou blanc", 0.08], ["Carotte", 0.06], ["Manioc frais", 0.06], ["Aubergine africaine (djakatou)", 0.05], ["Huile de tournesol", 0.04], ["Poisson fum\xE9 (guedj / kong fum\xE9)", 0.02], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
-    { name: "Atti\xE9k\xE9 poisson", price: 15, ing: [["Atti\xE9k\xE9", 0.25], ["Tilapia entier", 0.35], ["Tomate", 0.08], ["Oignon jaune", 0.06], ["Piment frais fort (habanero / antillais)", 0.01], ["Huile de tournesol", 0.04], ["Citron vert", 0.03]] },
-    { name: "Alloco", price: 6, ing: [["Plantain", 0.3], ["Huile de tournesol", 0.06], ["Piment frais fort (habanero / antillais)", 5e-3], ["Oignon jaune", 0.03]] },
-    { name: "Ndol\xE9 crevettes", price: 17, ing: [["Ndol\xE9 (feuilles)", 0.15], ["P\xE2te d'arachide", 0.06], ["Crevettes s\xE9ch\xE9es", 0.03], ["B\u0153uf \xE0 braiser (paleron / macreuse)", 0.12], ["Oignon jaune", 0.05], ["Huile de palme rouge", 0.03], ["Plantain", 0.15], ["Ail frais", 5e-3]] },
-    { name: "Saka-saka", price: 14, ing: [["Feuilles de manioc", 0.2], ["Huile de palme rouge", 0.04], ["Poisson fum\xE9 (guedj / kong fum\xE9)", 0.05], ["Oignon jaune", 0.04], ["Riz parfum\xE9", 0.15], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
-    { name: "Jus de bissap 33 cl", price: 3.5, ing: [["Fleurs de bissap s\xE9ch\xE9es", 0.02], ["Sucre en poudre", 0.04], ["Menthe fra\xEEche", 0.05], ["Gobelet PET 33 cl / 50 cl (froid)", 1]] },
-    { name: "Jus de gingembre 33 cl", price: 3.5, ing: [["Gingembre frais", 0.06], ["Sucre en poudre", 0.04], ["Citron vert", 0.02], ["Gobelet PET 33 cl / 50 cl (froid)", 1]] }
-  ];
-  const recipeRows = await db.insert(recipes).values(RECIPES.map((r) => ({ restaurantId: rid2, name: r.name, sellingPriceEur: num(r.price, 2) }))).returning();
-  await db.insert(recipeIngredients).values(
-    RECIPES.flatMap((r, i) => r.ing.map(([p, q2]) => ({ recipeId: recipeRows[i].id, productId: pid(p), quantity: num(q2, 4) })))
-  );
-  const BASE = { "Poulet brais\xE9": 18, "Maf\xE9 b\u0153uf": 10, "Yassa poulet": 12, "Thi\xE9boudienne": 9, "Atti\xE9k\xE9 poisson": 11, "Alloco": 14, "Ndol\xE9 crevettes": 5, "Saka-saka": 4, "Jus de bissap 33 cl": 22, "Jus de gingembre 33 cl": 15 };
-  const salesRows = [];
-  let seed = 42;
-  const rnd = () => {
-    seed = (seed * 9301 + 49297) % 233280;
-    return seed / 233280;
-  };
-  for (let d = 60; d >= 1; d--) {
-    const date2 = daysAgo(d);
-    const dow = date2.getDay();
-    if (dow === 1) continue;
-    const dayFactor = dow === 5 ? 1.45 : dow === 6 ? 1.6 : dow === 0 ? 1.2 : 1;
-    for (const r of recipeRows) {
-      const portions = Math.max(0, Math.round(BASE[r.name] * dayFactor * (0.8 + rnd() * 0.4)));
-      if (portions) salesRows.push({ restaurantId: rid2, recipeId: r.id, day: isoDay(date2), portions });
-    }
-  }
-  await db.insert(sales).values(salesRows);
-  const INV = [
-    ["Riz parfum\xE9", 22, 15, 45, AFRO],
-    ["Riz bris\xE9", 30, 10, 30, TROPIC],
-    ["Atti\xE9k\xE9", 6, 8, 25, AFRO],
-    ["Plantain", 14, 10, 30, AFRO],
-    ["Igname", 12, 5, 20],
-    ["Manioc frais", 4, 3, 8, PRIM],
-    ["Patate douce", 9, 4, 12, PRIM],
-    ["Tomate", 11, 8, 20, PRIM],
-    ["Oignon jaune", 26, 12, 40, PRIM],
-    ["Piment frais fort (habanero / antillais)", 1.5, 1, 3, PRIM],
-    ["Gombo frais", 3, 2, 6, PRIM],
-    ["Aubergine africaine (djakatou)", 2, 2, 6, PRIM],
-    ["Feuilles de manioc", 1.2, 1.5, 4, PRIM],
-    ["Ndol\xE9 (feuilles)", 2.5, 1.5, 4, PRIM],
-    ["Gingembre frais", 6, 4, 10, PRIM],
-    ["Citron vert", 5, 3, 8, PRIM],
-    ["Chou blanc", 6, 4, 10, PRIM],
-    ["Carotte", 7, 4, 12, PRIM],
-    ["Menthe fra\xEEche", 6, 5, 15, PRIM],
-    ["Poulet entier PAC", 34, 25, 70, VOL],
-    ["Cuisses de poulet", 18, 15, 40, VOL],
-    ["B\u0153uf \xE0 braiser (paleron / macreuse)", 9, 6, 15, VOL],
-    ["Capitaine (thiof / m\xE9rou)", 7, 6, 15, TROPIC],
-    ["Tilapia entier", 12, 8, 20, TROPIC],
-    ["Poisson fum\xE9 (guedj / kong fum\xE9)", 3, 2, 6, AFRO],
-    ["Crevettes s\xE9ch\xE9es", 1, 0.5, 2, TROPIC],
-    ["Huile de palme rouge", 4, 5, 15, AFRO],
-    ["Huile de tournesol", 22, 10, 30, AFRO],
-    ["P\xE2te d'arachide", 6, 4, 10, AFRO],
-    ["Double concentr\xE9 de tomate", 5, 3, 9, AFRO],
-    ["Cube bouillon (volaille / b\u0153uf)", 180, 100, 480, AFRO],
-    ["Ail frais", 2, 1, 5, AFRO],
-    ["Moutarde de Dijon", 3, 2, 5, AFRO],
-    ["Sucre en poudre", 18, 10, 30, AFRO],
-    ["Sel fin", 12, 5, 25, AFRO],
-    ["Fleurs de bissap s\xE9ch\xE9es", 2.5, 3, 10, AFRO],
-    ["Gobelet PET 33 cl / 50 cl (froid)", 600, 400, 2e3, AFRO],
-    ["Barquette aluminium 1000 mL + couvercle", 250, 200, 1e3, AFRO]
-  ];
-  const invRows = await db.insert(inventoryItems).values(
-    INV.map(([p, qty3, critical, target, pref]) => ({ restaurantId: rid2, productId: pid(p), quantity: num(qty3), criticalLevel: num(critical), targetLevel: num(target), preferredSupplierId: pref, lastCountedAt: daysAgo(0) }))
-  ).returning();
-  const pastOrders = [
-    { sup: AFRO, d: 42, lines: [["Riz parfum\xE9", 2], ["Huile de palme rouge", 2], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
-    { sup: VOL, d: 40, lines: [["Poulet entier PAC", 4], ["B\u0153uf \xE0 braiser (paleron / macreuse)", 2]] },
-    { sup: PRIM, d: 38, lines: [["Tomate", 3], ["Oignon jaune", 2], ["Plantain", 1]] },
-    { sup: AFRO, d: 28, lines: [["Atti\xE9k\xE9", 2], ["Riz parfum\xE9", 2], ["Fleurs de bissap s\xE9ch\xE9es", 1]], late: true },
-    { sup: VOL, d: 26, lines: [["Poulet entier PAC", 5], ["Cuisses de poulet", 2]] },
-    { sup: TROPIC, d: 21, lines: [["Capitaine (thiof / m\xE9rou)", 1], ["Tilapia entier", 2], ["Riz bris\xE9", 2]], short: ["Riz bris\xE9", 45] },
-    { sup: PRIM, d: 17, lines: [["Tomate", 3], ["Oignon jaune", 2], ["Gombo frais", 1], ["Piment frais fort (habanero / antillais)", 2]] },
-    { sup: AFRO, d: 14, lines: [["Riz parfum\xE9", 2], ["Huile de palme rouge", 2], ["Sucre en poudre", 1]] },
-    { sup: VOL, d: 12, lines: [["Poulet entier PAC", 5]] },
-    { sup: PRIM, d: 9, lines: [["Tomate", 2], ["Oignon jaune", 2], ["Feuilles de manioc", 2], ["Menthe fra\xEEche", 20]] },
-    { sup: AFRO, d: 5, lines: [["Atti\xE9k\xE9", 2], ["Plantain", 1]], late: true },
-    { sup: VOL, d: 3, lines: [["Poulet entier PAC", 4], ["B\u0153uf \xE0 braiser (paleron / macreuse)", 1]] }
-  ];
-  let seq = 100;
-  for (const po of pastOrders) {
-    const lines = po.lines.map(([p, packs]) => {
-      const offer = offerRows.find((o) => o.supplierId === po.sup && o.productId === pid(p));
-      const qty3 = packs * Number(offer.packQty);
-      const unit2 = Number(offer.packPriceEur) / Number(offer.packQty);
-      return { offer, productId: pid(p), packs, quantity: qty3, unitPrice: unit2, total: packs * Number(offer.packPriceEur), productName: p };
-    });
-    const total = lines.reduce((a, l) => a + l.total, 0);
-    const [order] = await db.insert(orders).values({
-      restaurantId: rid2,
-      supplierId: po.sup,
-      reference: `AFS-2026-${String(++seq).padStart(6, "0")}`,
-      status: "livree",
-      channel: "whatsapp",
-      expectedAt: isoDay(daysAgo(po.d - 1)),
-      totalEur: num(total, 2),
-      createdBy: user.id,
-      sentAt: daysAgo(po.d),
-      deliveredAt: daysAgo(po.d - (po.late ? 3 : 1)),
-      createdAt: daysAgo(po.d)
-    }).returning();
-    const lineRows = await db.insert(orderLines).values(lines.map((l) => ({
-      orderId: order.id,
-      productId: l.productId,
-      offerId: l.offer.id,
-      packLabel: l.offer.packLabel,
-      packs: l.packs,
-      quantity: num(l.quantity),
-      unitPriceEur: num(l.unitPrice, 4),
-      lineTotalEur: num(l.total, 2),
-      receivedQty: num(po.short && po.short[0] === l.productName ? po.short[1] : l.quantity)
-    }))).returning();
-    const [delivery] = await db.insert(deliveries).values({ restaurantId: rid2, orderId: order.id, receivedAt: order.deliveredAt, receivedBy: user.id, isLate: !!po.late, hasDiscrepancy: !!po.short }).returning();
-    if (po.short) {
-      const l = lineRows.find((x) => x.productId === pid(po.short[0]));
-      await db.insert(deliveryDiscrepancies).values({ deliveryId: delivery.id, orderLineId: l.id, orderedQty: l.quantity, receivedQty: num(po.short[1]), reason: "manquant", claimMessage: `Bonjour, nous avons constat\xE9 un \xE9cart de ${Number(l.quantity) - po.short[1]} kg sur la livraison ${order.reference} (${po.short[0]} : command\xE9 ${l.quantity} kg, re\xE7u ${po.short[1]} kg). Merci de nous indiquer la suite \xE0 donner.`, resolved: true });
-    }
-    for (const l of lineRows) {
-      const inv = invRows.find((i) => i.productId === l.productId);
-      if (inv) await db.insert(stockMovements).values({ restaurantId: rid2, inventoryItemId: inv.id, type: "reception", quantity: l.receivedQty, unitCostEur: l.unitPriceEur, orderId: order.id, createdBy: user.id, createdAt: delivery.receivedAt });
-    }
-  }
-  const invByProduct = new Map(invRows.map((i) => [i.productId, i.id]));
-  await db.insert(reorderRules).values([
-    { restaurantId: rid2, inventoryItemId: invByProduct.get(pid("Riz parfum\xE9")), threshold: "15", reorderQty: "50", supplierStrategy: "best" },
-    { restaurantId: rid2, inventoryItemId: invByProduct.get(pid("Poulet entier PAC")), threshold: "25", reorderQty: "50", supplierStrategy: "preferred" },
-    { restaurantId: rid2, inventoryItemId: invByProduct.get(pid("Huile de palme rouge")), threshold: "5", reorderQty: "15", supplierStrategy: "best" }
-  ]);
-  console.log(`[seed] Restaurant d\xE9mo \xAB Chez Awa \xBB cr\xE9\xE9 (${rid2}) \u2014 login awa@chezawa.fr / demo1234`);
-  return { restaurantId: rid2 };
-}
-var daysAgo, isoDay, num;
-var init_seed = __esm({
-  "packages/db/src/seed.ts"() {
-    "use strict";
-    init_client();
-    init_schema();
-    init_products();
-    daysAgo = (n18) => new Date(Date.now() - n18 * 864e5);
-    isoDay = (d) => d.toISOString().slice(0, 10);
-    num = (v, dec = 3) => v.toFixed(dec);
-    if (process.argv[1] && process.argv[1].endsWith("seed.ts")) {
-      seedDemo({ force: process.argv.includes("--force") }).then(() => process.exit(0)).catch((e) => {
-        console.error(e);
-        process.exit(1);
-      });
-    }
-  }
-});
-
 // packages/db/src/data/recipes.ts
 var RECIPE_TEMPLATES;
 var init_recipes = __esm({
@@ -2132,6 +1825,317 @@ var init_recipes = __esm({
         ["Menthe fra\xEEche", 0.1]
       ] }
     ];
+  }
+});
+
+// packages/db/src/seed.ts
+import { eq as eq2 } from "drizzle-orm";
+import bcrypt from "bcryptjs";
+async function seedDemo(opts = {}) {
+  const prod = process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+  if (prod && process.env.ALLOW_DEMO_SEED !== "true") {
+    const msg = "Seed de d\xE9monstration refus\xE9 en production (compte awa@chezawa.fr / demo1234 accessible publiquement). Utilisez ALLOW_DEMO_SEED=true si c\u2019est volontaire.";
+    console.error(`[seed] ${msg}`);
+    return { skipped: true, reason: msg };
+  }
+  const db = await getDb();
+  const existing = await db.select().from(restaurants).where(eq2(restaurants.slug, "chez-awa")).limit(1);
+  if (existing.length && !opts.force) {
+    console.log("[seed] Restaurant d\xE9mo d\xE9j\xE0 pr\xE9sent \u2014 rien \xE0 faire.");
+    return { restaurantId: existing[0].id };
+  }
+  if (existing.length && opts.force) {
+    await db.delete(restaurants).where(eq2(restaurants.slug, "chez-awa"));
+  }
+  const existingRef = await db.select({ id: products.id, name: products.name }).from(products);
+  const byName = new Map(existingRef.map((p) => [p.name, p.id]));
+  const missing = REFERENCE_PRODUCTS.filter((p) => !byName.has(p.name));
+  if (missing.length) {
+    const inserted = await db.insert(products).values(
+      missing.map((p) => ({ name: p.name, category: p.category, baseUnit: p.baseUnit, origin: p.origin, aliases: [...p.aliases, ...p.tags ?? []], shelfLifeDays: p.shelfLifeDays, seasonality: p.season?.length ? JSON.stringify(p.season) : null }))
+    ).returning({ id: products.id, name: products.name });
+    inserted.forEach((p) => byName.set(p.name, p.id));
+  }
+  const pid = (name) => {
+    const id = byName.get(name);
+    if (!id) throw new Error(`Produit r\xE9f\xE9rentiel manquant : ${name}`);
+    return id;
+  };
+  const passwordHash = await bcrypt.hash("demo1234", 10);
+  const [user] = await db.insert(users).values({
+    email: "awa@chezawa.fr",
+    passwordHash,
+    fullName: "Awa Diallo",
+    phone: "+33 6 12 34 56 78"
+  }).onConflictDoUpdate({ target: users.email, set: { fullName: "Awa Diallo" } }).returning();
+  const [restaurant] = await db.insert(restaurants).values({
+    name: "Chez Awa",
+    slug: "chez-awa",
+    city: "Nantes",
+    postalCode: "44100",
+    address: "12 rue de la Bastille",
+    cuisine: "s\xE9n\xE9galaise & ivoirienne",
+    coversPerDay: 60,
+    plan: "pro",
+    trialEndsAt: daysAgo(-30),
+    settings: { priceIncreaseAlertPct: 8, forecastHorizonDays: 7 }
+  }).returning();
+  const rid2 = restaurant.id;
+  await db.insert(restaurantMembers).values({ restaurantId: rid2, userId: user.id, role: "owner" });
+  const supplierRows = await db.insert(suppliers).values([
+    { restaurantId: rid2, name: "Afro Distribution Nantes", contactName: "Moussa K.", phone: "+33 2 40 00 11 22", whatsapp: "+33 6 00 11 22 33", city: "Nantes", categories: ["feculents", "epicerie", "boissons"], leadTimeHours: 24, minOrderEur: "80", deliveryFeeEur: "0", preferredChannel: "whatsapp", rating: "4.8" },
+    { restaurantId: rid2, name: "Tropic Import Paris", contactName: "Service commandes", email: "commandes@tropic-import.example", phone: "+33 1 40 00 22 33", city: "Paris", categories: ["feculents", "epicerie", "boissons", "viandes_poissons"], leadTimeHours: 72, minOrderEur: "150", deliveryFeeEur: "25", preferredChannel: "email", rating: "4.3" },
+    { restaurantId: rid2, name: "Primeurs du March\xE9 (MIN Nantes)", contactName: "Jean-Luc", phone: "+33 2 40 33 44 55", city: "Rez\xE9", categories: ["frais"], leadTimeHours: 24, deliveryDays: [1, 2, 3, 4, 5, 6], minOrderEur: "50", deliveryFeeEur: "10", preferredChannel: "telephone", rating: "4.5" },
+    { restaurantId: rid2, name: "Volailles Loire Atlantique", contactName: "Mme Gu\xE9rin", email: "contact@volailles-la.example", phone: "+33 2 40 66 77 88", city: "Ancenis", categories: ["viandes_poissons"], leadTimeHours: 48, deliveryDays: [2, 5], minOrderEur: "120", deliveryFeeEur: "0", preferredChannel: "email", rating: "4.9" },
+    { restaurantId: rid2, name: "Sahel \xC9pices (en ligne)", email: "pro@sahel-epices.example", city: "Lyon", categories: ["epicerie", "boissons"], leadTimeHours: 120, minOrderEur: "60", deliveryFeeEur: "15", preferredChannel: "plateforme", rating: "4.1" }
+  ]).returning();
+  const sup = Object.fromEntries(supplierRows.map((r) => [r.name, r.id]));
+  const AFRO = sup["Afro Distribution Nantes"], TROPIC = sup["Tropic Import Paris"], PRIM = sup["Primeurs du March\xE9 (MIN Nantes)"], VOL = sup["Volailles Loire Atlantique"], SAHEL = sup["Sahel \xC9pices (en ligne)"];
+  const offers = [
+    [AFRO, "Riz parfum\xE9", "Sac 25 kg", 25, 42],
+    [TROPIC, "Riz parfum\xE9", "Sac 25 kg", 25, 45],
+    [SAHEL, "Riz parfum\xE9", "Sac 25 kg", 25, 39, false],
+    [AFRO, "Riz bris\xE9", "Sac 25 kg", 25, 38.5],
+    [TROPIC, "Riz bris\xE9", "Sac 25 kg", 25, 36.9],
+    [AFRO, "Atti\xE9k\xE9", "Carton 10 kg", 10, 34],
+    [TROPIC, "Atti\xE9k\xE9", "Carton 10 kg", 10, 31, false],
+    [AFRO, "Plantain", "Carton 18 kg", 18, 27],
+    [PRIM, "Plantain", "Carton 18 kg", 18, 29.5],
+    [AFRO, "Igname", "Carton 20 kg", 20, 46],
+    [PRIM, "Tomate", "Plateau 6 kg", 6, 9.6],
+    [PRIM, "Oignon jaune", "Sac 10 kg", 10, 8.9],
+    [PRIM, "Piment frais fort (habanero / antillais)", "Barquette 1 kg", 1, 7.8],
+    [PRIM, "Gombo frais", "Carton 4 kg", 4, 18],
+    [PRIM, "Feuilles de manioc", "Sachet 1 kg", 1, 6.5],
+    [PRIM, "Ndol\xE9 (feuilles)", "Sachet 1 kg", 1, 7.9],
+    [PRIM, "Manioc frais", "Carton 10 kg", 10, 16],
+    [PRIM, "Patate douce", "Carton 10 kg", 10, 14],
+    [TROPIC, "Crevettes s\xE9ch\xE9es", "Sachet 500 g", 0.5, 9.5],
+    [PRIM, "Aubergine africaine (djakatou)", "Carton 5 kg", 5, 16.5],
+    [PRIM, "Gingembre frais", "Carton 5 kg", 5, 17.5],
+    [PRIM, "Citron vert", "Carton 4 kg", 4, 9.2],
+    [PRIM, "Persil plat", "Botte", 1, 0.9],
+    [PRIM, "Chou blanc", "Pi\xE8ce 2 kg", 2, 2.4],
+    [PRIM, "Carotte", "Sac 10 kg", 10, 7.5],
+    [VOL, "Poulet entier PAC", "Carton 10 kg", 10, 48],
+    [TROPIC, "Poulet entier PAC", "Carton 10 kg", 10, 44],
+    [VOL, "Cuisses de poulet", "Carton 10 kg", 10, 42],
+    [VOL, "B\u0153uf \xE0 braiser (paleron / macreuse)", "Colis 5 kg", 5, 54.5],
+    [VOL, "Mouton (\xE9paule / gigot)", "Colis 5 kg", 5, 62],
+    [TROPIC, "Capitaine (thiof / m\xE9rou)", "Carton 10 kg", 10, 129],
+    [TROPIC, "Tilapia entier", "Carton 10 kg", 10, 58],
+    [TROPIC, "Poisson fum\xE9 (guedj / kong fum\xE9)", "Carton 5 kg", 5, 72],
+    [AFRO, "Poisson fum\xE9 (guedj / kong fum\xE9)", "Carton 5 kg", 5, 75],
+    [AFRO, "Huile de palme rouge", "Bidon 5 L", 5, 24.5],
+    [TROPIC, "Huile de palme rouge", "Bidon 5 L", 5, 22],
+    [SAHEL, "Huile de palme rouge", "Bidon 5 L", 5, 21.5],
+    [AFRO, "Huile de tournesol", "Bidon 10 L", 10, 19.9],
+    [AFRO, "P\xE2te d'arachide", "Seau 5 kg", 5, 27.5],
+    [SAHEL, "P\xE2te d'arachide", "Seau 5 kg", 5, 25],
+    [AFRO, "Double concentr\xE9 de tomate", "Bo\xEEte 4,5 kg", 4.5, 9.8],
+    [AFRO, "Cube bouillon (volaille / b\u0153uf)", "Carton 240 cubes", 240, 19],
+    [SAHEL, "Graines de n\xE9r\xE9 (soumbala)", "Sachet 1 kg", 1, 14],
+    [AFRO, "Ail frais", "Filet 5 kg", 5, 17],
+    [AFRO, "Moutarde de Dijon", "Seau 5 kg", 5, 12.5],
+    [AFRO, "Vinaigre blanc", "Bidon 5 L", 5, 6.5],
+    [AFRO, "Sel fin", "Sac 25 kg", 25, 9],
+    [AFRO, "Sucre en poudre", "Sac 25 kg", 25, 26],
+    [SAHEL, "Tamarin (pulpe)", "Bloc 1 kg", 1, 6.8],
+    [AFRO, "Tamarin (pulpe)", "Bloc 1 kg", 1, 7.2],
+    [AFRO, "Fleurs de bissap s\xE9ch\xE9es", "Sac 5 kg", 5, 39],
+    [SAHEL, "Fleurs de bissap s\xE9ch\xE9es", "Sac 5 kg", 5, 34.5],
+    [TROPIC, "Fleurs de bissap s\xE9ch\xE9es", "Sac 5 kg", 5, 37],
+    [SAHEL, "Poudre de baobab (bouye)", "Sac 1 kg", 1, 11],
+    [SAHEL, "Gingembre s\xE9ch\xE9 (tranches / poudre)", "Sac 1 kg", 1, 8.5],
+    [PRIM, "Menthe fra\xEEche", "Botte", 1, 0.8],
+    [AFRO, "Eau min\xE9rale 50 cl", "Pack 24", 24, 7.2],
+    [AFRO, "Bi\xE8re Flag 33 cl", "Carton 24", 24, 31],
+    [AFRO, "Barquette aluminium 1000 mL + couvercle", "Carton 500", 500, 62],
+    [AFRO, "Sac kraft \xE0 poign\xE9es", "Carton 500", 500, 38],
+    [AFRO, "Gobelet PET 33 cl / 50 cl (froid)", "Carton 1000", 1e3, 45]
+  ];
+  const offerRows = await db.insert(supplierOffers).values(
+    offers.map(([supplierId, product, packLabel, packQty, packPrice, inStock = true]) => ({
+      restaurantId: rid2,
+      supplierId,
+      productId: pid(product),
+      packLabel,
+      packQty: num(packQty),
+      packPriceEur: num(packPrice, 2),
+      inStock
+    }))
+  ).returning();
+  const ph = [];
+  for (const o of offerRows) {
+    const unitNow = Number(o.packPriceEur) / Number(o.packQty);
+    const prodName = [...byName.entries()].find(([, id]) => id === o.productId)?.[0];
+    const hike = o.supplierId === AFRO && prodName === "Huile de palme rouge" ? 0.12 : o.supplierId === VOL && prodName === "Poulet entier PAC" ? 0.09 : 0;
+    for (const d of [90, 60, 30, 7, 0]) {
+      const factor = hike && d >= 7 ? 1 / (1 + hike) : 1;
+      ph.push({ restaurantId: rid2, offerId: o.id, unitPriceEur: num(unitNow * factor, 4), source: d === 0 ? "catalogue" : "reception", recordedAt: daysAgo(d) });
+    }
+  }
+  await db.insert(priceHistory).values(ph);
+  const RECIPES = [
+    { name: "Poulet brais\xE9", price: 18, ing: [["Poulet entier PAC", 0.45], ["Riz parfum\xE9", 0.12], ["Oignon jaune", 0.08], ["Huile de tournesol", 0.03], ["Piment frais fort (habanero / antillais)", 0.01], ["Moutarde de Dijon", 0.015], ["Cube bouillon (volaille / b\u0153uf)", 1], ["Plantain", 0.15]] },
+    { name: "Maf\xE9 b\u0153uf", price: 16, ing: [["B\u0153uf \xE0 braiser (paleron / macreuse)", 0.2], ["P\xE2te d'arachide", 0.08], ["Riz parfum\xE9", 0.15], ["Tomate", 0.08], ["Double concentr\xE9 de tomate", 0.02], ["Oignon jaune", 0.06], ["Patate douce", 0.08], ["Carotte", 0.05], ["Huile de tournesol", 0.02], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
+    { name: "Yassa poulet", price: 16, ing: [["Cuisses de poulet", 0.35], ["Oignon jaune", 0.25], ["Citron vert", 0.06], ["Moutarde de Dijon", 0.02], ["Riz parfum\xE9", 0.15], ["Huile de tournesol", 0.03], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
+    { name: "Thi\xE9boudienne", price: 17, ing: [["Capitaine (thiof / m\xE9rou)", 0.25], ["Riz bris\xE9", 0.18], ["Tomate", 0.08], ["Double concentr\xE9 de tomate", 0.03], ["Chou blanc", 0.08], ["Carotte", 0.06], ["Manioc frais", 0.06], ["Aubergine africaine (djakatou)", 0.05], ["Huile de tournesol", 0.04], ["Poisson fum\xE9 (guedj / kong fum\xE9)", 0.02], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
+    { name: "Atti\xE9k\xE9 poisson", price: 15, ing: [["Atti\xE9k\xE9", 0.25], ["Tilapia entier", 0.35], ["Tomate", 0.08], ["Oignon jaune", 0.06], ["Piment frais fort (habanero / antillais)", 0.01], ["Huile de tournesol", 0.04], ["Citron vert", 0.03]] },
+    { name: "Alloco", price: 6, ing: [["Plantain", 0.3], ["Huile de tournesol", 0.06], ["Piment frais fort (habanero / antillais)", 5e-3], ["Oignon jaune", 0.03]] },
+    { name: "Ndol\xE9 crevettes", price: 17, ing: [["Ndol\xE9 (feuilles)", 0.15], ["P\xE2te d'arachide", 0.06], ["Crevettes s\xE9ch\xE9es", 0.03], ["B\u0153uf \xE0 braiser (paleron / macreuse)", 0.12], ["Oignon jaune", 0.05], ["Huile de palme rouge", 0.03], ["Plantain", 0.15], ["Ail frais", 5e-3]] },
+    { name: "Saka-saka", price: 14, ing: [["Feuilles de manioc", 0.2], ["Huile de palme rouge", 0.04], ["Poisson fum\xE9 (guedj / kong fum\xE9)", 0.05], ["Oignon jaune", 0.04], ["Riz parfum\xE9", 0.15], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
+    { name: "Jus de bissap 33 cl", price: 3.5, ing: [["Fleurs de bissap s\xE9ch\xE9es", 0.02], ["Sucre en poudre", 0.04], ["Menthe fra\xEEche", 0.05], ["Gobelet PET 33 cl / 50 cl (froid)", 1]] },
+    { name: "Jus de gingembre 33 cl", price: 3.5, ing: [["Gingembre frais", 0.06], ["Sucre en poudre", 0.04], ["Citron vert", 0.02], ["Gobelet PET 33 cl / 50 cl (froid)", 1]] }
+  ];
+  const recipeRows = await db.insert(recipes).values(RECIPES.map((r) => ({ restaurantId: rid2, name: r.name, sellingPriceEur: num(r.price, 2) }))).returning();
+  await db.insert(recipeIngredients).values(
+    RECIPES.flatMap((r, i) => r.ing.map(([p, q2]) => ({ recipeId: recipeRows[i].id, productId: pid(p), quantity: num(q2, 4) })))
+  );
+  const BASE = { "Poulet brais\xE9": 18, "Maf\xE9 b\u0153uf": 10, "Yassa poulet": 12, "Thi\xE9boudienne": 9, "Atti\xE9k\xE9 poisson": 11, "Alloco": 14, "Ndol\xE9 crevettes": 5, "Saka-saka": 4, "Jus de bissap 33 cl": 22, "Jus de gingembre 33 cl": 15 };
+  const salesRows = [];
+  let seed = 42;
+  const rnd = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+  for (let d = 60; d >= 1; d--) {
+    const date2 = daysAgo(d);
+    const dow = date2.getDay();
+    if (dow === 1) continue;
+    const dayFactor = dow === 5 ? 1.45 : dow === 6 ? 1.6 : dow === 0 ? 1.2 : 1;
+    for (const r of recipeRows) {
+      const portions = Math.max(0, Math.round(BASE[r.name] * dayFactor * (0.8 + rnd() * 0.4)));
+      if (portions) salesRows.push({ restaurantId: rid2, recipeId: r.id, day: isoDay(date2), portions });
+    }
+  }
+  await db.insert(sales).values(salesRows);
+  const INV = [
+    ["Riz parfum\xE9", 22, 15, 45, AFRO],
+    ["Riz bris\xE9", 30, 10, 30, TROPIC],
+    ["Atti\xE9k\xE9", 6, 8, 25, AFRO],
+    ["Plantain", 14, 10, 30, AFRO],
+    ["Igname", 12, 5, 20],
+    ["Manioc frais", 4, 3, 8, PRIM],
+    ["Patate douce", 9, 4, 12, PRIM],
+    ["Tomate", 11, 8, 20, PRIM],
+    ["Oignon jaune", 26, 12, 40, PRIM],
+    ["Piment frais fort (habanero / antillais)", 1.5, 1, 3, PRIM],
+    ["Gombo frais", 3, 2, 6, PRIM],
+    ["Aubergine africaine (djakatou)", 2, 2, 6, PRIM],
+    ["Feuilles de manioc", 1.2, 1.5, 4, PRIM],
+    ["Ndol\xE9 (feuilles)", 2.5, 1.5, 4, PRIM],
+    ["Gingembre frais", 6, 4, 10, PRIM],
+    ["Citron vert", 5, 3, 8, PRIM],
+    ["Chou blanc", 6, 4, 10, PRIM],
+    ["Carotte", 7, 4, 12, PRIM],
+    ["Menthe fra\xEEche", 6, 5, 15, PRIM],
+    ["Poulet entier PAC", 34, 25, 70, VOL],
+    ["Cuisses de poulet", 18, 15, 40, VOL],
+    ["B\u0153uf \xE0 braiser (paleron / macreuse)", 9, 6, 15, VOL],
+    ["Capitaine (thiof / m\xE9rou)", 7, 6, 15, TROPIC],
+    ["Tilapia entier", 12, 8, 20, TROPIC],
+    ["Poisson fum\xE9 (guedj / kong fum\xE9)", 3, 2, 6, AFRO],
+    ["Crevettes s\xE9ch\xE9es", 1, 0.5, 2, TROPIC],
+    ["Huile de palme rouge", 4, 5, 15, AFRO],
+    ["Huile de tournesol", 22, 10, 30, AFRO],
+    ["P\xE2te d'arachide", 6, 4, 10, AFRO],
+    ["Double concentr\xE9 de tomate", 5, 3, 9, AFRO],
+    ["Cube bouillon (volaille / b\u0153uf)", 180, 100, 480, AFRO],
+    ["Ail frais", 2, 1, 5, AFRO],
+    ["Moutarde de Dijon", 3, 2, 5, AFRO],
+    ["Sucre en poudre", 18, 10, 30, AFRO],
+    ["Sel fin", 12, 5, 25, AFRO],
+    ["Fleurs de bissap s\xE9ch\xE9es", 2.5, 3, 10, AFRO],
+    ["Gobelet PET 33 cl / 50 cl (froid)", 600, 400, 2e3, AFRO],
+    ["Barquette aluminium 1000 mL + couvercle", 250, 200, 1e3, AFRO]
+  ];
+  const invRows = await db.insert(inventoryItems).values(
+    INV.map(([p, qty3, critical, target, pref]) => ({ restaurantId: rid2, productId: pid(p), quantity: num(qty3), criticalLevel: num(critical), targetLevel: num(target), preferredSupplierId: pref, lastCountedAt: daysAgo(0) }))
+  ).returning();
+  const pastOrders = [
+    { sup: AFRO, d: 42, lines: [["Riz parfum\xE9", 2], ["Huile de palme rouge", 2], ["Cube bouillon (volaille / b\u0153uf)", 1]] },
+    { sup: VOL, d: 40, lines: [["Poulet entier PAC", 4], ["B\u0153uf \xE0 braiser (paleron / macreuse)", 2]] },
+    { sup: PRIM, d: 38, lines: [["Tomate", 3], ["Oignon jaune", 2], ["Plantain", 1]] },
+    { sup: AFRO, d: 28, lines: [["Atti\xE9k\xE9", 2], ["Riz parfum\xE9", 2], ["Fleurs de bissap s\xE9ch\xE9es", 1]], late: true },
+    { sup: VOL, d: 26, lines: [["Poulet entier PAC", 5], ["Cuisses de poulet", 2]] },
+    { sup: TROPIC, d: 21, lines: [["Capitaine (thiof / m\xE9rou)", 1], ["Tilapia entier", 2], ["Riz bris\xE9", 2]], short: ["Riz bris\xE9", 45] },
+    { sup: PRIM, d: 17, lines: [["Tomate", 3], ["Oignon jaune", 2], ["Gombo frais", 1], ["Piment frais fort (habanero / antillais)", 2]] },
+    { sup: AFRO, d: 14, lines: [["Riz parfum\xE9", 2], ["Huile de palme rouge", 2], ["Sucre en poudre", 1]] },
+    { sup: VOL, d: 12, lines: [["Poulet entier PAC", 5]] },
+    { sup: PRIM, d: 9, lines: [["Tomate", 2], ["Oignon jaune", 2], ["Feuilles de manioc", 2], ["Menthe fra\xEEche", 20]] },
+    { sup: AFRO, d: 5, lines: [["Atti\xE9k\xE9", 2], ["Plantain", 1]], late: true },
+    { sup: VOL, d: 3, lines: [["Poulet entier PAC", 4], ["B\u0153uf \xE0 braiser (paleron / macreuse)", 1]] }
+  ];
+  let seq = 100;
+  for (const po of pastOrders) {
+    const lines = po.lines.map(([p, packs]) => {
+      const offer = offerRows.find((o) => o.supplierId === po.sup && o.productId === pid(p));
+      const qty3 = packs * Number(offer.packQty);
+      const unit2 = Number(offer.packPriceEur) / Number(offer.packQty);
+      return { offer, productId: pid(p), packs, quantity: qty3, unitPrice: unit2, total: packs * Number(offer.packPriceEur), productName: p };
+    });
+    const total = lines.reduce((a, l) => a + l.total, 0);
+    const [order] = await db.insert(orders).values({
+      restaurantId: rid2,
+      supplierId: po.sup,
+      reference: `AFS-2026-${String(++seq).padStart(6, "0")}`,
+      status: "livree",
+      channel: "whatsapp",
+      expectedAt: isoDay(daysAgo(po.d - 1)),
+      totalEur: num(total, 2),
+      createdBy: user.id,
+      sentAt: daysAgo(po.d),
+      deliveredAt: daysAgo(po.d - (po.late ? 3 : 1)),
+      createdAt: daysAgo(po.d)
+    }).returning();
+    const lineRows = await db.insert(orderLines).values(lines.map((l) => ({
+      orderId: order.id,
+      productId: l.productId,
+      offerId: l.offer.id,
+      packLabel: l.offer.packLabel,
+      packs: l.packs,
+      quantity: num(l.quantity),
+      unitPriceEur: num(l.unitPrice, 4),
+      lineTotalEur: num(l.total, 2),
+      receivedQty: num(po.short && po.short[0] === l.productName ? po.short[1] : l.quantity)
+    }))).returning();
+    const [delivery] = await db.insert(deliveries).values({ restaurantId: rid2, orderId: order.id, receivedAt: order.deliveredAt, receivedBy: user.id, isLate: !!po.late, hasDiscrepancy: !!po.short }).returning();
+    if (po.short) {
+      const l = lineRows.find((x) => x.productId === pid(po.short[0]));
+      await db.insert(deliveryDiscrepancies).values({ deliveryId: delivery.id, orderLineId: l.id, orderedQty: l.quantity, receivedQty: num(po.short[1]), reason: "manquant", claimMessage: `Bonjour, nous avons constat\xE9 un \xE9cart de ${Number(l.quantity) - po.short[1]} kg sur la livraison ${order.reference} (${po.short[0]} : command\xE9 ${l.quantity} kg, re\xE7u ${po.short[1]} kg). Merci de nous indiquer la suite \xE0 donner.`, resolved: true });
+    }
+    for (const l of lineRows) {
+      const inv = invRows.find((i) => i.productId === l.productId);
+      if (inv) await db.insert(stockMovements).values({ restaurantId: rid2, inventoryItemId: inv.id, type: "reception", quantity: l.receivedQty, unitCostEur: l.unitPriceEur, orderId: order.id, createdBy: user.id, createdAt: delivery.receivedAt });
+    }
+  }
+  const invByProduct = new Map(invRows.map((i) => [i.productId, i.id]));
+  await db.insert(reorderRules).values([
+    { restaurantId: rid2, inventoryItemId: invByProduct.get(pid("Riz parfum\xE9")), threshold: "15", reorderQty: "50", supplierStrategy: "best" },
+    { restaurantId: rid2, inventoryItemId: invByProduct.get(pid("Poulet entier PAC")), threshold: "25", reorderQty: "50", supplierStrategy: "preferred" },
+    { restaurantId: rid2, inventoryItemId: invByProduct.get(pid("Huile de palme rouge")), threshold: "5", reorderQty: "15", supplierStrategy: "best" }
+  ]);
+  console.log(`[seed] Restaurant d\xE9mo \xAB Chez Awa \xBB cr\xE9\xE9 (${rid2}) \u2014 login awa@chezawa.fr / demo1234`);
+  return { restaurantId: rid2 };
+}
+var daysAgo, isoDay, num;
+var init_seed = __esm({
+  "packages/db/src/seed.ts"() {
+    "use strict";
+    init_client();
+    init_schema();
+    init_products();
+    init_recipes();
+    daysAgo = (n18) => new Date(Date.now() - n18 * 864e5);
+    isoDay = (d) => d.toISOString().slice(0, 10);
+    num = (v, dec = 3) => v.toFixed(dec);
+    if (process.argv[1] && process.argv[1].endsWith("seed.ts")) {
+      seedDemo({ force: process.argv.includes("--force") }).then(() => process.exit(0)).catch((e) => {
+        console.error(e);
+        process.exit(1);
+      });
+    }
   }
 });
 
@@ -5752,7 +5756,7 @@ var init_digest = __esm({
 // apps/api/src/routes/public.ts
 import { Hono as Hono6 } from "hono";
 import { z as z5 } from "zod";
-import { and as and14, desc as desc5, eq as eq17, ilike, isNull as isNull7, sql as sql12 } from "drizzle-orm";
+import { and as and14, desc as desc5, eq as eq17, ilike, isNotNull as isNotNull2, isNull as isNull7, sql as sql12 } from "drizzle-orm";
 function rateLimited(ip) {
   const now = Date.now();
   const arr = (hits.get(ip) ?? []).filter((t) => now - t < 36e5);
@@ -5795,6 +5799,22 @@ var init_public = __esm({
     ];
     FOUNDER_OFFER = { label: "Offre pilote fondateur", discountPct: 50, seats: 20, trialDays: 30, description: "\u221250 % \xE0 vie pour les 20 premiers restaurants qui nous aident \xE0 construire le produit. Essai gratuit 30 jours, sans carte bancaire." };
     publicRoutes.get("/public/plans", (c) => c.json({ plans: PLANS, founderOffer: FOUNDER_OFFER, marketplaceCommissionPct: "2\u20135" }));
+    publicRoutes.get("/public/proof", async (c) => {
+      const db = await getDb();
+      const rows = await db.select({ message: feedback.message, score: feedback.score, restaurantName: restaurants.name, city: restaurants.city }).from(feedback).innerJoin(restaurants, eq17(restaurants.id, feedback.restaurantId)).where(and14(eq17(feedback.published, true), isNotNull2(feedback.message))).orderBy(desc5(feedback.createdAt)).limit(6);
+      const npsRows = await db.select({ score: feedback.score }).from(feedback).where(and14(eq17(feedback.kind, "nps"), isNotNull2(feedback.score)));
+      const npsAvg = npsRows.length ? Math.round(npsRows.reduce((a, r) => a + Number(r.score), 0) / npsRows.length * 10) / 10 : null;
+      return c.json({
+        testimonials: rows.map((r) => ({ quote: r.message, restaurant: r.restaurantName, city: r.city, score: r.score != null ? Number(r.score) : null })),
+        metrics: {
+          referenceProducts: REFERENCE_PRODUCTS.length,
+          recipeTemplates: RECIPE_TEMPLATES.length,
+          nps: npsAvg,
+          npsResponses: npsRows.length,
+          founderSeats: FOUNDER_OFFER.seats
+        }
+      });
+    });
     leadBody = z5.object({
       restaurantName: z5.string().min(2).max(120),
       contactName: z5.string().min(2).max(120),
@@ -6371,7 +6391,34 @@ var init_billing2 = __esm({
           const res = await applyVendorSetup(o);
           if (!res.applied) throw new Error(`Session \xAB enregistrer une carte \xBB non appliqu\xE9e : ${res.reason}`);
         } else if (evt.type.startsWith("customer.subscription.")) {
-          rid2 = (await applySubscription(o)).rid;
+          const sub = o;
+          const metaRid = sub.metadata?.restaurantId;
+          const [prev] = metaRid ? await db.select({ subscriptionStatus: restaurants.subscriptionStatus }).from(restaurants).where(eq18(restaurants.id, metaRid)) : [];
+          const applied = await applySubscription(sub);
+          rid2 = applied.rid;
+          if (applied.status === "active" && applied.plan && applied.rid && prev?.subscriptionStatus !== "active") {
+            const [rr] = await db.select({ name: restaurants.name, currentPeriodEnd: restaurants.currentPeriodEnd }).from(restaurants).where(eq18(restaurants.id, applied.rid));
+            const [owner] = await db.select({ email: users.email, fullName: users.fullName }).from(users).innerJoin(restaurantMembers, eq18(restaurantMembers.userId, users.id)).where(and15(eq18(restaurantMembers.restaurantId, applied.rid), eq18(restaurantMembers.role, "owner"))).limit(1);
+            if (owner) {
+              const first = owner.fullName.split(" ")[0] || "chef";
+              const when = rr?.currentPeriodEnd ? new Date(rr.currentPeriodEnd).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) : "dans un mois";
+              await sendMail({
+                to: owner.email,
+                subject: `AFRISUPPLY \u2014 votre abonnement ${applied.plan} est actif \u{1F389}`,
+                text: `Bonjour ${first},
+
+C'est confirm\xE9 : l'abonnement ${applied.plan} d'AFRISUPPLY est actif pour \xAB ${rr?.name ?? "votre restaurant"} \xBB.
+
+Prochain pr\xE9l\xE8vement le ${when}. Vous g\xE9rez tout (factures, carte, r\xE9siliation) depuis l'application : Abonnement.
+
+Merci de nous faire confiance \u2014 une question, r\xE9pondez \xE0 cet e-mail.
+
+L'\xE9quipe AFRISUPPLY`,
+                html: `<p>Bonjour ${first},</p><p>C'est confirm\xE9 : l'abonnement <b>${applied.plan}</b> d'AFRISUPPLY est actif pour <b>\xAB ${rr?.name ?? "votre restaurant"} \xBB</b>.</p><p>Prochain pr\xE9l\xE8vement le <b>${when}</b>. Factures, carte et r\xE9siliation se g\xE8rent depuis <b>Abonnement</b> dans l'application.</p><p>Merci de nous faire confiance \u2014 une question, r\xE9pondez \xE0 cet e-mail.</p><p>L'\xE9quipe AFRISUPPLY</p>`,
+                tags: { type: "subscription_active" }
+              });
+            }
+          }
         } else if ((evt.type === "invoice.paid" || evt.type === "invoice.payment_succeeded") && o.id) {
           const res = await handleStripeInvoicePaid(db, o);
           if (typeof o.customer === "string") {
@@ -6382,8 +6429,6 @@ var init_billing2 = __esm({
           void res;
         } else if (evt.type === "invoice.payment_failed" && typeof o.customer === "string") {
           await db.update(restaurants).set({ subscriptionStatus: "past_due" }).where(eq18(restaurants.stripeCustomerId, o.customer));
-        } else if (evt.type === "invoice.paid" && typeof o.id === "string") {
-          await db.update(commissionInvoices).set({ status: "payee" }).where(eq18(commissionInvoices.stripeInvoiceId, o.id));
         }
         await db.update(billingEvents).set({ status: "traite", restaurantId: rid2 ?? null, error: null }).where(eq18(billingEvents.id, evt.id));
         return c.json({ received: true, type: evt.type });
@@ -6485,7 +6530,9 @@ var init_billing2 = __esm({
       return c.json(res, res.sent ? 200 : 424);
     });
     billingRoutes.post("/billing/checkout", async (c) => {
-      const { plan: plan2 } = z6.object({ plan: z6.enum(["starter", "pro", "business"]) }).parse(await c.req.json());
+      const parsed = z6.object({ plan: z6.enum(["starter", "pro", "business"]) }).safeParse(await c.req.json());
+      if (!parsed.success) return c.json({ error: "Formule inconnue (starter, pro ou business)" }, 400);
+      const { plan: plan2 } = parsed.data;
       if (!stripeConfigured()) return c.json({ error: `Paiement en ligne bient\xF4t disponible \u2014 \xE9crivez-nous \xE0 ${SUPPORT.email()} pour activer votre formule.` }, 503);
       try {
         const s = await createCheckout(c.get("restaurantId"), c.get("user").email, plan2);
@@ -6840,9 +6887,10 @@ L'\xE9quipe AFRISUPPLY`,
     });
     pilotAdminRoutes.put("/admin/pilots/feedback/:id", async (c) => {
       if (!isAdmin2(c.get("user").email)) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-      const { status } = z7.object({ status: z7.enum(["nouveau", "traite"]) }).parse(await c.req.json());
+      const b = z7.object({ status: z7.enum(["nouveau", "traite"]).optional(), published: z7.boolean().optional() }).parse(await c.req.json());
+      if (b.status === void 0 && b.published === void 0) return c.json({ error: "Rien \xE0 mettre \xE0 jour (status ou published)." }, 400);
       const db = await getDb();
-      const [row] = await db.update(feedback).set({ status }).where(eq19(feedback.id, c.req.param("id"))).returning();
+      const [row] = await db.update(feedback).set({ ...b.status !== void 0 ? { status: b.status } : {}, ...b.published !== void 0 ? { published: b.published } : {} }).where(eq19(feedback.id, c.req.param("id"))).returning();
       return c.json({ feedback: row });
     });
   }
@@ -8253,6 +8301,27 @@ Tant que l'adresse n'est pas confirm\xE9e, nous ne pouvons pas vous envoyer les 
   void audit("email.verification.sent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== "log" } });
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, "afs_token", token, cookieOpts);
+  const firstName2 = user.fullName.split(" ")[0] || "chef";
+  const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+  await sendMail({
+    to: user.email,
+    subject: "AFRISUPPLY \u2014 bienvenue ! Votre tableau de bord en 20 minutes",
+    text: `Bonjour ${firstName2},
+
+Votre espace \xAB ${d.restaurantName} \xBB est pr\xEAt : ${appUrl}/app/demarrer
+
+En 20 minutes, pas \xE0 pas :
+1. Configurez votre carte (vos produits sont d\xE9duits des recettes)
+2. Fixez vos seuils : vous serez alert\xE9 avant les ruptures
+3. Pr\xE9parez votre premi\xE8re commande \u2014 rien ne part sans vous
+
+Une question ? R\xE9pondez \xE0 cet e-mail, on r\xE9pond sous 24 h.
+
+Bienvenue \xE0 bord,
+L'\xE9quipe AFRISUPPLY`,
+    html: `<p>Bonjour ${firstName2},</p><p>Votre espace <b>\xAB ${d.restaurantName} \xBB</b> est pr\xEAt.</p><p><a href="${appUrl}/app/demarrer" style="display:inline-block;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Commencer (20 minutes)</a></p><ol><li>Configurez votre carte (vos produits sont d\xE9duits des recettes)</li><li>Fixez vos seuils : vous serez alert\xE9 avant les ruptures</li><li>Pr\xE9parez votre premi\xE8re commande \u2014 rien ne part sans vous</li></ol><p>Une question ? R\xE9pondez \xE0 cet e-mail, on r\xE9pond sous 24 h.</p><p>Bienvenue \xE0 bord,<br>L'\xE9quipe AFRISUPPLY</p>`,
+    tags: { type: "welcome" }
+  });
   return c.json({
     token,
     user: { id: user.id, email: user.email, fullName: user.fullName },

@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { Check, Minus } from 'lucide-react';
 import { PLANS, FOUNDER } from '../../lib/plans';
 import { SUPPORT_EMAIL, mailtoSupport } from '../../lib/support';
+import SocialProof from '../../components/site/SocialProof';
 
 const MATRIX: { group: string; rows: { label: string; starter: boolean | string; pro: boolean | string; business: boolean | string }[] }[] = [
   { group: 'Achats au quotidien', rows: [
@@ -36,6 +37,7 @@ export default function Pricing() {
       <p className="mt-3 text-center text-stone-600">Sans engagement, résiliable en un clic. Prix HT par établissement, facture PDF chaque mois.</p>
       <div className="mx-auto mt-6 max-w-3xl rounded-2xl border border-brand-200 bg-brand-50 p-4 text-center text-sm text-brand-900"><b>Offre pilote fondateur</b> — {FOUNDER.trialDays} jours gratuits sans carte, puis <b>−{FOUNDER.discountPct} % à vie</b> pour les {FOUNDER.seats} premiers restaurants. <Link to="/demander-un-acces?plan=pilote" className="underline font-semibold">Je candidate</Link>
         <p className="mt-2 text-xs text-brand-800">Paiement par carte bancaire (Stripe) ou par virement sur facture. Le guichet carte est en cours d’ouverture : en attendant, écrivez-nous, l’activation est faite à la main sous 24 h ouvrées.</p></div>
+      <SocialProof />
       <div className="mt-10 grid gap-6 md:grid-cols-3">
         {PLANS.map((p) => <div key={p.id} className={`card relative ${p.highlight ? 'ring-2 ring-brand-500' : ''}`}>{p.highlight && <span className="absolute -top-3 left-5 pill bg-brand-600 text-white">Le plus choisi</span>}<h2 className="text-xl font-bold">{p.name}</h2><p className="text-sm text-stone-500">{p.tagline}</p><p className="mt-4"><span className="text-4xl font-extrabold">{p.priceMonthly} €</span><span className="text-stone-500"> / mois</span></p><p className="text-xs text-stone-500">soit {Math.round(p.priceMonthly * (1 - FOUNDER.discountPct / 100))} € / mois en offre pilote</p><ul className="mt-4 space-y-1.5 text-sm text-stone-700">{p.features.map((f) => <li key={f} className="flex gap-2"><Check size={16} className="mt-0.5 shrink-0 text-emerald-600" /> {f}</li>)}</ul><Link to={`/demander-un-acces?plan=${p.id}`} className={`mt-6 w-full justify-center ${p.highlight ? 'btn-primary' : 'btn-ghost'}`}>Essayer {FOUNDER.trialDays} jours</Link></div>)}
       </div>

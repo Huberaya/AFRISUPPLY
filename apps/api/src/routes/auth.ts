@@ -79,6 +79,16 @@ authRoutes.post('/register', async (c) => {
 
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, 'afs_token', token, cookieOpts);
+  // Chantier 6 (audit) — e-mail de bienvenue : le nouveau pilote sait quoi faire dans les 30 minutes
+  // (critère : « s'inscrit, … et commande sans aide en < 30 min »).
+  const firstName2 = user.fullName.split(' ')[0] || 'chef';
+  const appUrl = process.env.APP_URL ?? 'http://localhost:3000';
+  await sendMail({
+    to: user.email, subject: 'AFRISUPPLY — bienvenue ! Votre tableau de bord en 20 minutes',
+    text: `Bonjour ${firstName2},\n\nVotre espace « ${d.restaurantName} » est prêt : ${appUrl}/app/demarrer\n\nEn 20 minutes, pas à pas :\n1. Configurez votre carte (vos produits sont déduits des recettes)\n2. Fixez vos seuils : vous serez alerté avant les ruptures\n3. Préparez votre première commande — rien ne part sans vous\n\nUne question ? Répondez à cet e-mail, on répond sous 24 h.\n\nBienvenue à bord,\nL'équipe AFRISUPPLY`,
+    html: `<p>Bonjour ${firstName2},</p><p>Votre espace <b>« ${d.restaurantName} »</b> est prêt.</p><p><a href="${appUrl}/app/demarrer" style="display:inline-block;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Commencer (20 minutes)</a></p><ol><li>Configurez votre carte (vos produits sont déduits des recettes)</li><li>Fixez vos seuils : vous serez alerté avant les ruptures</li><li>Préparez votre première commande — rien ne part sans vous</li></ol><p>Une question ? Répondez à cet e-mail, on répond sous 24 h.</p><p>Bienvenue à bord,<br>L'équipe AFRISUPPLY</p>`,
+    tags: { type: 'welcome' },
+  });
   return c.json({
     token, user: { id: user.id, email: user.email, fullName: user.fullName },
     restaurant, emailVerified: false, emailVerification: mailStatus(mail, link, 'verification'),

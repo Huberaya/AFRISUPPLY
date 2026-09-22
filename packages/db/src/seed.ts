@@ -10,7 +10,8 @@ import { getDb } from './client.js';
 import * as s from './schema.js';
 
 import { REFERENCE_PRODUCTS } from './data/products.js';
-export { REFERENCE_PRODUCTS };
+import { RECIPE_TEMPLATES } from './data/recipes.js';
+export { REFERENCE_PRODUCTS, RECIPE_TEMPLATES };
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);

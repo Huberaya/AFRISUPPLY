@@ -183,8 +183,10 @@ pilotAdminRoutes.post('/admin/pilots/invite', async (c) => {
 
 pilotAdminRoutes.put('/admin/pilots/feedback/:id', async (c) => {
   if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
-  const { status } = z.object({ status: z.enum(['nouveau', 'traite']) }).parse(await c.req.json());
-  const db = await getDb(); const [row] = await db.update(feedback).set({ status }).where(eq(feedback.id, c.req.param('id'))).returning();
+  const b = z.object({ status: z.enum(['nouveau', 'traite']).optional(), published: z.boolean().optional() }).parse(await c.req.json());
+  if (b.status === undefined && b.published === undefined) return c.json({ error: 'Rien à mettre à jour (status ou published).' }, 400);
+  const db = await getDb();
+  const [row] = await db.update(feedback).set({ ...(b.status !== undefined ? { status: b.status } : {}), ...(b.published !== undefined ? { published: b.published } : {}) }).where(eq(feedback.id, c.req.param('id'))).returning();
   return c.json({ feedback: row });
 });
 
