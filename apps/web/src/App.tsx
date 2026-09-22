@@ -56,6 +56,7 @@ const Legal = lazy(() => import('./pages/site/Legal'));
 const VendorTerms = lazy(() => import('./pages/site/VendorTerms'));
 const Terms = lazy(() => import('./pages/site/Terms'));
 const StatusPage = lazy(() => import('./pages/site/Status'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 // Port de ethimarket/src/components/ProtectedRoute.tsx
 function Protected() {
@@ -126,9 +127,10 @@ export default function App() {
                 <Route path="parametres" element={<Settings />} />
                 <Route path="equipe" element={<Team />} />
                 <Route path="express" element={<Express />} />
+                <Route path="*" element={<NotFound />} />
               </Route>
             </Route>
-            <Route path="*" element={<Navigate to="/app" replace />} />
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
       </BrowserRouter>
