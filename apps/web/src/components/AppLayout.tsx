@@ -8,7 +8,7 @@
 // barre d'onglets en bas pour les 4 gestes du quotidien.
 import { useMemo, useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, Home, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users, Building2, CreditCard, Search, Scale, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, Home, ArrowLeft, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users, Building2, CreditCard, Search, Scale, type LucideIcon } from 'lucide-react';
 import { api } from '../lib/api';
 import { FeedbackWidget, UsageBeacon } from './Pilot';
 import { useAuth } from '../lib/auth';
@@ -96,8 +96,17 @@ export function Logo({ light = false, to = '/' }: { light?: boolean; to?: string
 // sur petit écran), posé dans les en-têtes, les menus et les pages de connexion → la vitrine `/`.
 export function HomeButton({ light = false }: { light?: boolean }) {
   return (
-    <Link to="/" aria-label="Retour à l’accueil" className={`btn-ghost !py-1.5 whitespace-nowrap ${light ? '!bg-stone-800 !text-stone-100 hover:!bg-stone-700' : ''}`}>
-      <Home size={16} />
+    <Link
+      to="/"
+      aria-label="Retour à l’accueil"
+      className={`inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-semibold transition shadow-sm whitespace-nowrap ${
+        light
+          ? 'bg-stone-800 text-white border border-stone-700 hover:bg-stone-700 hover:border-stone-600'
+          : 'bg-white text-stone-900 border-2 border-stone-300 hover:border-brand-500 hover:text-brand-700 hover:bg-stone-50'
+      }`}
+    >
+      <ArrowLeft size={14} className="shrink-0" />
+      <Home size={16} className={`shrink-0 ${light ? 'text-brand-400' : 'text-brand-600'}`} />
       <span className="sm:hidden">Accueil</span>
       <span className="hidden sm:inline">Retour à l’accueil</span>
     </Link>
@@ -207,11 +216,13 @@ export default function AppLayout() {
       {open && <div className="fixed inset-0 z-40 flex lg:hidden"><div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} /><div className="relative z-50">{Sidebar}</div></div>}
       <div className="flex-1 lg:pl-64">
         <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-stone-200 bg-white/90 px-4 py-3 backdrop-blur lg:px-8">
-          <button className="rounded-lg p-1 hover:bg-stone-100 lg:hidden" onClick={() => setOpen(!open)} aria-label={open ? 'Fermer le menu' : 'Ouvrir le menu'}>{open ? <X /> : <Menu />}</button>
-          <div className="lg:hidden"><Logo /></div>
-          <div className="hidden lg:block text-sm text-stone-500">{new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <button className="rounded-lg p-1 hover:bg-stone-100 lg:hidden" onClick={() => setOpen(!open)} aria-label={open ? 'Fermer le menu' : 'Ouvrir le menu'}>{open ? <X /> : <Menu />}</button>
+            <div className="lg:hidden"><Logo /></div>
             <HomeButton />
+            <div className="hidden xl:block text-sm text-stone-500">{new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
+          </div>
+          <div className="flex items-center gap-2">
             <Link to="/app" className="relative rounded-xl p-2 hover:bg-stone-100" aria-label={unread > 0 ? `${unread} alerte(s) non lue(s)` : 'Alertes'}><Bell size={18} />{unread > 0 && <span className="absolute -right-0.5 -top-0.5 h-4 min-w-4 rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-4 text-white">{unread}</span>}</Link>
             <Link to="/app/ia" className="btn-primary !py-1.5"><Sparkles size={16} /> <span className="hidden sm:inline">Demander à l’IA</span></Link>
           </div>
