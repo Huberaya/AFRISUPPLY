@@ -50,7 +50,7 @@ Légende : ✅ **terminé et vérifié** · 🟡 **partiel** · 🔵 **simulé /
 
 | Domaine | Élément | Statut | Preuve / réserve |
 |---|---|---|---|
-| Compte | Inscription, connexion, rôles (propriétaire/gérant/équipe) | ✅ | 372 tests API ; scénarios E2E |
+| Compte | Inscription, connexion, rôles (propriétaire/gérant/équipe) | ✅ | 376 tests API ; scénarios E2E |
 | Compte | Vérification d'adresse e-mail (jeton haché, 48 h, usage unique) | ✅ | `chantier5_verif.py` 37/37 |
 | Compte | Mot de passe oublié / réinitialisation / « déconnecter partout » | ✅ | idem |
 | Compte | 2FA, SSO | ⬜ | absent (acceptable en B2B TPE, à assumer) |
@@ -219,7 +219,7 @@ et **chacun est affiché à l'écran** quand il s'applique.
 | Architecture | ✅ | monorepo TS : `apps/web` (React 18/Vite), `apps/api` (Hono), `packages/db` (Drizzle + PGlite/Neon) |
 | Taille | — | 64 écrans · **244 endpoints** (23 routeurs) · **48 tables** · 30 index · **28 migrations** |
 | Qualité | ✅ | `tsc` strict 0 erreur (API + web), ESLint 0 erreur avec `no-explicit-any`, 55 fichiers de tests |
-| Tests | ✅ | base 5 · API 372 · web 72 (**449 tests verts** après fusion) |
+| Tests | ✅ | base 5 · API 376 · web 74 (**455 tests verts** après fusion) |
 | Vérification réelle | ✅ | 12 scripts, **507 vérifications bout-en-bout** contre une API vivante |
 | Migrations | ✅ | chaîne 0000→0027 cohérente (`No schema changes`), **base neuve migrée + seed** rejoués aujourd'hui |
 | Base | ✅ | PGlite en local, Neon en production ; `auto-migrate` ; seed démo refusé en production |
@@ -504,12 +504,24 @@ auto-évaluation mensuelle de la précision.
 | Base **neuve** migrée 0000→0027 + seed | **28 migrations**, **48 tables**, démo créée (`awa@chezawa.fr`) |
 | `tsc --noEmit` API / web | **0 erreur** |
 | `npm run lint` | **0 erreur** (règle `no-explicit-any` active) |
-| Tests | **449 verts** — base 5 · API 372 · web 72 |
-| Vérifications bout-en-bout (`scripts/verifications/toutes.sh`) | **507 vérifications · 12/12 scripts** |
+| Tests | **455 verts** — base 5 · API 376 · web 74 |
+| Vérifications bout-en-bout (`scripts/verifications/toutes.sh`) | **507 vérifications · 12/12 scripts** (rejouée avec l'environnement exact de la CI : `JWT_SECRET`, `CRON_SECRET`, `ADMIN_EMAILS`) |
 | Scénarios métier | 49/49 (S1→S6 + cross-tenant + 4 bugs d'intégrité rejoués) |
 | Assistant interrogé en direct | réponses **chiffrées sur les données réelles** (fournisseurs, prix, ruptures) |
-| Fusions d'historiques | **6 vagues** intégrées sans jamais écraser le distant |
+| Fusions d'historiques | **7 vagues** intégrées sans jamais écraser le distant |
 | Réinitialisations de l'environnement | **5** (incident d'outillage, sans effet sur le produit) |
+
+**Correctif du 22 septembre (après la publication du rapport)** — la CI GitHub, enfin exécutable une fois
+le jeton `workflow` en place, a échoué là où toutes mes vérifications passaient. Elle avait raison :
+`apps/web/tsconfig.json` est un fichier de *solution* (`"files": []`) — mon `tsc -p apps/web` local ne
+contrôlait **aucun fichier**. Le vrai contrôle (`tsconfig.app.json`) a révélé qu'une fusion avait repris
+`lib/auth.tsx` d'une autre version alors que `components/AppLayout.tsx` restait le mien : le type `User`
+avait perdu `emailVerified`, si bien que le test `if (!user || user.emailVerified !== false) return null;`
+de la coquille valait **toujours vrai** → **l'application affichait un écran blanc** pour tout compte
+connecté. Corrigé (`auth.tsx`, `api.ts`) et rendu impossible à reproduire : un test de contrat monte
+désormais le vrai `AuthProvider` et lit ces champs (`apps/web/src/lib/auth.contrat.test.tsx`, +2 tests).
+**Leçon à garder** : c'est la CI qui a trouvé ce bug, pas mes vérifications — un audit honnête doit dire
+que ses propres preuves avaient un angle mort.
 
 **Ce que cet audit ne peut pas prouver** : le comportement avec des clés de paiement réelles, le
 comportement sous 50 restaurants simultanés, et — le plus important — **ce qu'un restaurateur en pense**.
