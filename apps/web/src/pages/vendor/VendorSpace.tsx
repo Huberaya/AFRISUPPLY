@@ -125,7 +125,7 @@ function Offers() {
         <QuickPrice onDone={() => void load()} />
       </div>
       <CatalogImport onDone={() => void load()} />
-      <div className="card overflow-x-auto p-0"><table className="w-full text-sm"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-3">Produit</th><th className="p-3">Conditionnement</th><th className="p-3 text-right">Prix</th><th className="p-3 text-right">€/unité</th><th className="p-3">Stock</th></tr></thead><tbody className="divide-y divide-stone-100">
+      <div className="card overflow-x-auto p-0 border border-stone-200"><table className="w-full text-sm min-w-[520px]"><thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-3">Produit</th><th className="p-3">Conditionnement</th><th className="p-3 text-right">Prix</th><th className="p-3 text-right">€/unité</th><th className="p-3">Stock</th></tr></thead><tbody className="divide-y divide-stone-100">
         {offers.map((o) => <tr key={o.id}><td className="p-3 font-semibold">{o.productName}</td><td className="p-3">{o.packLabel}</td><td className="p-3 text-right">{eur(o.packPriceEur)}</td><td className="p-3 text-right text-stone-500">{o.unitPrice.toFixed(2)} €/{o.unit}</td><td className="p-3"><button onClick={() => void toggle(o)} className={`pill ${o.inStock ? 'bg-emerald-50 text-emerald-800' : 'bg-stone-100 text-stone-500'}`}>{o.inStock ? 'Disponible' : 'Rupture'}</button></td></tr>)}
         {!offers.length && <tr><td colSpan={5} className="p-6 text-center text-stone-500">Catalogue vide — ajoutez vos produits : les restaurants ne voient que ce qui est ici.</td></tr>}</tbody></table></div>
     </div>
@@ -150,8 +150,23 @@ function Orders() {
           {o.notes && <p className="rounded-lg bg-stone-50 p-2 text-sm">💬 {o.notes}</p>}{o.vendorNote && <p className="text-xs text-stone-500">Votre note : {o.vendorNote}</p>}
           {o.status === 'envoyee' && o.proposal && <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-900">✏️ Proposition envoyée (nouveau total {Number(o.proposal.newTotalEur).toFixed(2).replace('.', ',')} €) — en attente de la réponse du restaurant.</p>}
           {o.status === 'envoyee' && proposing === o.id && <Propose orderId={o.id} lines={o.lines} onDone={() => { setProposing(null); void load(); }} onCancel={() => setProposing(null)} />}
-          {o.status === 'envoyee' && proposing !== o.id && !o.proposal && <button className="btn-ghost text-amber-800" onClick={() => setProposing(o.id)}>✏️ Rupture partielle / substitution</button>}
-          {o.status === 'envoyee' && <div className="flex flex-wrap items-end gap-2"><Field label="Livraison le"><input type="date" className="input" value={date[o.id] ?? o.expectedAt ?? ''} onChange={(e) => setDate({ ...date, [o.id]: e.target.value })} /></Field><button className="btn-primary !py-3" onClick={() => void act(o.id, 'confirm')}><Check size={18} /> Confirmer</button><div className="flex items-end gap-1"><input className="input" placeholder="Motif de refus" value={reason[o.id] ?? ''} onChange={(e) => setReason({ ...reason, [o.id]: e.target.value })} /><button className="btn-ghost !text-red-700" onClick={() => void act(o.id, 'refuse')}><X size={16} /> Refuser</button></div></div>}
+          {o.status === 'envoyee' && proposing !== o.id && !o.proposal && <button className="btn-ghost text-amber-800 touch-manipulation" onClick={() => setProposing(o.id)}>✏️ Rupture partielle / substitution</button>}
+          {o.status === 'envoyee' && (
+            <div className="flex flex-col sm:flex-row sm:items-end gap-2.5 pt-2 border-t border-stone-100">
+              <Field label="Livraison le">
+                <input type="date" className="input text-sm" value={date[o.id] ?? o.expectedAt ?? ''} onChange={(e) => setDate({ ...date, [o.id]: e.target.value })} />
+              </Field>
+              <button className="btn-primary justify-center !py-2.5 touch-manipulation shrink-0" onClick={() => void act(o.id, 'confirm')}>
+                <Check size={18} /> Confirmer
+              </button>
+              <div className="flex items-center gap-1.5 flex-1 w-full sm:w-auto">
+                <input className="input text-sm flex-1" placeholder="Motif de refus" value={reason[o.id] ?? ''} onChange={(e) => setReason({ ...reason, [o.id]: e.target.value })} />
+                <button className="btn-ghost !text-red-700 justify-center !py-2.5 touch-manipulation shrink-0" onClick={() => void act(o.id, 'refuse')}>
+                  <X size={16} /> Refuser
+                </button>
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">{o.status === 'confirmee' && <span className="pill bg-stone-100 text-stone-700">{({ en_preparation: '🧺 En préparation', en_livraison: '🚚 En livraison', livree: '📦 Livrée' } as Record<string, string>)[o.fulfillment ?? ''] ?? '⏳ À préparer'} → onglet Préparation & livraison</span>}
           {o.status !== 'annulee' && <><button className="btn-ghost" onClick={() => void openPdf(`/vendor/orders/${o.id}/pdf`)}><FileText size={16} /> Bon de commande PDF</button><button className="btn-ghost" onClick={() => void openPdf(`/vendor/orders/${o.id}/pdf?type=livraison`)}><FileText size={16} /> Bon de livraison PDF</button></>}</div>
         </div>))}

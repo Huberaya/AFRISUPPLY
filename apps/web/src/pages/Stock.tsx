@@ -60,8 +60,8 @@ export default function Stock() {
       {Object.entries(groups).map(([cat, list]) => (
         <section key={cat} className="mb-8">
           <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-stone-500">{CATEGORY_LABEL[cat] ?? cat}</h2>
-          <div className="card overflow-x-auto !p-0">
-            <table className="w-full text-sm">
+          <div className="card overflow-x-auto !p-0 border border-stone-200">
+            <table className="w-full text-sm min-w-[680px]">
               <thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="px-4 py-2">Produit</th><th className="px-4 py-2 text-right">Quantité</th><th className="px-4 py-2 text-right">Conso / j</th><th className="px-4 py-2 text-right">Jours</th><th className="px-4 py-2 text-right">Seuil</th><th className="px-4 py-2">Statut</th><th className="px-4 py-2">Fournisseur</th><th className="px-4 py-2"></th></tr></thead>
               <tbody className="divide-y divide-stone-100">
                 {list.map((i) => (
@@ -128,7 +128,7 @@ export default function Stock() {
       {inventory && <Modal title="Inventaire" subtitle="Saisissez uniquement ce que vous comptez ; les articles vides restent inchangés." onClose={() => setInventory(false)} wide>
         <div className="max-h-[55vh] overflow-y-auto">
           {Object.entries(all.reduce<Record<string, Item[]>>((acc, i) => { (acc[i.category] ??= []).push(i); return acc; }, {})).map(([cat, list]) => <div key={cat} className="mb-3"><p className="text-xs font-bold uppercase text-stone-500 mb-1">{CATEGORY_LABEL[cat] ?? cat}</p>
-            {list.map((i) => <div key={i.id} className="flex items-center justify-between gap-3 py-1 text-sm"><span>{i.name} <span className="text-xs text-stone-400">(actuel {fmtQty(i.quantity, i.unit)})</span></span><span className="flex items-center gap-1"><input inputMode="decimal" className="input !w-24 !py-1 text-right" placeholder={String(i.quantity)} value={counts[i.id] ?? ''} onChange={(e) => setCounts({ ...counts, [i.id]: e.target.value })} /><span className="w-8 text-xs text-stone-500">{i.unit}</span></span></div>)}
+            {list.map((i) => <div key={i.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-3 py-1.5 text-sm border-b sm:border-0 border-stone-100"><span>{i.name} <span className="text-xs text-stone-400">(actuel {fmtQty(i.quantity, i.unit)})</span></span><span className="flex items-center gap-1 self-end sm:self-auto"><input inputMode="decimal" className="input !w-24 !py-1 text-right" placeholder={String(i.quantity)} value={counts[i.id] ?? ''} onChange={(e) => setCounts({ ...counts, [i.id]: e.target.value })} /><span className="w-8 text-xs text-stone-500">{i.unit}</span></span></div>)}
           </div>)}
         </div>
         <div className="mt-4 flex justify-end gap-2"><button className="btn-ghost" onClick={() => setInventory(false)}>Fermer</button><button className="btn-primary" onClick={() => { void submitInventory(); setInventory(false); }} disabled={!Object.values(counts).some((v) => v !== '')}>Valider l’inventaire</button></div>

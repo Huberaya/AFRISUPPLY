@@ -143,13 +143,58 @@ export default function Orders() {
   const open = (data?.orders ?? []).filter((o) => ['preparee', 'envoyee', 'confirmee'].includes(o.status));
   const past = (data?.orders ?? []).filter((o) => !['preparee', 'envoyee', 'confirmee'].includes(o.status));
   const Row = ({ o }: { o: O }) => (
-    <details className="card !p-0 group">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4">
-        <div><p className="font-bold">{o.supplierName}</p><p className="text-xs text-stone-500">{o.reference} · {fmtDate(o.createdAt)} · {o.lines.length} ligne{o.lines.length > 1 ? 's' : ''}{o.expectedAt && ` · livraison ${fmtDate(o.expectedAt)}`} · {SOURCE_LABEL[o.source] ?? o.source}</p></div>
-        <div className="flex items-center gap-3">{o.receivedAt && <span className="pill bg-emerald-100 text-emerald-800">✓ Reçue le {fmtDate(o.receivedAt)}</span>}{o.fulfillment && o.status === 'confirmee' && <span className="pill bg-sky-100 text-sky-800">{({ en_preparation: '🧺 En préparation', en_livraison: '🚚 En livraison', livree: '📦 Livrée — à réceptionner' } as Record<string, string>)[o.fulfillment]}</span>}<span className={`pill ${STATUS_TONE[o.status]}`}>{STATUS_LABEL[o.status]}</span><span className="font-extrabold">{fmtEur(o.totalEur)}</span></div>
+    <details className="card !p-0 group border border-stone-200">
+      <summary className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 p-3.5 sm:px-5 sm:py-4 cursor-pointer list-none touch-manipulation">
+        <div>
+          <p className="font-bold text-stone-900 text-sm sm:text-base">{o.supplierName}</p>
+          <p className="text-xs text-stone-500 mt-0.5">
+            {o.reference} · {fmtDate(o.createdAt)} · {o.lines.length} ligne{o.lines.length > 1 ? 's' : ''}
+            {o.expectedAt && ` · livraison ${fmtDate(o.expectedAt)}`} · {SOURCE_LABEL[o.source] ?? o.source}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 sm:gap-3 pt-1 sm:pt-0 border-t sm:border-0 border-stone-100">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {o.receivedAt && <span className="pill bg-emerald-100 text-emerald-800 text-[11px]">✓ Reçue le {fmtDate(o.receivedAt)}</span>}
+            {o.fulfillment && o.status === 'confirmee' && (
+              <span className="pill bg-sky-100 text-sky-800 text-[11px]">
+                {({ en_preparation: '🧺 En préparation', en_livraison: '🚚 En livraison', livree: '📦 Livrée — à réceptionner' } as Record<string, string>)[o.fulfillment]}
+              </span>
+            )}
+            <span className={`pill text-[11px] font-semibold ${STATUS_TONE[o.status]}`}>{STATUS_LABEL[o.status]}</span>
+          </div>
+          <span className="font-extrabold text-stone-900 text-base sm:text-lg">{fmtEur(o.totalEur)}</span>
+        </div>
       </summary>
-      <div className="border-t border-stone-100 px-5 py-4">
-        <table className="w-full text-sm"><tbody className="divide-y divide-stone-100">{o.lines.map((l) => <tr key={l.id}><td className="py-1.5">{l.productName}</td><td className="py-1.5 text-stone-500">{l.packs} × {l.packLabel}</td><td className="py-1.5 text-right">{fmtQty(l.quantity)}{l.receivedQty !== null && Number(l.receivedQty) !== Number(l.quantity) && <span className="ml-1 text-xs text-red-600">(reçu {fmtQty(l.receivedQty)})</span>}</td><td className="py-1.5 text-right font-semibold">{fmtEur(l.lineTotalEur)}{l.invoicedUnitPriceEur && Math.abs(Number(l.invoicedUnitPriceEur) - Number(l.unitPriceEur)) > 0.0001 && <span className={`ml-1 text-xs ${Number(l.invoicedUnitPriceEur) > Number(l.unitPriceEur) ? 'text-orange-700' : 'text-emerald-700'}`} title="Prix réellement facturé à la réception">(payé {fmtEur(l.invoicedUnitPriceEur)}/unité au lieu de {fmtEur(l.unitPriceEur)})</span>}</td></tr>)}</tbody></table>
+      <div className="border-t border-stone-100 p-3.5 sm:px-5 sm:py-4">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[340px]">
+            <tbody className="divide-y divide-stone-100">
+              {o.lines.map((l) => (
+                <tr key={l.id}>
+                  <td className="py-2 text-stone-900 font-medium">{l.productName}</td>
+                  <td className="py-2 text-stone-500 text-xs sm:text-sm">{l.packs} × {l.packLabel}</td>
+                  <td className="py-2 text-right text-xs sm:text-sm">
+                    {fmtQty(l.quantity)}
+                    {l.receivedQty !== null && Number(l.receivedQty) !== Number(l.quantity) && (
+                      <span className="ml-1 text-xs text-red-600 font-medium">(reçu {fmtQty(l.receivedQty)})</span>
+                    )}
+                  </td>
+                  <td className="py-2 text-right font-semibold text-xs sm:text-sm">
+                    {fmtEur(l.lineTotalEur)}
+                    {l.invoicedUnitPriceEur && Math.abs(Number(l.invoicedUnitPriceEur) - Number(l.unitPriceEur)) > 0.0001 && (
+                      <span
+                        className={`ml-1 text-xs ${Number(l.invoicedUnitPriceEur) > Number(l.unitPriceEur) ? 'text-orange-700' : 'text-emerald-700'}`}
+                        title="Prix réellement facturé à la réception"
+                      >
+                        (payé {fmtEur(l.invoicedUnitPriceEur)}/unité au lieu de {fmtEur(l.unitPriceEur)})
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {o.proposal && o.status === 'envoyee' && <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
           <p className="font-bold text-amber-900">✏️ {o.supplierName} propose une modification</p>{o.proposal.note && <p className="mt-1 italic text-amber-900">« {o.proposal.note} »</p>}
           <ul className="mt-2 space-y-1">{o.proposal.lines.filter((l) => l.newPacks !== l.packs || l.replacement).map((l) => <li key={l.lineId}>• <b>{l.productName}</b> : {l.newPacks === 0 ? <span className="text-red-700">rupture (0/{l.packs})</span> : <>{l.newPacks}/{l.packs} colis</>}{l.replacement && <> → remplacé par <b>{l.replacement.packs} × {l.replacement.productName}</b> {l.replacement.packLabel} ({fmtEur(l.replacement.lineTotalEur)})</>}</li>)}</ul>

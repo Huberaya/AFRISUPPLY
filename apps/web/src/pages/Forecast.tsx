@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import { ShoppingCart, Info, AlertTriangle, CalendarPlus, Trash2 } from 'lucide-react';
 import { useApi } from '../lib/useApi';
@@ -118,14 +118,14 @@ export default function Forecast() {
         )}
       </div>
 
-      <div className="card overflow-x-auto p-0">
-        <table className="w-full text-sm">
+      <div className="card overflow-x-auto !p-0 border border-stone-200">
+        <table className="w-full text-sm min-w-[700px]">
           <thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="p-3">Produit</th><th className="p-3 text-right">Besoin {data.horizonDays} j</th><th className="p-3 text-right">Stock</th><th className="p-3 text-right">À commander</th><th className="p-3">Rupture</th><th className="p-3">Source</th><th className="p-3">Confiance</th><th className="p-3 hidden md:table-cell">Jour par jour</th></tr></thead>
           <tbody>
             {data.products.length === 0 && <tr><td colSpan={8}><Empty>Aucun article en stock. Commencez par <Link to="/app/demarrer" className="underline">configurer votre carte</Link>.</Empty></td></tr>}
             {data.products.map((p) => { const max = Math.max(...p.perDay, 0.001); const b = basisOf(p.basis); return (
-              <>
-                <tr key={p.productId} onClick={() => setOpen(open === p.productId ? null : p.productId)} className="cursor-pointer border-t border-stone-100 hover:bg-stone-50">
+              <Fragment key={p.productId}>
+                <tr onClick={() => setOpen(open === p.productId ? null : p.productId)} className="cursor-pointer border-t border-stone-100 hover:bg-stone-50">
                   <td className="p-3 font-medium">{p.productName}{p.seasonCoef > 1 && <span className="ml-1 pill bg-brand-50 text-brand-700 text-[10px]">saison ×{p.seasonCoef}</span>}</td>
                   <td className="p-3 text-right">{fmtQty(p.predictedNeed, p.unit)}</td>
                   <td className="p-3 text-right text-stone-500">{fmtQty(p.currentStock, p.unit)}</td>
@@ -140,7 +140,7 @@ export default function Forecast() {
                   <p className="mt-1 text-xs text-stone-500">Source : {basisOf(p.basis).label} · Stock de sécurité : {fmtQty(p.safetyStock, p.unit)} · Besoin moyen/jour : {fmtQty(p.predictedNeed / p.horizonDays, p.unit)} · {p.daysOfStockLeft !== null ? `${p.daysOfStockLeft} j de stock` : 'consommation inconnue'}</p>
                   <div className="mt-2 flex gap-2"><Link to={`/app/achats/comparer/${p.productId}`} className="btn-secondary !py-1 !px-2 text-xs">Comparer les fournisseurs</Link></div>
                 </td></tr>}
-              </>
+              </Fragment>
             ); })}
           </tbody>
         </table>

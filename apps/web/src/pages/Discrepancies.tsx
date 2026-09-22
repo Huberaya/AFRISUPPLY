@@ -33,17 +33,34 @@ export default function Discrepancies() {
       {items.length === 0 && <Empty>Aucun écart {all ? '' : 'en cours'}. Vos fournisseurs livrent ce qu’ils facturent 👌</Empty>}
       <div className="space-y-3">
         {items.map((i) => (
-          <details key={i.id} className={`card !p-0 ${i.resolved ? 'opacity-60' : ''}`}>
-            <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 px-5 py-4">
-              <div><p className="font-bold">{i.productName} <span className="text-sm font-normal text-stone-500">· {i.supplierName}</span></p><p className="text-xs text-stone-500">{i.reference} · reçu le {fmtDate(i.receivedAt)}{i.isLate && ' · en retard'} · commandé {fmtQty(i.ordered, i.unit)}, reçu {fmtQty(i.received, i.unit)}</p></div>
-              <div className="flex items-center gap-3">{i.resolved ? <span className="pill bg-emerald-100 text-emerald-800"><CheckCircle2 size={12} /> Résolu</span> : <span className="pill bg-orange-100 text-orange-800">{i.missing > 0 ? `Manque ${fmtQty(i.missing, i.unit)}` : `Excédent ${fmtQty(-i.missing, i.unit)}`}</span>}<span className="font-extrabold">{i.missing > 0 ? fmtEur(i.valueEur) : '—'}</span></div>
+          <details key={i.id} className={`card !p-0 border border-stone-200 ${i.resolved ? 'opacity-60' : ''}`}>
+            <summary className="flex cursor-pointer list-none flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 p-3.5 sm:px-5 sm:py-4 touch-manipulation">
+              <div>
+                <p className="font-bold text-stone-900 text-sm sm:text-base">{i.productName} <span className="text-xs sm:text-sm font-normal text-stone-500">· {i.supplierName}</span></p>
+                <p className="text-xs text-stone-500 mt-0.5">{i.reference} · reçu le {fmtDate(i.receivedAt)}{i.isLate && ' · en retard'} · commandé {fmtQty(i.ordered, i.unit)}, reçu {fmtQty(i.received, i.unit)}</p>
+              </div>
+              <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-0 border-stone-100">
+                {i.resolved ? (
+                  <span className="pill bg-emerald-100 text-emerald-800 text-[11px]"><CheckCircle2 size={12} /> Résolu</span>
+                ) : (
+                  <span className="pill bg-orange-100 text-orange-800 text-[11px]">{i.missing > 0 ? `Manque ${fmtQty(i.missing, i.unit)}` : `Excédent ${fmtQty(-i.missing, i.unit)}`}</span>
+                )}
+                <span className="font-extrabold text-stone-900 text-base sm:text-lg">{i.missing > 0 ? fmtEur(i.valueEur) : '—'}</span>
+              </div>
             </summary>
-            <div className="border-t border-stone-100 px-5 py-4 text-sm">
-              {i.claimMessage && <pre className="whitespace-pre-wrap rounded-xl bg-stone-50 p-3 text-xs text-stone-700">{i.claimMessage}</pre>}
+            <div className="border-t border-stone-100 p-3.5 sm:px-5 sm:py-4 text-sm">
+              {i.claimMessage && <pre className="whitespace-pre-wrap rounded-xl bg-stone-50 p-3 text-xs text-stone-700 max-h-56 overflow-y-auto">{i.claimMessage}</pre>}
               {i.reason && <p className="mt-2 text-xs text-stone-500">Motif : {i.reason}</p>}
               <div className="mt-3 flex flex-wrap gap-2">
-                {i.claimMessage && <button className="btn-ghost !py-1.5" onClick={() => void navigator.clipboard.writeText(i.claimMessage!)}><Copy size={14} /> Copier la réclamation</button>}
-                {!i.resolved && i.vendorId && <button className="btn-primary !py-1.5 !bg-purple-700" onClick={() => setClaimFor(i)}>⚖️ Ouvrir un litige (avoir)</button>}{!i.resolved && <><button className="btn-primary !py-1.5" onClick={() => void resolve(i, 'avoir')}>Avoir obtenu</button><button className="btn-ghost !py-1.5" onClick={() => void resolve(i, 'relivraison')}>Relivré</button><button className="btn-ghost !py-1.5 text-stone-500" onClick={() => void resolve(i, 'abandon')}>Abandonner</button></>}
+                {i.claimMessage && <button className="btn-ghost !py-1.5 touch-manipulation" onClick={() => void navigator.clipboard.writeText(i.claimMessage!)}><Copy size={14} /> Copier la réclamation</button>}
+                {!i.resolved && i.vendorId && <button className="btn-primary !py-1.5 !bg-purple-700 touch-manipulation" onClick={() => setClaimFor(i)}>⚖️ Ouvrir un litige (avoir)</button>}
+                {!i.resolved && (
+                  <>
+                    <button className="btn-primary !py-1.5 touch-manipulation" onClick={() => void resolve(i, 'avoir')}>Avoir obtenu</button>
+                    <button className="btn-ghost !py-1.5 touch-manipulation" onClick={() => void resolve(i, 'relivraison')}>Relivré</button>
+                    <button className="btn-ghost !py-1.5 text-stone-500 touch-manipulation" onClick={() => void resolve(i, 'abandon')}>Abandonner</button>
+                  </>
+                )}
               </div>
             </div>
           </details>
