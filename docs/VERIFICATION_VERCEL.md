@@ -119,6 +119,12 @@ dossier inécrivable et surveillait les tâches à 3 h.
 prouve, c'est de confronter un comportement observable à sa valeur dans les sources — et d'avoir un
 garde-fou automatique entre les deux.
 
+**Garde-fou permanent** : `scripts/check-bundle.mjs` (exécuté par la CI et par `npm run verify`) ne
+contrôle plus seulement que le bundle correspond aux sources — il exige aussi que **`vercel.json`
+régénère le bundle au déploiement**. Test négatif réalisé : en retirant l'étape du `buildCommand`,
+le contrôle sort en erreur avec le message « la production servirait un bundle périmé » ; remise en
+place → vert. Un oubli ne peut donc plus atteindre la production en silence.
+
 ## 6. Les ✗ d'un premier passage, expliqués et levés
 
 Un premier passage de `chantier12_verif.py` contre une API configurée en « simulée Vercel »

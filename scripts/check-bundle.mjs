@@ -4,6 +4,12 @@
 // modifie l'API sans relancer `npm run build:api`, le déployé ne correspond plus au code testé — et
 // personne ne s'en aperçoit avant la production. Ce contrôle échoue dans ce cas, et laisse l'arbre
 // de travail intact quand tout va bien.
+//
+// Second contrôle, ajouté après une panne réelle en production : vérifier que le bundle à jour soit
+// bien celui qu'on déploie. La production tournait sur un bundle resté en arrière — les correctifs
+// étaient committés, poussés, « déployés »… et sans effet, parce que la chaîne de déploiement ne
+// régénérait pas le bundle. On exige donc désormais que le build Vercel le régénère lui-même
+// (`node api/build.mjs` dans `vercel.json`).
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -47,4 +53,27 @@ try {
   rmSync(backupDir, { recursive: true, force: true });
 }
 
-process.exit(ok ? 0 : 1);
+// --- Second contrôle : la chaîne de déploiement reconstruit-elle le bundle ? ---------------------
+// Sans cette étape, un oubli de commit du bundle fait tourner la production sur du code périmé,
+// sans que rien ne le signale (le commit affiché par la plateforme reste, lui, le bon).
+let deploieLeBundle = true;
+try {
+  const vercel = JSON.parse(readFileSync('vercel.json', 'utf8'));
+  const buildCommand = String(vercel.buildCommand ?? '');
+  deploieLeBundle = buildCommand.includes('api/build.mjs');
+  if (deploieLeBundle) {
+    console.log('✓ le déploiement régénère le bundle (vercel.json → buildCommand).');
+  } else {
+    console.error('\n✖ `vercel.json` ne régénère PAS le bundle : la production servirait un bundle périmé.');
+    console.error('  → ajoutez `node api/build.mjs` au buildCommand de vercel.json.');
+  }
+} catch (error) {
+  if (error?.code === 'ENOENT') {
+    console.log('[bundle] pas de vercel.json ici — second contrôle ignoré.');
+  } else {
+    deploieLeBundle = false;
+    console.error('\n✖ vercel.json illisible :', error?.message ?? error);
+  }
+}
+
+process.exit(ok && deploieLeBundle ? 0 : 1);

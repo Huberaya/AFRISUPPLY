@@ -483,3 +483,7 @@ régénérait pas : mes deux correctifs étaient poussés, déployés… **et in
 restait à 3 h). Le garde-fou `check:bundle` (CI) est passé au rouge comme prévu, le bundle a été
 régénéré, et surtout **`vercel.json` régénère désormais le bundle à chaque déploiement** — la
 production ne peut plus servir un code différent des sources.
+
+**Verrouillage du correctif** : `scripts/check-bundle.mjs` (CI + `npm run verify`) exige désormais que
+`vercel.json` **régénère le bundle au déploiement** ; test négatif réalisé (étape retirée → échec
+expliqué ; remise → vert). Un oubli de bundle ne peut plus atteindre la production en silence.
