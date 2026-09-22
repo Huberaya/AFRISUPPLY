@@ -347,3 +347,64 @@ preuve qui compte, et elle n'a pas été faite.
 **Verdict final, sans complaisance** : AFRISUPPLY n'est plus un prototype — c'est un produit bâti, testé et
 vérifiable, avec ses preuves. Ce qui manque pour qu'un restaurateur l'utilise **demain** n'est pas du code :
 c'est une mise en ligne, un moyen d'encaisser, une sauvegarde qui survit, et trois personnes devant l'écran.
+
+---
+
+## Suivi des correctifs — 22/09/2026 (après l'audit n°3)
+
+Ces trois correctifs ont été exécutés sur ordre « continue », puis publiés. L'audit lui-même n'a
+modifié aucun fichier : les mesures ci-dessus restent celles de l'état audité.
+
+### 1. Un identifiant invalide ne produit plus d'erreur serveur (défaut 🔴 relevé dans l'audit)
+
+- **Constat mesuré** : `GET /api/compare/abc` renvoyait **500 « Erreur serveur »**, avec la requête SQL
+  en clair dans la réponse. 7 routes sur 16 testées ; 40 routes paramétrées exposées dans le dépôt.
+- **Cause** : l'identifiant d'URL était comparé directement à une colonne `uuid` ; PostgreSQL refuse la
+  requête (code `22P02`), l'erreur n'était pas reconnue par le gestionnaire central.
+- **Correction** : `apps/api/src/lib/db-errors.ts` (nouveau) reconnaît la valeur malformée en remontant
+  la chaîne des `cause` (Drizzle enveloppe l'erreur d'origine) ; `app.ts` répond **404 « Ressource
+  introuvable »** — un seul point de passage, donc les 40 routes sont couvertes, y compris les futures.
+- **Preuves** : `GET /api/compare/abc` → **404**, plus aucun SQL dans la réponse, sur l'API réelle ;
+  `identifiants-invalides.test.ts` : 16 lectures, 8 écritures, identifiant invalide dans le corps —
+  **35 tests**, qui vérifient aussi que la route existe (sinon un 404 « Route inconnue » validerait le
+  test à tort) et qu'aucune donnée n'est inventée quand la réponse est 200.
+- **Effet** : plus de fausse alerte de supervision pour une faute de frappe, plus de fuite de schéma.
+
+### 2. Deux messages au même destinataire ne s'écrasent plus — et la CI instable s'explique
+
+- **Constat** : la CI était rouge par intermittence sur un test d'e-mail (« test instable », non
+  reproductible en local — 18/18 à chaque exécution).
+- **Cause réelle, trouvée et reproduite hors test** : le nom d'un message déposé dans la boîte d'envoi
+  se construisait sur « **milliseconde + destinataire** ». Deux messages partis au même destinataire
+  dans la même milliseconde s'écrivaient au **même fichier** : le second écrasait le premier, alors que
+  les deux envois annonçaient « ok ». Démonstration : deux envois simultanés → deux `ok`, **un seul
+  message relisible**, l'alerte perdue. En CI, l'alerte d'écart de livraison était écrasée par la
+  confirmation de commande partie à la même milliseconde — en mission réelle, un développeur pouvait
+  perdre la preuve d'une alerte de la même façon.
+- **Correction** : `mailer.ts` écrit avec le drapeau `wx` (un fichier existant n'est jamais remplacé) et
+  suffixe `-2`, `-3`… en cas de collision ; HTML et pièces jointes suivent le nom retenu.
+- **Preuve** : test à **horloge figée** (collision certaine) — il **échoue sans le correctif**, passe avec.
+- **Leçon de méthode** : ce n'était pas « une instabilité de test » mais un défaut du produit ; un test
+  qui rougit sans raison visible doit être traité comme un signal, pas comme du bruit.
+
+### 3. Le contrôle local mentait, la CI avait raison
+
+- La CI a refusé un commit à l'étape Lint (`Unnecessary escape character`) alors que mon contrôle local
+  affichait « lint OK » : le code de sortie mesuré était celui du `tail` qui suivait, pas d'`eslint`.
+  Corrigé, et la vérification fautive (une expression régulière illisible) a été remplacée par une
+  analyse en clair de la réponse. **La CI a fait exactement son travail.**
+
+### État après correctifs
+
+| Contrôle | Résultat |
+|---|---|
+| lint · typecheck | **0 erreur** (codes de sortie mesurés correctement) |
+| Tests | base **5** · API **412** · web **80** |
+| Bout en bout | **507/507 · 12/12 scripts** avec les correctifs appliqués |
+| Routes à identifiant invalide | **0** erreur serveur, **0** fuite de SQL (les 4 routes mesurées en 500 → 404) |
+| Bundle serverless | régénéré, conforme aux sources (`check:bundle`) |
+| CI GitHub sur le commit publié `00bee07` | **verte** — job « Qualité » (lint, types, tests, build, bundle) **puis** job « Vérifications de bout en bout » : **507/507 · 12/12 scripts** côté CI. Le test d'e-mail qui échouait par intermittence passe désormais, la cause étant corrigée |
+
+**Le verdict de l'audit n°3 ne change pas** : ⚠️ **OUI MAIS AVEC CONDITIONS**. Ces correctifs lèvent deux
+défauts de fiabilité ; ils ne remplacent aucune des conditions préalables (mise en ligne, moyen
+d'encaisser, sauvegarde hors site, recette par trois restaurateurs).
