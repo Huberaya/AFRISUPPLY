@@ -3208,12 +3208,13 @@ async function sendMail(m) {
   }
   try {
     await mkdir(cfg.outbox, { recursive: true });
-    const id = `${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}_${m.to.replace(/[^a-z0-9@.]/gi, "_")}`;
-    await writeFile(path2.join(cfg.outbox, `${id}.html`), m.html, "utf8");
-    await writeFile(path2.join(cfg.outbox, `${id}.txt`), `To: ${m.to}
+    const base = `${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}_${m.to.replace(/[^a-z0-9@.]/gi, "_")}`;
+    const nomTxt = await ecrireSansEcraser(cfg.outbox, base, ".txt", `To: ${m.to}
 Subject: ${m.subject}
 
-${m.text}`, "utf8");
+${m.text}`);
+    const id = nomTxt.replace(/\.txt$/, "");
+    await ecrireSansEcraser(cfg.outbox, id, ".html", m.html);
     for (const [i, a] of (m.attachments ?? []).entries()) {
       const name = `${id}${(m.attachments?.length ?? 0) > 1 ? `-${i + 1}` : ""}-${a.filename.replace(/[^a-z0-9._-]/gi, "_")}`;
       await writeFile(path2.join(cfg.outbox, name), Buffer.isBuffer(a.content) ? a.content : Buffer.from(a.content));
@@ -3224,6 +3225,18 @@ ${m.text}`, "utf8");
     bump("failed", "file", e.message);
     return { ok: false, error: e.message, transport: "file", delivered: false, code: "send_failed" };
   }
+}
+async function ecrireSansEcraser(dir, base, ext, contenu) {
+  for (let i = 1; i <= 50; i++) {
+    const nom = i === 1 ? `${base}${ext}` : `${base}-${i}${ext}`;
+    try {
+      await writeFile(path2.join(dir, nom), contenu, { flag: "wx", encoding: "utf8" });
+      return nom;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+    }
+  }
+  throw new Error(`Impossible de nommer le message dans ${dir} : trop de collisions sur \xAB ${base} \xBB.`);
 }
 var mailDeliverable, devLinksAllowed, channelsDevAllowed, stats, bump, mailStats, _resetMailStats;
 var init_mailer = __esm({

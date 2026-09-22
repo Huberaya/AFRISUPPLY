@@ -90,9 +90,16 @@ export async function sendMail(m: Mail): Promise<MailResult> {
   // mode fichier (développement) : le message est écrit dans .outbox et donc réellement consultable
   try {
     await mkdir(cfg.outbox, { recursive: true });
-    const id = `${new Date().toISOString().replace(/[:.]/g, '-')}_${m.to.replace(/[^a-z0-9@.]/gi, '_')}`;
-    await writeFile(path.join(cfg.outbox, `${id}.html`), m.html, 'utf8');
-    await writeFile(path.join(cfg.outbox, `${id}.txt`), `To: ${m.to}\nSubject: ${m.subject}\n\n${m.text}`, 'utf8');
+    // Le nom d'un message se construisait sur « milliseconde + destinataire » : deux messages au même
+    // destinataire dans la même milliseconde s'écrivaient au MÊME fichier, le second écrasant le
+    // premier — les deux envois annonçant pourtant « ok ». Cas réel : une alerte d'écart de livraison
+    // et une confirmation de commande parties ensemble, l'alerte réduite au silence. On n'écrase plus
+    // jamais un message : en cas de collision, le nom reçoit un suffixe (-2, -3…).
+    const base = `${new Date().toISOString().replace(/[:.]/g, '-')}_${m.to.replace(/[^a-z0-9@.]/gi, '_')}`;
+    const nomTxt = await ecrireSansEcraser(cfg.outbox, base, '.txt', `To: ${m.to}\nSubject: ${m.subject}\n\n${m.text}`);
+    // Le nom réellement retenu (avant le suffixe éventuel) sert de base au HTML et aux pièces jointes.
+    const id = nomTxt.replace(/\.txt$/, '');
+    await ecrireSansEcraser(cfg.outbox, id, '.html', m.html);
     // En développement, les pièces jointes sont écrites à côté du message : on peut ouvrir la facture.
     for (const [i, a] of (m.attachments ?? []).entries()) {
       const name = `${id}${(m.attachments?.length ?? 0) > 1 ? `-${i + 1}` : ''}-${a.filename.replace(/[^a-z0-9._-]/gi, '_')}`;
@@ -101,4 +108,21 @@ export async function sendMail(m: Mail): Promise<MailResult> {
     bump('sent', 'file');
     return { ok: true, id, transport: 'file', delivered: true };
   } catch (e) { bump('failed', 'file', (e as Error).message); return { ok: false, error: (e as Error).message, transport: 'file', delivered: false, code: 'send_failed' }; }
+}
+
+/**
+ * Écrit un fichier en refusant d'écraser un message déjà déposé (`flag: 'wx'`). En cas de collision de
+ * nom — même destinataire, même milliseconde — le fichier prend un suffixe `-2`, `-3`… : aucun message
+ * ne peut en supprimer un autre.
+ */
+async function ecrireSansEcraser(dir: string, base: string, ext: string, contenu: string): Promise<string> {
+  for (let i = 1; i <= 50; i++) {
+    const nom = i === 1 ? `${base}${ext}` : `${base}-${i}${ext}`;
+    try { await writeFile(path.join(dir, nom), contenu, { flag: 'wx', encoding: 'utf8' }); return nom; }
+    catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      // Nom déjà pris : on essaie le suivant.
+    }
+  }
+  throw new Error(`Impossible de nommer le message dans ${dir} : trop de collisions sur « ${base} ».`);
 }

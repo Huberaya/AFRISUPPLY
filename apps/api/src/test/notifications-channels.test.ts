@@ -24,12 +24,12 @@ process.env.VENDOR_AUTO_APPROVE = 'true';   // le grossiste de test doit être a
 delete process.env.RESEND_API_KEY;
 delete process.env.VERCEL;
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { runMigrations, getDb, alerts, jobRuns, notifications, orderLines, orders, recipes, sales, suppliers } from '@afrisupply/db';
 import { sql } from 'drizzle-orm';
 import { app } from '../app.js';
-import { sendMail, mailerConfig, channelsDevAllowed, _resetMailStats } from '../lib/mailer.js';
+import { sendMail, mailerConfig, mailStats, channelsDevAllowed, _resetMailStats } from '../lib/mailer.js';
 import { sendMessage, _resetSmsStats } from '../lib/sms.js';
 import { alertAdmin, _resetAdminAlerts } from '../lib/ops.js';
 import { notifyCriticalAlerts, pendingImmediateAlerts, notifyAllRestaurants } from '../lib/notify.js';
@@ -64,7 +64,14 @@ const outboxTextAttendu = async (needle: string, ms = 2000) => {
   }
 };
 /** Message d'échec exploitable : quel dossier, quels fichiers. */
-const diagnosticOutbox = () => `boîte « ${outboxDuMailer()} » — fichiers : ${outboxFiles().join(', ') || '(vide)'}`;
+/** Sujet de chaque message de la boîte — de quoi comprendre un échec sans deviner. */
+const resumeOutbox = () => outboxFiles().filter((f) => f.endsWith('.txt')).map((f) => {
+  const lignes = readFileSync(path.join(outboxDuMailer(), f), 'utf8').split('\n');
+  const sujet = lignes.find((l) => l.startsWith('Subject:'));
+  return `${f} → ${sujet ? sujet.slice(9) : '(sans sujet)'}`;
+}).join('\n    ');
+const diagnosticOutbox = () => `boîte « ${outboxDuMailer()} » — transport « ${mailerConfig().transport} »`
+  + ` — compteurs ${JSON.stringify(mailStats())} — ${outboxFiles().length} fichier(s) :\n    ${resumeOutbox() || '(vide)'}`;
 
 let A: Record<string, string>;        // propriétaire / manager du restaurant
 let rid = ''; let productId = ''; let orderId = ''; let lineId = '';
@@ -346,5 +353,33 @@ describe('9. Référence de commande : une collision ne perd pas la commande', (
     expect(run.digest).toBe('sent');                                 // l'alerte part malgré l'incident
     expect((run.autoReorderSkipped ?? []).join(' | ')).toMatch(/n.a pas pu être préparée/);
     await call('PUT', `/api/reorder-rules/${item.id}`, { enabled: false, threshold: 0, reorderQty: 1 }, A);
+  });
+});
+
+describe('8. Boîte d’envoi (mode fichier) — aucun message n’en efface un autre', () => {
+  // Trouvé en cherchant pourquoi la CI échouait de temps en temps à l’assertion de l’écart : le nom
+  // d’un message déposé dans la boîte était « milliseconde + destinataire ». Deux messages partis au
+  // même destinataire dans la même milliseconde s’écrivaient donc au même fichier — le second écrasait
+  // le premier, les deux envois annonçant « ok ». Ici l’horloge est figée : la collision est certaine,
+  // et les deux messages doivent rester lisibles.
+  it('deux messages au même destinataire dans la même milliseconde restent tous les deux lisibles', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-02T03:04:05.006Z'));
+      const [alerte, commande] = await Promise.all([
+        sendMail({ to: 'meme-seconde@resto.fr', subject: 'ALERTE Écart sur la livraison CMD-9', text: 'alerte', html: '<p>alerte</p>' }),
+        sendMail({ to: 'meme-seconde@resto.fr', subject: 'Nouvelle commande CMD-9', text: 'commande', html: '<p>commande</p>' }),
+      ]);
+      expect(alerte.ok && alerte.delivered).toBe(true);
+      expect(commande.ok && commande.delivered).toBe(true);
+    } finally { vi.useRealTimers(); }
+
+    const textes = () => outboxFiles().filter((f) => f.endsWith('.txt'))
+      .map((f) => readFileSync(path.join(outboxDuMailer(), f), 'utf8'));
+    expect(textes().some((t) => t.includes('ALERTE Écart sur la livraison CMD-9')), diagnosticOutbox()).toBe(true);
+    expect(textes().some((t) => t.includes('Nouvelle commande CMD-9')), diagnosticOutbox()).toBe(true);
+    // Le HTML suit le même nom que son texte : chaque message a bien ses deux représentations.
+    const now = outboxFiles().filter((f) => f.includes('meme-seconde@resto.fr'));
+    expect(now.filter((f) => f.endsWith('.txt')).length).toBe(now.filter((f) => f.endsWith('.html')).length);
   });
 });
