@@ -2420,6 +2420,7 @@ __export(billing_exports, {
   effectivePrice: () => effectivePrice,
   ensureCustomer: () => ensureCustomer,
   ensureVendorCustomer: () => ensureVendorCustomer,
+  memberCap: () => memberCap,
   mrr: () => mrr,
   nextInvoiceNumber: () => nextInvoiceNumber,
   planPrice: () => planPrice,
@@ -2712,7 +2713,7 @@ async function vendorCommissionInvoices(vid, limit = 36) {
   const db = await getDb();
   return db.select().from(commissionInvoices).where(eq3(commissionInvoices.vendorId, vid)).orderBy(desc(commissionInvoices.period)).limit(limit);
 }
-var PLAN_RANK, PLAN_PRICES, stripeConfigured, stripeApiBase, PLAN_SEATS, seatsFor, billingEnforced, priceIdFor, APP, STATUS_MAP, syncInvoiceSequence, planPrice, effectivePrice;
+var PLAN_RANK, memberCap, PLAN_PRICES, stripeConfigured, stripeApiBase, PLAN_SEATS, seatsFor, billingEnforced, priceIdFor, APP, STATUS_MAP, syncInvoiceSequence, planPrice, effectivePrice;
 var init_billing = __esm({
   "apps/api/src/lib/billing.ts"() {
     "use strict";
@@ -2720,6 +2721,7 @@ var init_billing = __esm({
     init_orders();
     init_reference();
     PLAN_RANK = { trial: 2, starter: 1, pro: 2, business: 3 };
+    memberCap = (plan2) => plan2 === "business" ? null : plan2 === "starter" ? 3 : 5;
     PLAN_PRICES = { starter: 39, pro: 89, business: 199 };
     stripeConfigured = () => !!process.env.STRIPE_SECRET_KEY;
     stripeApiBase = () => (process.env.STRIPE_API_BASE ?? "https://api.stripe.com/v1").replace(/\/$/, "");
@@ -2933,7 +2935,7 @@ var init_auth = __esm({
     secret = new TextEncoder().encode(process.env.JWT_SECRET ?? "dev-secret-change-me-in-production");
     TOKEN_TTL = process.env.AUTH_TOKEN_TTL ?? "7d";
     PRO_PATHS = ["/api/forecast", "/api/compare", "/api/smart-cart", "/api/assistant", "/api/recipes", "/api/reorder-rules", "/api/quick/invoice"];
-    BUSINESS_PATHS = ["/api/marketplace/group-buys", "/api/account/export"];
+    BUSINESS_PATHS = ["/api/marketplace/group-buys"];
   }
 });
 
@@ -5786,7 +5788,7 @@ var init_public = __esm({
         priceMonthly: 89,
         tagline: "L\u2019intelligence qui fait gagner de la marge.",
         highlight: true,
-        features: ["Tout Starter", "Pr\xE9vision des besoins 7 jours", "Comparateur multi-fournisseurs", "Panier intelligent & auto-reorder", "Recettes, co\xFBt mati\xE8re et marges", "Assistant \xAB Demander \xE0 l\u2019IA \xBB", "Import CSV illimit\xE9"]
+        features: ["Tout Starter", "Pr\xE9vision des besoins 7 jours", "Comparateur multi-fournisseurs", "Panier intelligent & auto-reorder", "Recettes, co\xFBt mati\xE8re et marges", "Assistant \xAB Demander \xE0 l\u2019IA \xBB", "Import CSV illimit\xE9", "1 \xE9tablissement \xB7 5 utilisateurs"]
       },
       {
         id: "business",
@@ -5794,7 +5796,7 @@ var init_public = __esm({
         priceMonthly: 199,
         tagline: "Pour les groupes et les ambitieux.",
         highlight: false,
-        features: ["Tout Pro", "Multi-\xE9tablissements & consolidation", "Achats group\xE9s entre restaurants", "Acc\xE8s API & exports comptables", "Accompagnement d\xE9di\xE9", "Utilisateurs illimit\xE9s"]
+        features: ["Tout Pro", "Achats group\xE9s entre restaurants", "Utilisateurs illimit\xE9s", "Accompagnement d\xE9di\xE9"]
       }
     ];
     FOUNDER_OFFER = { label: "Offre pilote fondateur", discountPct: 50, seats: 20, trialDays: 30, description: "\u221250 % \xE0 vie pour les 20 premiers restaurants qui nous aident \xE0 construire le produit. Essai gratuit 30 jours, sans carte bancaire." };
@@ -11668,6 +11670,7 @@ accountRoutes.delete("/account", async (c) => {
 // apps/api/src/routes/members.ts
 init_src();
 init_auth();
+init_billing();
 import { Hono as Hono20 } from "hono";
 import { z as z18 } from "zod";
 import { and as and31, eq as eq35, ne as ne2, sql as sql28 } from "drizzle-orm";
@@ -11696,6 +11699,8 @@ memberRoutes.get("/members", async (c) => {
   return c.json({
     members: list.map((m) => ({ ...m, isYou: m.userId === c.get("user").id })),
     me: { userId: c.get("user").id, role: c.get("role") },
+    cap: memberCap(c.get("plan") ?? "trial"),
+    count: list.length,
     roles: ROLES.map((r) => ({
       role: r,
       label: r === "owner" ? "Propri\xE9taire" : r === "manager" ? "Responsable" : "\xC9quipe",
@@ -11728,6 +11733,13 @@ memberRoutes.post("/members", requireMinRole("owner"), async (c) => {
   }
   const existing = await db.select({ role: restaurantMembers.role }).from(restaurantMembers).where(and31(eq35(restaurantMembers.restaurantId, rid2), eq35(restaurantMembers.userId, user.id)));
   if (existing.length) return c.json({ error: `${user.fullName} fait d\xE9j\xE0 partie de l'\xE9quipe (${existing[0].role === "owner" ? "propri\xE9taire" : existing[0].role === "manager" ? "responsable" : "\xE9quipe"}).` }, 409);
+  const cap2 = memberCap(c.get("plan") ?? "trial");
+  if (cap2 !== null) {
+    const [row] = await db.select({ n: sql28`count(*)` }).from(restaurantMembers).where(eq35(restaurantMembers.restaurantId, rid2));
+    if (Number(row?.n ?? 0) >= cap2) {
+      return c.json({ error: `Votre offre inclut ${cap2} utilisateur${cap2 > 1 ? "s" : ""}. Passez \xE0 une formule sup\xE9rieure (Abonnement) pour inviter toute votre \xE9quipe.`, code: "member_limit", cap: cap2 }, 402);
+    }
+  }
   await db.insert(restaurantMembers).values({ restaurantId: rid2, userId: user.id, role: body3.data.role });
   let devLink;
   let delivered = true;

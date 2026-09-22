@@ -33,7 +33,7 @@
 ### Tarifs (HT / mois, sans engagement)
 **Starter 39 €** — stock, fournisseurs, commandes, alertes
 **Pro 89 €** — + prévision 7 j, comparateur, recettes & marges, IA
-**Business 199 €** — + multi-établissements, achats groupés, API
+**Business 199 €** — + achats groupés entre restaurants, utilisateurs illimités, accompagnement dédié
 
 ### ⭐ Offre pilote fondateur
 **30 jours gratuits, sans carte bancaire. −50 % à vie pour les 20 premiers restaurants.**

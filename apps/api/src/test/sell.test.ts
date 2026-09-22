@@ -9,7 +9,7 @@ import { createHmac } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { feedback, getDb, restaurantMembers, restaurants, runMigrations, users } from '@afrisupply/db';
 import { app } from '../app.js';
-import { hashPassword, signToken } from '../lib/auth';
+import { hashPassword, planRequired, signToken } from '../lib/auth';
 import { PLAN_PRICES } from '../lib/billing';
 import { FOUNDER_OFFER, PLANS } from '../routes/public';
 import { PLANS as WEB_PLANS, FOUNDER as WEB_FOUNDER } from '../../../web/src/lib/plans';
@@ -59,6 +59,66 @@ describe('Contrat PLANS web ↔ api (anti-dérive)', () => {
     expect(WEB_FOUNDER.trialDays).toBe(FOUNDER_OFFER.trialDays);
     // 3ᵉ source (facturation) : mêmes prix que la carte publique
     expect(Object.fromEntries(PLANS.map((p) => [p.id, p.priceMonthly]))).toEqual(PLAN_PRICES);
+    // Les lignes de fonctionnalités aussi (mêmes mots des deux côtés) — et jamais de promesse non construite
+    expect(WEB_PLANS.map((p) => [...p.features])).toEqual(PLANS.map((p) => [...p.features]));
+    const allFeatures = PLANS.flatMap((p) => p.features).join(' | ');
+    expect(allFeatures).not.toContain('Multi-établissements');
+    expect(allFeatures).not.toContain('comptables');
+  });
+});
+
+describe('G1 — L\'export RGPD n\'est jamais une fonction payante', () => {
+  it('planRequired ne réclame aucun plan pour l\'export ni la suppression de compte', () => {
+    expect(planRequired('/api/account/export')).toBeNull();
+    expect(planRequired('/api/account/delete')).toBeNull();
+    expect(planRequired('/api/marketplace/group-buys')).toBe('business');
+    expect(planRequired('/api/assistant/ask')).toBe('pro');
+  });
+
+  it('un client Starter peut exporter ses données (droit d\'accès)', async () => {
+    const db = await getDb();
+    const [u] = await db.insert(users).values({ email: 'starter@test.ci', passwordHash: await hashPassword('MotDePasse!123'), fullName: 'Sta Tar' }).returning();
+    const [r] = await db.insert(restaurants).values({ name: 'Chez Starter', slug: 'chez-starter', plan: 'starter' }).returning();
+    await db.insert(restaurantMembers).values({ restaurantId: r.id, userId: u.id, role: 'owner' });
+    const t = await signToken({ id: u.id, email: u.email, fullName: u.fullName, tokenVersion: 0 });
+    const res = await app.request('/api/account/export', { headers: { authorization: `Bearer ${t}` } });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { user: { email: string } };
+    expect(d.user.email).toBe('starter@test.ci');
+  });
+});
+
+describe('G2 — Plafond d\'utilisateurs par offre (la carte Pricing dit vrai)', () => {
+  const mkAccount = async (email: string, plan: 'starter' | 'pro' | 'business', slug: string) => {
+    const db = await getDb();
+    const [u] = await db.insert(users).values({ email, passwordHash: await hashPassword('MotDePasse!123'), fullName: email.split('@')[0] }).returning();
+    const [r] = await db.insert(restaurants).values({ name: `Chez ${slug}`, slug, plan }).returning();
+    await db.insert(restaurantMembers).values({ restaurantId: r.id, userId: u.id, role: 'owner' });
+    return signToken({ id: u.id, email: u.email, fullName: u.fullName, tokenVersion: 0 });
+  };
+  const invite = (t: string, email: string) => app.request('/api/members', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', authorization: `Bearer ${t}` },
+    body: JSON.stringify({ email, role: 'staff' }),
+  });
+
+  it('Starter = 3 utilisateurs : 2 invitations passent, la suivante est refusée (402)', async () => {
+    const t = await mkAccount('cap-starter@test.ci', 'starter', 'cap-starter');
+    expect((await invite(t, 'm1@cap3.test')).status).toBe(201);
+    expect((await invite(t, 'm2@cap3.test')).status).toBe(201);
+    const blocked = await invite(t, 'm3@cap3.test');
+    expect(blocked.status).toBe(402);
+    expect(((await blocked.json()) as { code: string }).code).toBe('member_limit');
+  });
+
+  it('Pro = 5 utilisateurs · Business = illimité', async () => {
+    const tp = await mkAccount('cap-pro@test.ci', 'pro', 'cap-pro');
+    for (let i = 1; i <= 4; i++) expect((await invite(tp, `p${i}@cap5.test`)).status).toBe(201);
+    const blocked = await invite(tp, 'p5@cap5.test');
+    expect(blocked.status).toBe(402);
+
+    const tb = await mkAccount('cap-biz@test.ci', 'business', 'cap-biz');
+    for (let i = 1; i <= 6; i++) expect((await invite(tb, `b${i}@cap9.test`)).status).toBe(201);
   });
 });
 

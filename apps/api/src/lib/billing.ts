@@ -8,6 +8,9 @@ import { syncSequenceToMax } from './reference.js';
 
 export type PlanId = 'starter' | 'pro' | 'business';
 export const PLAN_RANK: Record<string, number> = { trial: 2, starter: 1, pro: 2, business: 3 }; // l'essai donne les fonctions Pro
+
+/** Audit final G2 — plafond d'utilisateurs par offre (la carte Pricing doit dire vrai) : Starter 3, Pro/essai 5, Business illimité. */
+export const memberCap = (plan: string): number | null => (plan === 'business' ? null : plan === 'starter' ? 3 : 5);
 export const PLAN_PRICES: Record<PlanId, number> = { starter: 39, pro: 89, business: 199 };
 
 export const stripeConfigured = () => !!process.env.STRIPE_SECRET_KEY;
