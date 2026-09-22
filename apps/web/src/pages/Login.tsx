@@ -33,7 +33,10 @@ export default function Login() {
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
       <div className="hidden lg:flex flex-col justify-between bg-stone-900 p-12 text-white">
-        <Logo light />
+        <div className="flex items-center justify-between gap-4">
+          <Logo light />
+          <HomeButton light />
+        </div>
         <div>
           <h2 className="text-4xl font-extrabold leading-tight">Achetez mieux.<br />Gaspillez moins.<br /><span className="text-brand-400">Gagnez plus.</span></h2>
           <p className="mt-6 max-w-md text-stone-300">L’assistant d’approvisionnement intelligent des restaurants africains : stocks, fournisseurs, comparateur de prix, prévisions et alertes dans un seul espace.</p>
