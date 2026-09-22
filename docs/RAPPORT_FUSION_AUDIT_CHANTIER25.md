@@ -222,3 +222,14 @@ acquis de sécurité) et les trois apports perdus rétablis — `User.emailVerif
 
 **Leçon retenue** : ne jamais vérifier les types avec un fichier de solution. La bonne commande est
 `npm run typecheck` (racine) — celle qu'utilise la CI. Elle est désormais la seule utilisée ici.
+
+**Issue, vérifiée sur GitHub** : le 22 septembre 2026 à 08:14 UTC, le run **35703692757** sur le commit
+**`9800d34`** est **vert** — les **deux jobs** et **toutes** leurs étapes :
+
+| Job | Durée | Étapes |
+|---|---|---|
+| Qualité (lint, types, tests, build, bundle) | 08:14:03 → 08:15:33 | 11/11 ✓ (dont « Types (un workspace à la fois) » et « Le bundle serverless committé correspond-il aux sources ? ») |
+| Vérifications de bout en bout (API réelle) | 08:15:35 → 08:28:36 | 10/10 ✓ (API + web démarrés sur le runner, 12 scripts rejoués) |
+
+Le même pipeline avait échoué sur `e2bbba7` (types) avant le correctif : la CI détecte donc bien la
+régression, et confirme la correction.

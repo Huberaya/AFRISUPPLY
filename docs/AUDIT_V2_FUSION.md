@@ -523,5 +523,10 @@ désormais le vrai `AuthProvider` et lit ces champs (`apps/web/src/lib/auth.cont
 **Leçon à garder** : c'est la CI qui a trouvé ce bug, pas mes vérifications — un audit honnête doit dire
 que ses propres preuves avaient un angle mort.
 
+**CI GitHub, vérifiée sur le distant** : run **35703692757** sur le commit **`9800d34`** → `success`, les
+deux jobs complets (« Qualité » 11/11 étapes ; « Vérifications de bout en bout » 10/10 étapes, API et web
+démarrés sur le runner). Le même pipeline échouait sur `e2bbba7` avant correctif : l'alerte est donc réelle
+et la correction contrôlée.
+
 **Ce que cet audit ne peut pas prouver** : le comportement avec des clés de paiement réelles, le
 comportement sous 50 restaurants simultanés, et — le plus important — **ce qu'un restaurateur en pense**.
