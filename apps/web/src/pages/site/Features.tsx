@@ -16,11 +16,43 @@ const FEATURES = [
 
 export default function Features() {
   return (
-    <div className="mx-auto max-w-6xl px-4 py-16 lg:px-8">
-      <h1 className="text-4xl font-extrabold tracking-tight">Tout ce qu’il faut pour acheter comme un pro</h1>
-      <p className="mt-3 max-w-2xl text-stone-600">Conçu avec des restaurateurs sénégalais, ivoiriens, camerounais et congolais de Nantes et Paris. Pas un ERP : un assistant.</p>
-      <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">{FEATURES.map((f) => <div key={f.title} className="card"><f.icon className="text-brand-600" size={26} /><h2 className="mt-3 text-lg font-bold">{f.title}</h2><p className="mt-1.5 text-sm text-stone-600">{f.text}</p></div>)}</div>
-      <div className="mt-16 rounded-3xl bg-stone-900 p-10 text-center text-white"><h2 className="text-2xl font-extrabold">Envie de voir avec vos propres produits ?</h2><p className="mt-2 text-stone-300">Une démo de 20 minutes sur votre carte, pas sur la nôtre.</p><Link to="/demander-un-acces" className="btn-primary mt-6">Demander une démo</Link></div>
+    <div className="mx-auto max-w-6xl px-4 py-12 sm:py-16 lg:px-8">
+      <div className="max-w-3xl">
+        <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-stone-900">
+          Tout ce qu’il faut pour acheter comme un pro
+        </h1>
+        <p className="mt-3 text-sm sm:text-base text-stone-600">
+          Conçu avec des restaurateurs sénégalais, ivoiriens, camerounais et congolais de Nantes et Paris. Pas un ERP : un assistant.
+        </p>
+      </div>
+
+      <div className="mt-8 sm:mt-12 grid gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        {FEATURES.map((f) => (
+          <div key={f.title} className="card p-5 sm:p-6 flex flex-col">
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-700">
+                <f.icon size={22} />
+              </div>
+              <h2 className="text-base sm:text-lg font-bold text-stone-900 leading-snug">{f.title}</h2>
+            </div>
+            <p className="mt-3 text-xs sm:text-sm text-stone-600 leading-relaxed flex-1">{f.text}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-12 sm:mt-16 rounded-2xl sm:rounded-3xl bg-stone-900 p-6 sm:p-10 text-center text-white">
+        <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight">
+          Envie de voir avec vos propres produits ?
+        </h2>
+        <p className="mt-2 text-xs sm:text-sm text-stone-300 max-w-md mx-auto">
+          Une démo de 20 minutes sur votre carte, pas sur la nôtre.
+        </p>
+        <div className="mt-6 flex justify-center">
+          <Link to="/demander-un-acces" className="btn-primary w-full sm:w-auto justify-center px-6 py-2.5">
+            Demander une démo
+          </Link>
+        </div>
+      </div>
     </div>
   );
 }
