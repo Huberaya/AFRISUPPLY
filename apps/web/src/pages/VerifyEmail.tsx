@@ -7,7 +7,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { MailCheck, MailWarning } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Logo } from '../components/AppLayout';
+import { Logo, HomeButton } from '../components/AppLayout';
 
 type Result = { ok: true; email: string; alreadyVerified: boolean; message: string };
 
@@ -39,7 +39,7 @@ export default function VerifyEmail() {
   return (
     <div className="grid min-h-screen place-items-center p-6">
       <div className="w-full max-w-md space-y-4">
-        <div className="mb-2"><Logo /></div>
+        <div className="mb-2 flex items-center justify-between gap-2"><Logo /><HomeButton /></div>
         <h1 className="text-2xl font-extrabold">Confirmation de mon adresse</h1>
 
         {!token && (

@@ -2,7 +2,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Logo } from '../components/AppLayout';
+import { Logo, HomeButton } from '../components/AppLayout';
 
 export default function Forgot() {
   const [email, setEmail] = useState('');
@@ -18,7 +18,7 @@ export default function Forgot() {
   return (
     <div className="min-h-screen grid place-items-center p-6">
       <form onSubmit={submit} className="w-full max-w-sm space-y-4">
-        <div className="mb-2"><Logo /></div>
+        <div className="mb-2 flex items-center justify-between gap-2"><Logo /><HomeButton /></div>
         <h1 className="text-2xl font-extrabold">Mot de passe oublié</h1>
         {!sent ? (<>
           <p className="text-sm text-stone-500">Indiquez l’adresse de votre compte : nous vous envoyons un lien pour choisir un nouveau mot de passe (valable 1 heure).</p>

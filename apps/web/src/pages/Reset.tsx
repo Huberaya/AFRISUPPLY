@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Logo } from '../components/AppLayout';
+import { Logo, HomeButton } from '../components/AppLayout';
 
 type Policy = { minLength: number; hint: string };
 
@@ -31,7 +31,7 @@ export default function Reset() {
   return (
     <div className="min-h-screen grid place-items-center p-6">
       <form onSubmit={submit} className="w-full max-w-sm space-y-4">
-        <div className="mb-2"><Logo /></div>
+        <div className="mb-2 flex items-center justify-between gap-2"><Logo /><HomeButton /></div>
         <h1 className="text-2xl font-extrabold">{token ? 'Nouveau mot de passe' : 'Lien incomplet'}</h1>
         {!token && <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">Ce lien ne contient pas de jeton. Demandez un nouveau lien depuis « Mot de passe oublié ».</p>}
         {error && <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}

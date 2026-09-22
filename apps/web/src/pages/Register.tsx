@@ -2,7 +2,7 @@ import { useState, useEffect, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Logo } from '../components/AppLayout';
+import { Logo, HomeButton } from '../components/AppLayout';
 
 export default function Register() {
   const { register } = useAuth(); const nav = useNavigate(); const [sp] = useSearchParams(); const [invite, setInvite] = useState<{ code: string; offer: { discountPct: number; trialDays: number } } | null>(null);
@@ -14,7 +14,10 @@ export default function Register() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-stone-50 p-6">
       <form onSubmit={submit} className="card w-full max-w-md space-y-4">
-        <Logo />
+        <div className="flex items-center justify-between gap-2">
+          <Logo />
+          <HomeButton />
+        </div>
         <h1 className="text-2xl font-extrabold">Créer mon espace</h1>
         <p className="text-sm text-stone-500">{sp.get('next') === '/panier' ? 'Compte restaurant gratuit — vous pourrez commander juste après.' : '30 jours d’essai gratuit, sans carte bancaire.'}</p>
         {invite && <p className="rounded-xl border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">🎁 <b>Invitation pilote fondateur</b> ({invite.code}) : {invite.offer.trialDays} jours gratuits puis −{invite.offer.discountPct} % à vie.</p>}

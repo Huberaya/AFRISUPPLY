@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import { Logo } from '../components/AppLayout';
+import { Logo, HomeButton } from '../components/AppLayout';
 
 // Chantier 2 (audit) : plus aucun identifiant pré-rempli dans l'écran de connexion.
 // Le raccourci de démonstration n'existe que si VITE_DEMO_LOGIN est défini au build (démo locale).
@@ -43,7 +43,10 @@ export default function Login() {
       <div className="flex items-center justify-center p-6">
         <form onSubmit={submit} className="w-full max-w-sm space-y-4">
           <div className="lg:hidden mb-6"><Logo /></div>
-          <h1 className="text-2xl font-extrabold">Connexion</h1>
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="text-2xl font-extrabold">Connexion</h1>
+            <HomeButton />
+          </div>
           {DEMO_LOGIN?.includes('/') && (
             <button type="button" className="btn-ghost w-full justify-center text-xs"
               onClick={() => { const [e, p] = DEMO_LOGIN.split('/'); setEmail(e); setPassword(p ?? ''); }}>
