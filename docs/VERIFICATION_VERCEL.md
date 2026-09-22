@@ -154,3 +154,23 @@ ne jamais conclure à une régression sur la base d'un environnement volontairem
 connectée, le commit en ligne est exactement celui du dépôt, et la vérification a même permis de
 trouver puis de corriger deux défauts propres au serveur ; **ce qui manque n'est pas du code, c'est
 de la configuration** : un seau de sauvegarde, Stripe, et un mot de passe à changer.
+## 9. État final vérifié (après les chantiers responsive R1–R7 et la CI)
+
+La vérification a été **rejouée sur l'état final** de `main`, qui a reçu entre-temps les chantiers
+responsive R1–R7. Résultat, sans ambiguïté :
+
+| Vérification | Résultat |
+|---|---|
+| Déploiement Vercel de production | **READY** sur **`a61f965`** (le dernier commit de `main`) — tous les commits intermédiaires (dont les correctifs de cette vérification) sont déployés |
+| `/api/status` en ligne | commit servi **`a61f965`** · `reminders`/`alerts-notify` surveillées à **26 h** (preuve que le **bundle corrigé** est bien en ligne, et non l'ancien à 3 h) |
+| `/api/health` en ligne | `200`, **db neon**, ok `true` |
+| SPA (web responsive) | `200`, titre servi — les chantiers R1–R7 sont en ligne |
+| **CI finale** (`a61f965`) | **success** · job « Qualité (lint, types, tests, build, **bundle**) » success · job « Vérifications de bout en bout (API réelle) » success |
+| Vérifications de bout en bout | **530/530 · 13/13 scripts** |
+| `check:bundle` (dépôt local) | vert, et le second contrôle « le déploiement régénère le bundle » est vert |
+
+**Conclusion définitive** : tout ce qui est sur `main` est en production, la CI est verte, et les trois
+défauts découverts (disque éphémère, cadences de supervision, bundle précompilé divergent) sont corrigés
+**et prouvés en ligne**. Ce qui manque n'est pas du code mais de la configuration (13 variables) et des
+gestes humains (mot de passe Neon, révocation des jetons).
+
