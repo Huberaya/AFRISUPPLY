@@ -135,7 +135,7 @@ export default function ShoppingList() {
                   {l.product && l.offers.length === 0 && <p className="text-sm text-stone-500">{l.note}. Aucun fournisseur ne propose ce produit pour l’instant.</p>}
                   {l.offers.length > 0 && (
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm"><thead className="text-left text-xs uppercase text-stone-500"><tr><th className="p-2"></th><th className="p-2">Fournisseur</th><th className="p-2">Conditionnement</th><th className="p-2 text-right">Prix / {l.product!.unit}</th><th className="p-2 text-right">Colis</th><th className="p-2 text-right">Total</th><th className="p-2">Délai</th></tr></thead>
+                      <table className="w-full text-sm min-w-[560px]"><thead className="text-left text-xs uppercase text-stone-500"><tr><th className="p-2"></th><th className="p-2">Fournisseur</th><th className="p-2">Conditionnement</th><th className="p-2 text-right">Prix / {l.product!.unit}</th><th className="p-2 text-right">Colis</th><th className="p-2 text-right">Total</th><th className="p-2">Délai</th></tr></thead>
                         <tbody className="divide-y divide-stone-100">{l.offers.map((o, j) => { const on = cur?.key === o.key; return (
                           <tr key={o.key} className={on ? 'bg-brand-50/60' : ''}>
                             <td className="p-2"><input type="radio" name={`l${i}`} checked={on} onChange={() => setSel({ ...sel, [i]: o.key })} /></td>
@@ -154,14 +154,14 @@ export default function ShoppingList() {
             })}
           </div>
           {groups.size > 0 && (
-            <div className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 p-4 backdrop-blur lg:left-64">
-              <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
-                <div className="text-sm">
+            <div className="fixed inset-x-0 bottom-16 sm:bottom-0 z-30 border-t border-stone-200 bg-white/95 p-3 sm:p-4 shadow-lg backdrop-blur lg:left-64">
+              <div className="mx-auto flex max-w-5xl flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+                <div className="text-xs sm:text-sm">
                   <p><ListChecks size={14} className="mr-1 inline" /><b>{[...groups.values()].reduce((a, g) => a + g.lines.length, 0)}</b> produit(s) chez <b>{groups.size}</b> fournisseur(s) · <b>{fmtEur(total)}</b>{worstTotal > bestTotal + 0.5 && <span className="ml-2 text-emerald-700">économie {fmtEur(worstTotal - bestTotal)} vs le plus cher</span>}</p>
-                  <p className="text-xs text-stone-500">{[...groups.values()].map((g) => `${g.name} ${fmtEur(gTotal(g))}${g.deliveryFeeEur ? ` + port ${fmtEur(g.deliveryFeeEur)}` : ''}`).join(' · ')}</p>
-                  {belowMin.length > 0 && <p className="text-xs text-amber-700">Minimum non atteint : {belowMin.map((g) => `${g.name} (min ${fmtEur(g.minOrderEur)})`).join(', ')}</p>}
+                  <p className="text-[11px] sm:text-xs text-stone-500 mt-0.5">{[...groups.values()].map((g) => `${g.name} ${fmtEur(gTotal(g))}${g.deliveryFeeEur ? ` + port ${fmtEur(g.deliveryFeeEur)}` : ''}`).join(' · ')}</p>
+                  {belowMin.length > 0 && <p className="text-[11px] text-amber-700 font-medium">Minimum non atteint : {belowMin.map((g) => `${g.name} (min ${fmtEur(g.minOrderEur)})`).join(', ')}</p>}
                 </div>
-                <button className="btn-primary" disabled={busy || belowMin.length > 0} onClick={() => void order()}><ShoppingCart size={16} /> Commander ({groups.size})</button>
+                <button className="btn-primary w-full sm:w-auto justify-center shrink-0 touch-manipulation py-2 sm:py-2.5 text-sm" disabled={busy || belowMin.length > 0} onClick={() => void order()}><ShoppingCart size={16} /> Commander ({groups.size})</button>
               </div>
             </div>
           )}

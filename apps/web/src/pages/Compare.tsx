@@ -41,8 +41,8 @@ export default function Compare() {
         </div>
       )}
 
-      <div className="card !p-0 overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="card !p-0 overflow-x-auto border border-stone-200">
+        <table className="w-full text-sm min-w-[760px]">
           <thead className="bg-stone-50 text-left text-xs uppercase text-stone-500"><tr><th className="px-4 py-2">Fournisseur</th><th className="px-4 py-2">Conditionnement</th><th className="px-4 py-2 text-right">Prix</th><th className="px-4 py-2 text-right">Prix / {unit}</th><th className="px-4 py-2 text-right">Coût total</th><th className="px-4 py-2">Livraison</th><th className="px-4 py-2">Stock</th><th className="px-4 py-2 text-right">Fiabilité</th><th className="px-4 py-2 text-right">Score</th><th className="px-4 py-2"></th></tr></thead>
           <tbody className="divide-y divide-stone-100">
             {data.ranked.map((o) => (
