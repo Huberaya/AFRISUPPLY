@@ -27,6 +27,7 @@ import { vendorRoutes, vendorAdminRoutes } from './routes/vendor.js';
 import { statusRoutes } from './routes/status.js';
 import { opsRoutes, adminOpsRoutes } from './routes/ops.js'; // chantier 12 : sauvegardes, supervision, journal d'audit
 import { captureException, securityHeaders, rateLimit, buildInfo } from './lib/ops.js';
+import { isInvalidUuidInput } from './lib/db-errors.js';
 import { resolveCorsOrigin, setKnownRoutes } from './lib/security.js';
 
 export const app = new Hono();
@@ -92,6 +93,11 @@ setKnownRoutes(app.routes.filter((r) => r.method !== 'ALL').map((r) => r.path));
 
 app.notFound((c) => c.json({ error: 'Route inconnue' }, 404));
 app.onError((err, c) => {
+  // Audit n°3 — identifiant malformé (ex. `/api/compare/abc`) : PostgreSQL refuse la requête, ce
+  // n'est pas une panne du service mais une entrée invalide. On répond 404 comme le font les routes
+  // qui valident déjà leur identifiant, au lieu d'un 500 qui déclencherait une fausse alerte de
+  // supervision et laissait fuiter la requête SQL en développement. Voir lib/db-errors.ts.
+  if (isInvalidUuidInput(err)) return c.json({ error: 'Ressource introuvable' }, 404);
   console.error(err);
   void captureException(err, { route: c.req.path, method: c.req.method, userEmail: (c.get as (k: string) => { email?: string } | undefined)('user')?.email });
   return c.json({ error: 'Erreur serveur', detail: process.env.NODE_ENV === 'production' ? undefined : String(err) }, 500);

@@ -12333,6 +12333,23 @@ adminOpsRoutes.post("/admin/restaurants/:id/backup", requireAuth, adminOnly, asy
 
 // apps/api/src/app.ts
 init_ops();
+
+// apps/api/src/lib/db-errors.ts
+var CODE_INVALID_TEXT = "22P02";
+function isInvalidUuidInput(e) {
+  const vus = /* @__PURE__ */ new Set();
+  let noeud = e;
+  while (noeud && typeof noeud === "object" && !vus.has(noeud)) {
+    vus.add(noeud);
+    const n18 = noeud;
+    if (n18.code === CODE_INVALID_TEXT) return true;
+    if (typeof n18.message === "string" && /invalid input syntax for type uuid/i.test(n18.message)) return true;
+    noeud = n18.cause;
+  }
+  return false;
+}
+
+// apps/api/src/app.ts
 init_security();
 var app = new Hono25();
 if (process.env.NODE_ENV !== "test") app.use("*", logger());
@@ -12392,6 +12409,7 @@ app.route("/api", pilotRoutes);
 setKnownRoutes(app.routes.filter((r) => r.method !== "ALL").map((r) => r.path));
 app.notFound((c) => c.json({ error: "Route inconnue" }, 404));
 app.onError((err, c) => {
+  if (isInvalidUuidInput(err)) return c.json({ error: "Ressource introuvable" }, 404);
   console.error(err);
   void captureException(err, { route: c.req.path, method: c.req.method, userEmail: c.get("user")?.email });
   return c.json({ error: "Erreur serveur", detail: process.env.NODE_ENV === "production" ? void 0 : String(err) }, 500);
