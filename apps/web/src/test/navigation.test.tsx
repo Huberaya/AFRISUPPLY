@@ -13,6 +13,18 @@ const me = (isAdmin = false) => ({
 beforeEach(() => localStorage.clear());
 
 describe('navigation', () => {
+  it('première visite : / ouvre bien la page des produits (vitrine) — et le logo y mène', async () => {
+    mockApi({
+      'GET /public/catalog': () => ({ body: { items: [], total: 324, categories: {}, withPrice: 0 } }),
+      'GET /public/vendors': () => ({ body: { vendors: [] } }),
+      '*': () => ({ body: {} }),
+    });
+    window.history.pushState({}, '', '/');
+    render(<App />);
+    expect(await screen.findByText(/Tous vos produits africains/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Rechercher un produit/)).toBeInTheDocument();
+  });
+
   it('menu de l’app : sections lisibles + écarts & réclamations + mon abonnement', async () => {
     localStorage.setItem('afs_authed', '1');
     mockApi({
