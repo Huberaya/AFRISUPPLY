@@ -8,7 +8,7 @@
 // barre d'onglets en bas pour les 4 gestes du quotidien.
 import { useMemo, useState, useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users, Building2, CreditCard, Search, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Boxes, Truck, BarChart3, Sparkles, LogOut, Menu, X, ChefHat, Bell, BookOpen, Rocket, TrendingUp, ShoppingBasket as Basket, Receipt, Settings as SettingsIcon, Zap, Store, ShieldCheck, ListChecks, Users, Building2, CreditCard, Search, Scale, type LucideIcon } from 'lucide-react';
 import { api } from '../lib/api';
 import { FeedbackWidget, UsageBeacon } from './Pilot';
 import { useAuth } from '../lib/auth';
@@ -32,6 +32,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: '/app/achats', icon: ShoppingCart, label: 'Achats', hint: 'commandes en cours et historique' },
       { to: '/app/achats/panier', icon: Basket, label: 'Panier intelligent', hint: 'quoi commander, chez qui, à quel prix', minRole: 'manager' },
+      { to: '/app/achats/ecarts', icon: Scale, label: 'Écarts & réclamations', hint: 'manquants, excédents, réclamations', minRole: 'manager' },
       { to: '/app/fournisseurs', icon: Truck, label: 'Fournisseurs', hint: 'fiches, offres, fiabilité', minRole: 'manager' },
       { to: '/app/marketplace', icon: Store, label: 'Marketplace', hint: 'grossistes et produits', minRole: 'manager' },
       { to: '/app/courses', icon: ListChecks, label: 'Liste de courses', hint: 'liste à imprimer ou partager' },

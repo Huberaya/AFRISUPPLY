@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Upload, Download, CheckCircle2 } from 'lucide-react';
 import { api, fmtEur } from '../lib/api';
 import { PageTitle } from '../components/ui';
@@ -16,6 +17,7 @@ export default function Import() {
   const tone = { ok: 'bg-emerald-100 text-emerald-800', nouveau_produit: 'bg-violet-100 text-violet-800', erreur: 'bg-red-100 text-red-800' };
   return (
     <div className="animate-fade-up space-y-6">
+      <Link to="/app/fournisseurs" className="text-sm text-stone-500">← Fournisseurs</Link>
       <PageTitle title="📥 Importer mes fournisseurs et leurs prix" subtitle="Un fichier CSV / export Excel (colonnes libres : fournisseur, produit, conditionnement, prix…). Les produits sont reconnus par leurs alias — « attieke », « huile rouge », « maggi » fonctionnent."
         action={<div className="flex gap-2"><a className="btn-ghost" href="/api/import/template.csv" download><Download size={16} /> Modèle CSV</a><a className="btn-ghost" href="/api/export/offers.csv" download><Download size={16} /> Exporter mes offres</a></div>} />
       {result ? (

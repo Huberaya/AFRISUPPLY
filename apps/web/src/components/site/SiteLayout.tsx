@@ -6,7 +6,7 @@ import { useAuth } from '../../lib/auth';
 import { Logo } from '../AppLayout';
 import { SUPPORT_EMAIL, mailtoSupport } from '../../lib/support';
 
-const NAV = [{ to: '/catalogue', label: 'Catalogue' }, { to: '/pour-les-restaurants', label: 'Pour les restaurants' }, { to: '/fournisseur', label: 'Grossistes' }, { to: '/tarifs', label: 'Tarifs' }];
+const NAV = [{ to: '/catalogue', label: 'Catalogue' }, { to: '/pour-les-restaurants', label: 'Pour les restaurants' }, { to: '/fournisseur', label: 'Grossistes' }, { to: '/tarifs', label: 'Tarifs' }, { to: '/faq', label: 'FAQ' }];
 
 export default function SiteLayout() {
   const [open, setOpen] = useState(false); const { count } = useCart(); const { user } = useAuth();
@@ -20,7 +20,7 @@ export default function SiteLayout() {
           <div className="hidden items-center gap-2 md:flex">{CartBtn}{user ? <Link to="/app" className="btn-primary">Mon espace</Link> : <><Link to="/connexion" className="btn-ghost">Se connecter</Link><Link to="/inscription" className="btn-primary">Créer un compte</Link></>}</div>
           <div className="flex items-center md:hidden">{CartBtn}<button className="rounded-lg p-2" onClick={() => setOpen(!open)} aria-label="Menu">{open ? <X /> : <Menu />}</button></div>
         </div>
-        {open && <div className="border-t border-stone-100 px-4 py-3 md:hidden flex flex-col gap-2 text-sm">{NAV.map((n) => <Link key={n.to} to={n.to} onClick={() => setOpen(false)} className="py-1.5">{n.label}</Link>)}<Link to="/connexion" onClick={() => setOpen(false)} className="py-1.5">Se connecter</Link><Link to="/inscription" onClick={() => setOpen(false)} className="btn-primary justify-center">Créer un compte</Link></div>}
+        {open && <div className="border-t border-stone-100 px-4 py-3 md:hidden flex flex-col gap-2 text-sm">{NAV.map((n) => <Link key={n.to} to={n.to} onClick={() => setOpen(false)} className="py-1.5">{n.label}</Link>)}{user ? <Link to="/app" onClick={() => setOpen(false)} className="btn-primary justify-center">Mon espace</Link> : <><Link to="/connexion" onClick={() => setOpen(false)} className="py-1.5">Se connecter</Link><Link to="/inscription" onClick={() => setOpen(false)} className="btn-primary justify-center">Créer un compte</Link></>}</div>}
       </header>
       <main><Outlet /></main>
       <footer className="border-t border-stone-100 bg-stone-50">
