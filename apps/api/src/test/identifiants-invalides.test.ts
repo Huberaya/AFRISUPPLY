@@ -96,9 +96,17 @@ describe('Identifiants invalides — jamais de 500, jamais de SQL dans la répon
       // inconnu, les conditions de paiement par défaut. Ce qui serait grave, ce n'est pas le 200 :
       // c'est d'INVENTER des données. On vérifie donc qu'aucune liste n'est remplie et qu'aucun
       // montant n'est renseigné — un zéro ou un `null` veut dire « rien », un chiffre non nul mentirait.
-      const texte = JSON.stringify(r.json);
-      expect(texte, `${url} → 200 avec une liste non vide : ${texte.slice(0, 200)}`).not.toMatch(/\[[^\]]*[^\s\[\]][^\]]*\]/);
-      expect(texte, `${url} → 200 avec un montant non nul : ${texte.slice(0, 200)}`).not.toMatch(/"\w*Eur":\s*-?[1-9]/);
+      // Analyse en clair plutôt qu'une expression régulière : on veut savoir CE QUI est rempli.
+      const listesRemplies: unknown[] = [];
+      const montantsNonNuls: [string, number][] = [];
+      const parcourir = (v: unknown, cle = ''): void => {
+        if (Array.isArray(v)) { if (v.length) listesRemplies.push(v); v.forEach((x) => parcourir(x, cle)); return; }
+        if (v && typeof v === 'object') { for (const [k, x] of Object.entries(v)) parcourir(x, k); return; }
+        if (typeof v === 'number' && /Eur$/.test(cle) && v !== 0) montantsNonNuls.push([cle, v]);
+      };
+      parcourir(r.json);
+      expect(listesRemplies, `${url} → 200 avec une liste remplie : ${JSON.stringify(listesRemplies).slice(0, 200)}`).toHaveLength(0);
+      expect(montantsNonNuls, `${url} → 200 avec un montant non nul : ${JSON.stringify(montantsNonNuls)}`).toHaveLength(0);
     } else {
       expect([401, 403, 404]).toContain(r.status);
     }
