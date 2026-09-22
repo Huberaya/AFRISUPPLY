@@ -65,13 +65,32 @@ jobs:
       - name: Dépendances de production (aucune vulnérabilité connue)
         run: npm audit --omit=dev --audit-level=high
 
-      - name: Démarrer l'API (PGlite + seed démo) et le web
+      # Chantier 13 : un faux service de stockage compatible S3 (bibliothèque standard) permet de
+      # vérifier la sauvegarde HORS SITE sans dépendre d'un hébergeur : la copie est réellement
+      # déposée, relue, comparée et restaurée. Il refuse toute requête non signée.
+      - name: Démarrer le faux service de stockage (vérification du hors site)
+        run: |
+          python3 scripts/verifications/faux_s3.py 9900 "$RUNNER_TEMP/afs-faux-s3" &
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null -H 'Authorization: AWS4-HMAC-SHA256 test' http://localhost:9900/ ; then break; fi
+            sleep 1
+          done
+          curl -s -o /dev/null -w "faux service S3 : HTTP %{http_code}\n" http://localhost:9900/ || true
+
+      - name: Démarrer l'API (PGlite + seed démo + stockage externe) et le web
         env:
           PGLITE_DIR: ${{ runner.temp }}/afs-pglite-ci
           SEED_DEMO: 'true'
           JWT_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
           CRON_SECRET: dev-cron
           ADMIN_EMAILS: admin@afrisupply.fr
+          BACKUP_S3_ENDPOINT: http://localhost:9900
+          BACKUP_S3_BUCKET: sauvegardes-afrisupply
+          BACKUP_S3_ACCESS_KEY_ID: cle-de-ci
+          BACKUP_S3_SECRET_ACCESS_KEY: secret-de-ci
+          BACKUP_S3_REGION: auto
+          BACKUP_S3_PREFIX: afrisupply/backups
+          BACKUP_DIR: ${{ runner.temp }}/afs-sauvegardes
         run: |
           npm run start -w apps/api > /tmp/api.log 2>&1 &
           npm run dev:web > /tmp/web.log 2>&1 &
@@ -84,10 +103,12 @@ jobs:
           curl -sf http://localhost:8787/api/health || (tail -50 /tmp/api.log && exit 1)
           curl -sf -o /dev/null http://localhost:3000/ || (tail -50 /tmp/web.log && exit 1)
 
-      - name: Vérifications de bout en bout (12 scripts)
+      - name: Vérifications de bout en bout (13 scripts)
         env:
           AFS_API: http://localhost:8787/api
           AFS_WEB: http://localhost:3000
+          AFS_FAUX_S3_DIR: ${{ runner.temp }}/afs-faux-s3
+          AFS_FAUX_S3_BUCKET: sauvegardes-afrisupply
         run: npm run verifs:e2e
 
       - name: Journaux en cas d'échec

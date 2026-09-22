@@ -13,6 +13,7 @@ import {
   BACKUP_VERSION, backupAllRestaurants, backupStorageStats, exportRestaurant, listBackups, restoreDrill,
   readBackupFile, restoreBackup, verifyBackup, type BackupFile,
 } from '../lib/backup.js';
+import { offsiteStats, offsiteSweep, offsiteDrill, downloadBackup, offsiteConfig } from '../lib/offsite.js';
 import { mailerConfig, mailStats, outboxCount } from '../lib/mailer.js';
 import { smsConfig, smsStats } from '../lib/sms.js';
 import { recordJobRun, statusFrom } from '../lib/job-runs.js';
@@ -73,18 +74,26 @@ adminOpsRoutes.get('/admin/ops', requireAuth, adminOnly, async (c) => {
   const db = await getDb();
   const alerts = await db.select().from(auditLog).where(ilike(auditLog.action, 'ops.%')).orderBy(desc(auditLog.at)).limit(20);
   const [lastBackupRun] = await db.select().from(jobRuns).where(eq(jobRuns.job, 'backup')).orderBy(desc(jobRuns.startedAt)).limit(1);
+  // Chantier 13 : l'état de la copie HORS SITE (aucun secret : ni clé, ni jeton).
+  const horsSite = await offsiteStats();
   const t0 = Date.now(); await db.execute(sql`select 1`); const dbMs = Date.now() - t0;
   const mc = mailerConfig(); const sc = smsConfig();
   const problems = [
     ...Object.entries(jobs).filter(([, h]) => h.state === 'degraded' || h.state === 'stale').map(([job, h]) => `Job « ${job} » : ${h.state === 'stale' ? `aucun passage depuis ${h.lastRun?.hoursAgo ?? '?'} h (max ${h.maxHours} h)` : `dernier passage en échec (${h.lastRun?.error ?? 'sans détail'})`}`),
     ...(storage.files === 0 ? ['Aucune sauvegarde sur disque : lancez-en une et vérifiez le dossier BACKUP_DIR.'] : []),
     ...(storage.last && (Date.now() - new Date(storage.last.createdAt).getTime()) / 3_600_000 > 36 ? [`Dernière sauvegarde il y a ${Math.round((Date.now() - new Date(storage.last.createdAt).getTime()) / 3_600_000)} h : le job de sauvegarde ne tourne plus.`] : []),
+    // Chantier 13 (audit n°3) : sans copie hors site, la sauvegarde disparaît avec l'instance.
+    ...(horsSite.configured ? [] : [horsSite.pourquoi]),
+    ...(horsSite.error ? [`Sauvegarde hors site : ${horsSite.error}`] : []),
+    ...(horsSite.configured && horsSite.lastUploadAt && (Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 3_600_000 > 36 ? [`Aucune copie hors site depuis ${Math.round((Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 3_600_000)} h : la copie externe ne se fait plus.`] : []),
     ...(mc.transport !== 'resend' ? [`Envoi d'e-mails en mode « ${mc.transport} » : aucun e-mail ne part vers l'extérieur.`] : []),
     ...(sentryEnabled() ? [] : ['Suivi d\'erreurs (Sentry) non configuré : les incidents ne sont visibles que dans les journaux du serveur.']),
   ];
   return c.json({
     ok: problems.length === 0, checkedAt: new Date().toISOString(), problems,
     jobs, backup: { ...storage, lastJobRun: lastBackupRun ? { status: lastBackupRun.status, finishedAt: lastBackupRun.finishedAt, summary: lastBackupRun.summary, error: lastBackupRun.error } : null, version: BACKUP_VERSION },
+    // Chantier 13 : ce que le hors site contient RÉELLEMENT (compté à la source, jamais estimé).
+    offsite: horsSite,
     channels: {
       mail: { transport: mc.transport, configured: mc.transport === 'resend', from: mc.from, stats: mailStats(), outbox: mc.transport === 'file' ? await outboxCount() : null },
       sms: { configured: sc.enabled, whatsapp: sc.whatsapp, stats: smsStats() },
@@ -153,6 +162,57 @@ adminOpsRoutes.get('/admin/backups/:name', requireAuth, adminOnly, async (c) => 
     c.header('Content-Disposition', `attachment; filename="${name}"`);
     return c.body(buf as unknown as ArrayBuffer);
   } catch { return c.json({ error: 'Sauvegarde introuvable' }, 404); }
+});
+
+/**
+ * POST /api/admin/backups/offsite — envoie les sauvegardes hors site MAINTENANT (et applique la
+ * rétention distante). C'est le geste à faire après une sauvegarde manuelle, et celui que le
+ * quotidien exécute tout seul. Chaque copie est relue et comparée avant d'être comptée.
+ */
+adminOpsRoutes.post('/admin/backups/offsite', requireAuth, adminOnly, async (c) => {
+  const body = z.object({ names: z.array(z.string()).optional(), keep: z.number().int().min(1).max(365).optional(), prune: z.boolean().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: 'Requête invalide', details: body.error.flatten() }, 400);
+  const startedAt = new Date();
+  const res = await offsiteSweep({ names: body.data.names, keep: body.data.keep, prune: body.data.prune });
+  await recordJobRun({
+    job: 'offsite-backup', startedAt, status: res.configured ? statusFrom(res.uploaded.length, res.failed.length) : 'partial',
+    summary: { uploaded: res.uploaded.length, failed: res.failed.length, removed: res.removed.length, objects: res.objects, bytes: res.bytes, endpoint: res.endpoint },
+    error: res.configured ? (res.error ?? null) : 'sauvegarde hors site non configurée',
+  });
+  await audit('backup.offsite_run', { actorEmail: c.get('user').email, meta: { uploaded: res.uploaded.length, failed: res.failed.length, configured: res.configured } });
+  return c.json(res, res.configured ? 200 : 400);
+});
+
+/**
+ * POST /api/admin/backups/offsite-drill — LA PREUVE : télécharge la copie depuis le stockage externe,
+ * la vérifie, la recharge dans une base neuve et jetable, et compte les lignes retrouvées.
+ * Télécharger ne suffit pas ; vérifier une empreinte ne suffit pas ; ici on restaure pour de vrai.
+ */
+adminOpsRoutes.post('/admin/backups/offsite-drill', requireAuth, adminOnly, async (c) => {
+  const body = z.object({ name: z.string().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const cfg = offsiteConfig();
+  if (!cfg.configured) return c.json({ ok: false, configured: false, error: cfg.why }, 400);
+  // Sans nom fourni : on prend la dernière sauvegarde présente hors site.
+  const nom = body.success && body.data.name ? body.data.name : (await offsiteStats()).lastBackupName ?? '';
+  if (!nom) return c.json({ ok: false, error: 'Aucune sauvegarde hors site : envoyez-en une d’abord (POST /api/admin/backups/offsite).' }, 400);
+  const rapport = await offsiteDrill(nom);
+  await audit('backup.offsite_drill', { actorEmail: c.get('user').email, target: rapport.restore?.restaurantId ?? undefined, meta: { name: nom, ok: rapport.ok, rows: rapport.restore?.totals.inserted ?? 0, downloadMs: rapport.downloadMs } });
+  return c.json(rapport, rapport.ok ? 200 : 400);
+});
+
+/**
+ * POST /api/admin/backups/offsite-download — ramène une copie EXTERNE sur ce serveur, pour pouvoir
+ * la restaurer (reprise après sinistre dans un environnement neuf : c'est le premier geste du
+ * protocole de restauration).
+ */
+adminOpsRoutes.post('/admin/backups/offsite-download', requireAuth, adminOnly, async (c) => {
+  const body = z.object({ name: z.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: 'Nom de sauvegarde requis' }, 400);
+  const cfg = offsiteConfig();
+  if (!cfg.configured) return c.json({ ok: false, configured: false, error: cfg.why }, 400);
+  const res = await downloadBackup(body.data.name);
+  await audit('backup.offsite_download', { actorEmail: c.get('user').email, meta: { name: body.data.name, ok: res.ok, bytes: res.bytes } });
+  return c.json({ ...res, body: undefined }, res.ok ? 200 : 400);
 });
 
 /**

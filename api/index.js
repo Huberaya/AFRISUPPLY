@@ -2440,7 +2440,7 @@ __export(billing_exports, {
 });
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { and as and2, desc, eq as eq3, isNull, sql as sql4 } from "drizzle-orm";
-async function stripe(method, path4, params = {}, opts = {}) {
+async function stripe(method, path5, params = {}, opts = {}) {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error("STRIPE_SECRET_KEY manquante");
   const body3 = new URLSearchParams();
@@ -2451,7 +2451,7 @@ async function stripe(method, path4, params = {}, opts = {}) {
     else body3.append(prefix, String(v));
   };
   Object.entries(params).forEach(([k, v]) => enc(k, v));
-  const url = `${stripeApiBase()}${path4}${method === "GET" && body3.size ? `?${body3}` : ""}`;
+  const url = `${stripeApiBase()}${path5}${method === "GET" && body3.size ? `?${body3}` : ""}`;
   const headers = { Authorization: `Bearer ${key}`, "Stripe-Version": "2024-06-20" };
   if (method !== "GET") headers["content-type"] = "application/x-www-form-urlencoded";
   if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
@@ -2790,9 +2790,9 @@ function setKnownRoutes(paths) {
     return new RegExp(`^${re}$`);
   });
 }
-function isKnownPath(path4) {
+function isKnownPath(path5) {
   if (!knownMatchers) return true;
-  return knownMatchers.some((r) => r.test(path4.replace(/\/$/, "") || "/"));
+  return knownMatchers.some((r) => r.test(path5.replace(/\/$/, "") || "/"));
 }
 var DEV_SECRETS, isProd, COMMON_PASSWORDS, PASSWORD_MIN_LENGTH, knownMatchers, escapeRe, ROLE_RANK, roleAtLeast;
 var init_security = __esm({
@@ -2894,20 +2894,20 @@ async function requireRestaurant(c, next) {
   c.set("plan", r?.plan ?? "trial");
   if (r && billingEnforced()) {
     const s = accessState(r);
-    const path4 = c.req.path;
-    if (s.blocked && c.req.method !== "GET" && !path4.includes("/billing") && !path4.includes("/account")) {
+    const path5 = c.req.path;
+    if (s.blocked && c.req.method !== "GET" && !path5.includes("/billing") && !path5.includes("/account")) {
       return c.json({ error: s.state === "past_due" ? "Paiement en attente : mettez \xE0 jour votre moyen de paiement pour continuer." : "Votre essai gratuit est termin\xE9. Choisissez une formule pour continuer (vos donn\xE9es sont conserv\xE9es).", code: "subscription_required", state: s.state }, 402);
     }
-    const need = planRequired(path4);
+    const need = planRequired(path5);
     if (need && (PLAN_RANK[r.plan] ?? 0) < PLAN_RANK[need] && !(s.state === "trialing" && r.plan === "trial")) {
       return c.json({ error: `Cette fonction fait partie de l'offre ${need[0].toUpperCase()}${need.slice(1)}.`, code: "plan_required", plan: need }, 402);
     }
   }
   await next();
 }
-function planRequired(path4) {
-  if (BUSINESS_PATHS.some((p) => path4.startsWith(p))) return "business";
-  if (PRO_PATHS.some((p) => path4.startsWith(p))) return "pro";
+function planRequired(path5) {
+  if (BUSINESS_PATHS.some((p) => path5.startsWith(p))) return "business";
+  if (PRO_PATHS.some((p) => path5.startsWith(p))) return "pro";
   return null;
 }
 function requireMinRole(min) {
@@ -7922,6 +7922,355 @@ var init_backup = __esm({
   }
 });
 
+// apps/api/src/lib/offsite.ts
+import { createHash as createHash4, createHmac as createHmac2 } from "node:crypto";
+import { promises as fs2 } from "node:fs";
+import { tmpdir } from "node:os";
+import path4 from "node:path";
+function offsiteConfig() {
+  const endpoint = trim(process.env.BACKUP_S3_ENDPOINT).replace(/\/+$/, "");
+  const bucket = trim(process.env.BACKUP_S3_BUCKET);
+  const keyId = trim(process.env.BACKUP_S3_ACCESS_KEY_ID);
+  const secret2 = trim(process.env.BACKUP_S3_SECRET_ACCESS_KEY);
+  const missing = [];
+  if (!endpoint) missing.push("BACKUP_S3_ENDPOINT");
+  if (!bucket) missing.push("BACKUP_S3_BUCKET");
+  if (!keyId) missing.push("BACKUP_S3_ACCESS_KEY_ID");
+  if (!secret2) missing.push("BACKUP_S3_SECRET_ACCESS_KEY");
+  const style = trim(process.env.BACKUP_S3_STYLE).toLowerCase() === "virtual" ? "virtual" : "path";
+  const configured = missing.length === 0;
+  return {
+    configured,
+    endpoint: configured ? withScheme(endpoint) : "",
+    bucket,
+    region: trim(process.env.BACKUP_S3_REGION) || "auto",
+    prefix: trim(process.env.BACKUP_S3_PREFIX).replace(/^\/+|\/+$/g, "") || "afrisupply/backups",
+    style,
+    keep: Math.max(1, Number(process.env.BACKUP_OFFSITE_KEEP ?? process.env.BACKUP_KEEP ?? 14)),
+    missing,
+    why: configured ? "Sauvegarde hors site configur\xE9e." : `Sauvegarde hors site NON configur\xE9e : renseignez ${missing.join(", ")} (voir docs/SAUVEGARDE_HORS_SITE.md).`
+  };
+}
+function cible(cfg, key, query = []) {
+  const url = new URL(cfg.endpoint);
+  const pathStyle = cfg.style === "path";
+  const host = pathStyle ? url.host : `${cfg.bucket}.${url.host}`;
+  const canonicalUri = pathStyle ? `/${encodePath(`${cfg.bucket}/${key}`.replace(/\/$/, ""))}`.replace(/\/{2,}/g, "/") : `/${encodePath(key)}`;
+  const q2 = [...query].sort(([a], [b]) => a < b ? -1 : 1).map(([k, v]) => `${encodeQuery(k)}=${encodeQuery(v)}`).join("&");
+  return { url: `${url.protocol}//${host}${canonicalUri}${q2 ? `?${q2}` : ""}`, host, canonicalUri };
+}
+function signer(cfg, method, target, body3, query) {
+  const now = /* @__PURE__ */ new Date();
+  const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const dateStamp = amzDate.slice(0, 8);
+  const payloadHash = sha256Hex(body3);
+  const canonicalQuery = query.map(([k, v]) => `${encodeQuery(k)}=${encodeQuery(v)}`).sort().join("&");
+  const canonicalHeaders = `host:${target.host}
+x-amz-content-sha256:${payloadHash}
+x-amz-date:${amzDate}
+`;
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = [method, target.canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const scope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
+  const key = hmac(hmac(hmac(hmac(`AWS4${trim(process.env.BACKUP_S3_SECRET_ACCESS_KEY)}`, dateStamp), cfg.region), "s3"), "aws4_request");
+  const signature = createHmac2("sha256", key).update(stringToSign).digest("hex");
+  return {
+    headers: {
+      host: target.host,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+      authorization: `AWS4-HMAC-SHA256 Credential=${trim(process.env.BACKUP_S3_ACCESS_KEY_ID)}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
+    }
+  };
+}
+function expliquer(status, corps, cfg) {
+  const code = /<Code>([^<]+)<\/Code>/.exec(corps)?.[1] ?? "";
+  const fin = code ? ` (${code})` : "";
+  if (status === 401 || status === 403) return `le service a refus\xE9 les identifiants${fin} : v\xE9rifiez BACKUP_S3_ACCESS_KEY_ID / BACKUP_S3_SECRET_ACCESS_KEY et les droits d'\xE9criture sur \xAB ${cfg.bucket} \xBB`;
+  if (status === 404) return `seau ou objet introuvable${fin} : v\xE9rifiez BACKUP_S3_BUCKET (\xAB ${cfg.bucket} \xBB) et BACKUP_S3_ENDPOINT`;
+  if (status === 301 || status === 307 || status === 400) return `le service a refus\xE9 la requ\xEAte${fin} : BACKUP_S3_REGION (\xAB ${cfg.region} \xBB) ou BACKUP_S3_STYLE (\xAB ${cfg.style} \xBB) ne correspond peut-\xEAtre pas \xE0 ce service`;
+  if (status === 429) return `le service limite le d\xE9bit${fin} : r\xE9essayez plus tard`;
+  if (status >= 500) return `le service distant est en incident (HTTP ${status})${fin}`;
+  return `le service a r\xE9pondu HTTP ${status}${fin} : ${corps.slice(0, 180)}`;
+}
+async function appel(cfg, method, key, opts = {}) {
+  const body3 = opts.body ?? Buffer.alloc(0);
+  const query = opts.query ?? [];
+  const target = cible(cfg, key, query);
+  const { headers } = signer(cfg, method, target, body3, query);
+  let dernier = "aucune r\xE9ponse";
+  for (let tentative = 1; tentative <= 3; tentative++) {
+    try {
+      const res = await fetch(target.url, {
+        method,
+        headers: { ...headers, ...body3.length ? { "content-type": "application/octet-stream" } : {} },
+        body: body3.length ? new Uint8Array(body3) : void 0,
+        signal: AbortSignal.timeout(opts.timeoutMs ?? 6e4)
+      });
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (res.ok) return { ok: true, status: res.status, body: buf };
+      const passager = res.status >= 500 || res.status === 429;
+      dernier = expliquer(res.status, buf.toString("utf8"), cfg);
+      if (!passager || tentative === 3) return { ok: false, status: res.status, body: buf, error: dernier };
+    } catch (e) {
+      dernier = `le service hors site est injoignable (${e.name === "TimeoutError" ? "d\xE9lai d\xE9pass\xE9" : e.message}) : v\xE9rifiez BACKUP_S3_ENDPOINT (\xAB ${cfg.endpoint} \xBB)`;
+    }
+    await new Promise((r) => setTimeout(r, 300 * tentative * tentative));
+  }
+  return { ok: false, status: 0, body: Buffer.alloc(0), error: dernier };
+}
+async function putObject(name, body3, cfg = offsiteConfig()) {
+  if (!cfg.configured) return refus(cfg);
+  const key = offsiteKey(name, cfg);
+  const res = await appel(cfg, "PUT", key, { body: body3 });
+  if (!res.ok) return { ok: false, configured: true, key, error: res.error };
+  return { ok: true, configured: true, key, bytes: body3.length, sha256: sha256Hex(body3) };
+}
+async function getObject(name, cfg = offsiteConfig()) {
+  if (!cfg.configured) return refus(cfg);
+  const key = offsiteKey(name, cfg);
+  const res = await appel(cfg, "GET", key);
+  if (!res.ok) return { ok: false, configured: true, key, error: res.error };
+  return { ok: true, configured: true, key, bytes: res.body.length, sha256: sha256Hex(res.body), body: res.body };
+}
+async function deleteObject(name, cfg = offsiteConfig()) {
+  if (!cfg.configured) return refus(cfg);
+  const key = offsiteKey(name, cfg);
+  const res = await appel(cfg, "DELETE", key, { timeoutMs: 2e4 });
+  if (!res.ok) return { ok: false, configured: true, key, error: res.error };
+  return { ok: true, configured: true, key };
+}
+async function listObjects(cfg = offsiteConfig(), maxPages = 10) {
+  if (!cfg.configured) return { ...refus(cfg), objects: [], truncated: false };
+  const objects = [];
+  let token = null;
+  for (let page = 0; page < maxPages; page++) {
+    const query = [["list-type", "2"], ["prefix", `${cfg.prefix}/`], ["max-keys", "1000"]];
+    if (token) query.push(["continuation-token", token]);
+    const res = await appel(cfg, "GET", "", { query, timeoutMs: 3e4 });
+    if (!res.ok) return { ok: false, configured: true, objects, truncated: false, error: res.error };
+    const xml = res.body.toString("utf8");
+    for (const bloc of xml.match(/<Contents>[\s\S]*?<\/Contents>/g) ?? []) {
+      const key = decodeXml(/<Key>([\s\S]*?)<\/Key>/.exec(bloc)?.[1] ?? "");
+      const taille = Number(/<Size>(\d+)<\/Size>/.exec(bloc)?.[1] ?? 0);
+      const quand = decodeXml(/<LastModified>([\s\S]*?)<\/LastModified>/.exec(bloc)?.[1] ?? "") || null;
+      if (key) objects.push({ key, name: key.slice(cfg.prefix.length + 1), bytes: taille, lastModified: quand });
+    }
+    const tronque = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+    token = decodeXml(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/.exec(xml)?.[1] ?? "") || null;
+    if (!tronque || !token) return { ok: true, configured: true, objects, truncated: false };
+  }
+  return { ok: true, configured: true, objects, truncated: true };
+}
+async function uploadFile(fileName, dir = backupDir(), cfg = offsiteConfig()) {
+  const debut = Date.now();
+  const vide = (error) => ({ ok: false, configured: cfg.configured, name: fileName, verified: false, tookMs: Date.now() - debut, error });
+  if (!cfg.configured) return vide(cfg.why);
+  let body3;
+  try {
+    body3 = await fs2.readFile(path4.join(dir, fileName));
+  } catch (e) {
+    return vide(`fichier local illisible \xAB ${fileName} \xBB : ${e.message}`);
+  }
+  const envoi = await putObject(fileName, body3, cfg);
+  if (!envoi.ok) return vide(envoi.error ?? "envoi refus\xE9");
+  const relecture = await getObject(fileName, cfg);
+  if (!relecture.ok) return vide(`copie d\xE9pos\xE9e mais NON relue (${relecture.error ?? "lecture impossible"}) : elle ne compte pas comme sauvegarde`);
+  if (relecture.sha256 !== envoi.sha256 || relecture.bytes !== body3.length) {
+    const efface = await deleteObject(fileName, cfg);
+    return { ok: false, configured: true, name: fileName, key: envoi.key, bytes: body3.length, sha256: envoi.sha256, verified: false, supprimeCarAltere: efface.ok, tookMs: Date.now() - debut, error: `la copie relue ne correspond pas au fichier local (${relecture.bytes} octets contre ${body3.length}) : copie supprim\xE9e` };
+  }
+  return { ok: true, configured: true, name: fileName, key: envoi.key, bytes: body3.length, sha256: envoi.sha256, verified: true, tookMs: Date.now() - debut };
+}
+async function pruneOffsite(keep = offsiteConfig().keep, cfg = offsiteConfig()) {
+  if (!cfg.configured) return { ...refus(cfg), removed: [], kept: 0 };
+  const liste = await listObjects(cfg);
+  if (!liste.ok) return { ok: false, configured: true, removed: [], kept: 0, error: liste.error };
+  const parGroupe = /* @__PURE__ */ new Map();
+  for (const o of liste.objects) {
+    const g = groupeDe(o.name);
+    if (!g) continue;
+    parGroupe.set(g, [...parGroupe.get(g) ?? [], o]);
+  }
+  const removed = [];
+  for (const [, objets] of parGroupe) {
+    const tries = [...objets].sort((a, b) => a.name < b.name ? 1 : a.name > b.name ? -1 : 0);
+    const parSauvegarde = /* @__PURE__ */ new Map();
+    for (const o of tries) {
+      const base = o.name.replace(/\.meta\.json$/, "");
+      parSauvegarde.set(base, [...parSauvegarde.get(base) ?? [], o]);
+    }
+    const sauvegardes = [...parSauvegarde.keys()].sort().reverse();
+    for (const base of sauvegardes.slice(keep)) {
+      for (const o of parSauvegarde.get(base) ?? []) {
+        const efface = await deleteObject(o.name, cfg);
+        if (efface.ok) removed.push(o.name);
+      }
+    }
+  }
+  return { ok: true, configured: true, removed, kept: keep };
+}
+async function offsiteSweep(opts = {}) {
+  const debut = Date.now();
+  const cfg = offsiteConfig();
+  const dir = opts.dir ?? backupDir();
+  const base = {
+    configured: cfg.configured,
+    ok: false,
+    endpoint: cfg.configured ? new URL(cfg.endpoint).host : null,
+    bucket: cfg.configured ? cfg.bucket : null,
+    prefix: cfg.prefix,
+    uploaded: [],
+    failed: [],
+    removed: [],
+    kept: 0,
+    introuvables: [],
+    objects: 0,
+    bytes: 0,
+    tookMs: 0
+  };
+  if (!cfg.configured) return { ...base, tookMs: Date.now() - debut, error: cfg.why };
+  const noms = opts.names?.length ? opts.names : (await listBackups(dir)).map((b) => b.name);
+  if (!noms.length) return { ...base, tookMs: Date.now() - debut, error: "aucune sauvegarde locale \xE0 envoyer \u2014 lancez d\u2019abord une sauvegarde" };
+  const uploaded = [];
+  const failed = [];
+  const introuvables = [];
+  for (const name of noms) {
+    let trouve = false;
+    for (const fichier of [`${name}`, `${name}.meta.json`]) {
+      try {
+        await fs2.access(path4.join(dir, fichier));
+      } catch {
+        continue;
+      }
+      trouve = true;
+      const res = await uploadFile(fichier, dir, cfg);
+      if (res.ok) uploaded.push(res);
+      else failed.push({ name: fichier, error: res.error ?? "\xE9chec inconnu" });
+    }
+    if (!trouve) introuvables.push(name);
+  }
+  const pruned = opts.prune === false ? { removed: [], kept: 0 } : await pruneOffsite(opts.keep ?? cfg.keep, cfg);
+  const liste = await listObjects(cfg);
+  const bytes = liste.objects.reduce((a, o) => a + o.bytes, 0);
+  const resultat = {
+    ...base,
+    ok: failed.length === 0 && uploaded.length > 0 && introuvables.length === 0,
+    uploaded,
+    failed,
+    introuvables,
+    removed: pruned.removed,
+    kept: pruned.kept,
+    objects: liste.objects.length,
+    bytes,
+    tookMs: Date.now() - debut,
+    error: failed.length ? `${failed.length} envoi(s) en \xE9chec` : introuvables.length ? `aucun fichier local pour : ${introuvables.join(", ")} (dossier \xAB ${dir} \xBB)` : uploaded.length === 0 ? "rien \xE0 envoyer" : void 0
+  };
+  if (failed.length) {
+    const message = `[sauvegarde hors site] ${failed.length} envoi(s) en \xE9chec vers ${resultat.endpoint ?? "le stockage distant"} \u2014 les sauvegardes locales existent, la copie externe est incompl\xE8te.`;
+    void alertAdmin({ key: "offsite_backup_failed", message, detail: { endpoint: resultat.endpoint, bucket: resultat.bucket, failed: failed.slice(0, 10) } });
+  }
+  return resultat;
+}
+async function downloadBackup(name, dir = backupDir(), cfg = offsiteConfig()) {
+  const debut = Date.now();
+  if (!cfg.configured) return { ok: false, configured: false, name, tookMs: 0, error: cfg.why };
+  if (!HORS_SITE.test(name)) return { ok: false, configured: true, name, tookMs: 0, error: `nom de sauvegarde inattendu \xAB ${name} \xBB` };
+  const distant = await getObject(name, cfg);
+  if (!distant.ok) return { ok: false, configured: true, name, key: distant.key, tookMs: Date.now() - debut, error: distant.error };
+  const liste = await listObjects(cfg);
+  const meta = liste.objects.find((o) => o.name === name);
+  await fs2.mkdir(dir, { recursive: true });
+  const chemin = path4.join(dir, name);
+  await fs2.writeFile(chemin, distant.body);
+  let backup;
+  try {
+    const { gunzipSync: gunzipSync2 } = await import("node:zlib");
+    backup = JSON.parse(gunzipSync2(distant.body).toString("utf8"));
+  } catch (e) {
+    return { ok: false, configured: true, name, key: distant.key, bytes: distant.bytes, sha256: distant.sha256, tookMs: Date.now() - debut, error: `copie t\xE9l\xE9charg\xE9e mais illisible (${e.message}) : elle n'est pas exploitable` };
+  }
+  const verification = verifyBackup(backup);
+  return {
+    ok: verification.ok,
+    configured: true,
+    name,
+    key: distant.key,
+    path: chemin,
+    bytes: distant.bytes,
+    sha256: distant.sha256,
+    verification: { ok: verification.ok, problems: verification.problems },
+    lastModified: meta?.lastModified ?? null,
+    tookMs: Date.now() - debut,
+    error: verification.ok ? void 0 : `copie t\xE9l\xE9charg\xE9e mais INCOMPL\xC8TE : ${verification.problems.join(" | ")}`
+  };
+}
+async function offsiteDrill(name, opts = {}) {
+  const debut = Date.now();
+  const cfg = offsiteConfig();
+  if (!cfg.configured) return { ok: false, configured: false, source: "hors site", name, downloadMs: 0, error: cfg.why };
+  const dossier = opts.dir ?? await fs2.mkdtemp(path4.join(tmpdir(), "afs-hors-site-"));
+  const copie = await downloadBackup(name, dossier, cfg);
+  const downloadMs = Date.now() - debut;
+  if (!copie.ok) return { ok: false, configured: true, source: "hors site", name, key: copie.key, bytes: copie.bytes, sha256: copie.sha256, downloadMs, error: copie.error };
+  const backup = await readBackupFile(name, dossier);
+  const rapport = await restoreDrill(backup);
+  return { ok: rapport.ok, configured: true, source: "hors site", name, key: copie.key, bytes: copie.bytes, sha256: copie.sha256, downloadMs, restore: rapport };
+}
+async function offsiteStats(cfg = offsiteConfig()) {
+  const base = {
+    configured: cfg.configured,
+    missing: cfg.missing,
+    pourquoi: cfg.why,
+    endpoint: cfg.configured ? new URL(cfg.endpoint).host : null,
+    bucket: cfg.configured ? cfg.bucket : null,
+    prefix: cfg.prefix,
+    region: cfg.region,
+    style: cfg.style,
+    keep: cfg.keep,
+    objects: 0,
+    bytes: 0,
+    lastUploadAt: null,
+    lastBackupName: null,
+    oldestUploadAt: null
+  };
+  if (!cfg.configured) return base;
+  const liste = await listObjects(cfg);
+  if (!liste.ok) return { ...base, error: liste.error };
+  const sauvegardes = liste.objects.filter((o) => !o.name.endsWith(".meta.json"));
+  const dates = liste.objects.map((o) => o.lastModified).filter((d) => Boolean(d)).sort();
+  const derniere = [...sauvegardes].sort((a, b) => a.name < b.name ? 1 : -1)[0] ?? null;
+  return {
+    ...base,
+    objects: liste.objects.length,
+    bytes: liste.objects.reduce((a, o) => a + o.bytes, 0),
+    lastUploadAt: dates.length ? dates[dates.length - 1] : null,
+    lastBackupName: derniere?.name ?? null,
+    oldestUploadAt: dates.length ? dates[0] : null
+  };
+}
+var trim, withScheme, offsiteKey, sha256Hex, hmac, EMPTY_SHA256, encodePath, encodeQuery, refus, decodeXml, HORS_SITE, groupeDe;
+var init_offsite = __esm({
+  "apps/api/src/lib/offsite.ts"() {
+    "use strict";
+    init_ops();
+    init_backup();
+    trim = (v) => (v ?? "").trim();
+    withScheme = (url) => /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    offsiteKey = (name, cfg = offsiteConfig()) => [cfg.prefix, name].filter(Boolean).join("/");
+    sha256Hex = (data) => createHash4("sha256").update(data).digest("hex");
+    hmac = (key, data) => createHmac2("sha256", key).update(data).digest();
+    EMPTY_SHA256 = sha256Hex("");
+    encodePath = (p) => p.split("/").map((s) => encodeURIComponent(s)).join("/");
+    encodeQuery = (v) => encodeURIComponent(v).replace(/%7E/g, "~");
+    refus = (cfg) => ({ ok: false, configured: cfg.configured, key: void 0, error: cfg.why });
+    decodeXml = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+    HORS_SITE = /^afs-([0-9a-f]{8})-(\d{8}T\d{6,7})-(admin|owner)(-\d+)?\.json\.gz(\.meta\.json)?$/i;
+    groupeDe = (name) => HORS_SITE.exec(name)?.[1] ?? null;
+  }
+});
+
 // apps/api/src/jobs/daily.ts
 import { and as and22, desc as desc9, eq as eq24, gte as gte9, inArray as inArray13, sql as sql19 } from "drizzle-orm";
 async function buildDigestForRestaurant(rid2, opts = {}) {
@@ -8150,6 +8499,26 @@ L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY
         summary: { count: b.written.length, keep: b.keep, dir: b.dir, removed: b.removed.length, bytes: b.written.reduce((a, w) => a + w.sizeBytes, 0) },
         error: b.errors.length ? b.errors.map((e) => e.error).join(" | ") : null
       });
+      const horsSite = await offsiteSweep();
+      const hs = summary.offsite = {
+        configured: horsSite.configured,
+        uploaded: horsSite.uploaded.length,
+        failed: horsSite.failed.length,
+        removed: horsSite.removed.length,
+        objects: horsSite.objects,
+        bytes: horsSite.bytes,
+        endpoint: horsSite.endpoint,
+        bucket: horsSite.bucket,
+        error: horsSite.error ?? null
+      };
+      if (!horsSite.configured) hs.pourquoi = offsiteConfig().why;
+      await recordJobRun({
+        job: "offsite-backup",
+        startedAt,
+        status: horsSite.configured ? statusFrom(horsSite.uploaded.length, horsSite.failed.length) : "partial",
+        summary: { uploaded: horsSite.uploaded.length, failed: horsSite.failed.length, removed: horsSite.removed.length, objects: horsSite.objects, bytes: horsSite.bytes, endpoint: horsSite.endpoint },
+        error: horsSite.configured ? horsSite.error ?? null : "sauvegarde hors site non configur\xE9e"
+      });
     } else summary.backup = "skipped";
   } catch (e) {
     summary.backup = { error: e.message };
@@ -8190,6 +8559,7 @@ var init_daily = __esm({
     init_recipients();
     init_notify();
     init_backup();
+    init_offsite();
     init_job_runs();
     init_ops_health();
     init_credit();
@@ -12167,6 +12537,7 @@ init_auth();
 init_ops();
 init_ops_health();
 init_backup();
+init_offsite();
 init_mailer();
 init_sms();
 init_job_runs();
@@ -12210,6 +12581,7 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
   const db = await getDb();
   const alerts2 = await db.select().from(auditLog).where(ilike4(auditLog.action, "ops.%")).orderBy(desc19(auditLog.at)).limit(20);
   const [lastBackupRun] = await db.select().from(jobRuns).where(eq38(jobRuns.job, "backup")).orderBy(desc19(jobRuns.startedAt)).limit(1);
+  const horsSite = await offsiteStats();
   const t0 = Date.now();
   await db.execute(sql32`select 1`);
   const dbMs = Date.now() - t0;
@@ -12219,6 +12591,10 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
     ...Object.entries(jobs).filter(([, h]) => h.state === "degraded" || h.state === "stale").map(([job, h]) => `Job \xAB ${job} \xBB : ${h.state === "stale" ? `aucun passage depuis ${h.lastRun?.hoursAgo ?? "?"} h (max ${h.maxHours} h)` : `dernier passage en \xE9chec (${h.lastRun?.error ?? "sans d\xE9tail"})`}`),
     ...storage.files === 0 ? ["Aucune sauvegarde sur disque : lancez-en une et v\xE9rifiez le dossier BACKUP_DIR."] : [],
     ...storage.last && (Date.now() - new Date(storage.last.createdAt).getTime()) / 36e5 > 36 ? [`Derni\xE8re sauvegarde il y a ${Math.round((Date.now() - new Date(storage.last.createdAt).getTime()) / 36e5)} h : le job de sauvegarde ne tourne plus.`] : [],
+    // Chantier 13 (audit n°3) : sans copie hors site, la sauvegarde disparaît avec l'instance.
+    ...horsSite.configured ? [] : [horsSite.pourquoi],
+    ...horsSite.error ? [`Sauvegarde hors site : ${horsSite.error}`] : [],
+    ...horsSite.configured && horsSite.lastUploadAt && (Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 36e5 > 36 ? [`Aucune copie hors site depuis ${Math.round((Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 36e5)} h : la copie externe ne se fait plus.`] : [],
     ...mc.transport !== "resend" ? [`Envoi d'e-mails en mode \xAB ${mc.transport} \xBB : aucun e-mail ne part vers l'ext\xE9rieur.`] : [],
     ...sentryEnabled() ? [] : ["Suivi d'erreurs (Sentry) non configur\xE9 : les incidents ne sont visibles que dans les journaux du serveur."]
   ];
@@ -12228,6 +12604,8 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
     problems,
     jobs,
     backup: { ...storage, lastJobRun: lastBackupRun ? { status: lastBackupRun.status, finishedAt: lastBackupRun.finishedAt, summary: lastBackupRun.summary, error: lastBackupRun.error } : null, version: BACKUP_VERSION },
+    // Chantier 13 : ce que le hors site contient RÉELLEMENT (compté à la source, jamais estimé).
+    offsite: horsSite,
     channels: {
       mail: { transport: mc.transport, configured: mc.transport === "resend", from: mc.from, stats: mailStats(), outbox: mc.transport === "file" ? await outboxCount() : null },
       sms: { configured: sc.enabled, whatsapp: sc.whatsapp, stats: smsStats() },
@@ -12283,15 +12661,49 @@ adminOpsRoutes.get("/admin/backups/:name", requireAuth, adminOnly, async (c) => 
   const name = c.req.param("name");
   if (!/^[A-Za-z0-9._-]+\.json\.gz$/.test(name)) return c.json({ error: "Nom invalide" }, 400);
   const { backupDir: backupDir2 } = await Promise.resolve().then(() => (init_backup(), backup_exports));
-  const fs2 = await import("node:fs/promises");
+  const fs3 = await import("node:fs/promises");
   try {
-    const buf = await fs2.readFile(`${backupDir2()}/${name}`);
+    const buf = await fs3.readFile(`${backupDir2()}/${name}`);
     c.header("Content-Type", "application/gzip");
     c.header("Content-Disposition", `attachment; filename="${name}"`);
     return c.body(buf);
   } catch {
     return c.json({ error: "Sauvegarde introuvable" }, 404);
   }
+});
+adminOpsRoutes.post("/admin/backups/offsite", requireAuth, adminOnly, async (c) => {
+  const body3 = z21.object({ names: z21.array(z21.string()).optional(), keep: z21.number().int().min(1).max(365).optional(), prune: z21.boolean().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body3.success) return c.json({ error: "Requ\xEAte invalide", details: body3.error.flatten() }, 400);
+  const startedAt = /* @__PURE__ */ new Date();
+  const res = await offsiteSweep({ names: body3.data.names, keep: body3.data.keep, prune: body3.data.prune });
+  await recordJobRun({
+    job: "offsite-backup",
+    startedAt,
+    status: res.configured ? statusFrom(res.uploaded.length, res.failed.length) : "partial",
+    summary: { uploaded: res.uploaded.length, failed: res.failed.length, removed: res.removed.length, objects: res.objects, bytes: res.bytes, endpoint: res.endpoint },
+    error: res.configured ? res.error ?? null : "sauvegarde hors site non configur\xE9e"
+  });
+  await audit("backup.offsite_run", { actorEmail: c.get("user").email, meta: { uploaded: res.uploaded.length, failed: res.failed.length, configured: res.configured } });
+  return c.json(res, res.configured ? 200 : 400);
+});
+adminOpsRoutes.post("/admin/backups/offsite-drill", requireAuth, adminOnly, async (c) => {
+  const body3 = z21.object({ name: z21.string().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const cfg = offsiteConfig();
+  if (!cfg.configured) return c.json({ ok: false, configured: false, error: cfg.why }, 400);
+  const nom = body3.success && body3.data.name ? body3.data.name : (await offsiteStats()).lastBackupName ?? "";
+  if (!nom) return c.json({ ok: false, error: "Aucune sauvegarde hors site : envoyez-en une d\u2019abord (POST /api/admin/backups/offsite)." }, 400);
+  const rapport = await offsiteDrill(nom);
+  await audit("backup.offsite_drill", { actorEmail: c.get("user").email, target: rapport.restore?.restaurantId ?? void 0, meta: { name: nom, ok: rapport.ok, rows: rapport.restore?.totals.inserted ?? 0, downloadMs: rapport.downloadMs } });
+  return c.json(rapport, rapport.ok ? 200 : 400);
+});
+adminOpsRoutes.post("/admin/backups/offsite-download", requireAuth, adminOnly, async (c) => {
+  const body3 = z21.object({ name: z21.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body3.success) return c.json({ error: "Nom de sauvegarde requis" }, 400);
+  const cfg = offsiteConfig();
+  if (!cfg.configured) return c.json({ ok: false, configured: false, error: cfg.why }, 400);
+  const res = await downloadBackup(body3.data.name);
+  await audit("backup.offsite_download", { actorEmail: c.get("user").email, meta: { name: body3.data.name, ok: res.ok, bytes: res.bytes } });
+  return c.json({ ...res, body: void 0 }, res.ok ? 200 : 400);
 });
 adminOpsRoutes.post("/admin/backups/restore", requireAuth, adminOnly, async (c) => {
   const body3 = z21.object({ name: z21.string().optional(), backup: z21.unknown().optional(), confirm: z21.string(), force: z21.boolean().optional() }).safeParse(await c.req.json().catch(() => ({})));

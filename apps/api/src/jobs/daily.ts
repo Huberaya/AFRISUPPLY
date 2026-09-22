@@ -17,6 +17,7 @@ import { runRecurringOrders } from '../routes/marketplace.js';
 import { recipientsFor as recipientsFrom } from '../lib/recipients.js';
 import { notifyCriticalAlerts, pendingImmediateAlerts, markAlertsNotified } from '../lib/notify.js';
 import { backupAllRestaurants } from '../lib/backup.js';
+import { offsiteConfig, offsiteSweep } from '../lib/offsite.js';
 import { recordJobRun, statusFrom } from '../lib/job-runs.js';
 import { watchdog } from '../lib/ops-health.js';
 import { remindPayments } from '../lib/credit.js';
@@ -219,6 +220,24 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
         job: 'backup', startedAt, status: statusFrom(b.written.length, b.errors.length),
         summary: { count: b.written.length, keep: b.keep, dir: b.dir, removed: b.removed.length, bytes: b.written.reduce((a, w) => a + w.sizeBytes, 0) },
         error: b.errors.length ? b.errors.map((e) => e.error).join(' | ') : null,
+      });
+      // Chantier 13 (audit n°3) : la COPIE HORS SITE. Une sauvegarde qui vit sur le même disque que
+      // la base qu'elle protège ne protège de rien — en serverless, ce disque disparaît avec
+      // l'instance. Chaque fichier est envoyé, puis RELU et comparé (SHA-256) : une copie qui ne se
+      // relit pas n'est pas une sauvegarde. Sans configuration, c'est dit tel quel : jamais de
+      // succès simulé, et la sauvegarde locale reste valable.
+      const horsSite = await offsiteSweep();
+      const hs = (summary as Record<string, unknown>).offsite = {
+        configured: horsSite.configured, uploaded: horsSite.uploaded.length, failed: horsSite.failed.length,
+        removed: horsSite.removed.length, objects: horsSite.objects, bytes: horsSite.bytes,
+        endpoint: horsSite.endpoint, bucket: horsSite.bucket, error: horsSite.error ?? null,
+      } as Record<string, unknown>;
+      if (!horsSite.configured) hs.pourquoi = offsiteConfig().why;
+      await recordJobRun({
+        job: 'offsite-backup', startedAt,
+        status: horsSite.configured ? statusFrom(horsSite.uploaded.length, horsSite.failed.length) : 'partial',
+        summary: { uploaded: horsSite.uploaded.length, failed: horsSite.failed.length, removed: horsSite.removed.length, objects: horsSite.objects, bytes: horsSite.bytes, endpoint: horsSite.endpoint },
+        error: horsSite.configured ? (horsSite.error ?? null) : 'sauvegarde hors site non configurée',
       });
     } else (summary as Record<string, unknown>).backup = 'skipped';
   } catch (e) { (summary as Record<string, unknown>).backup = { error: (e as Error).message }; void captureException(e as Error, { route: 'jobs/backup' }); }

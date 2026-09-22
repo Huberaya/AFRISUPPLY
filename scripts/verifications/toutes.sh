@@ -3,8 +3,9 @@
 #
 # Chaque script interroge une API RÉELLE (aucune valeur inventée) et vérifie ce qui se passe vraiment :
 # parcours d'achat, réception, prix facturé, alertes, e-mails réellement déposés, facturation, paiements
-# fournisseur, prévision, expérience réelle (navigation, dialogues, parcours guidé — chantier 11), puis
-# exploitation (sauvegardes réellement restaurées, tâches surveillées, journal d'audit — chantier 12).
+# fournisseur, prévision, expérience réelle (navigation, dialogues, parcours guidé — chantier 11),
+# exploitation (sauvegardes réellement restaurées, tâches surveillées, journal d'audit — chantier 12),
+# puis sauvegarde HORS SITE (copie externe réellement déposée, relue et restaurée — chantier 13).
 # Les preuves (messages .outbox, PDF, journaux API) restent sur disque.
 #
 # Usage :
@@ -25,6 +26,7 @@ mkdir -p resultats
 SCRIPTS=(
   chantier1_verif.py chantier2_verif.py scenario_tests.py chantier3_verif.py chantier4_verif.py chantier5_verif.py
   chantier6_verif.py chantier7_verif.py chantier8_verif.py chantier9_verif.py chantier11_verif.py chantier12_verif.py
+  chantier13_verif.py
 )
 
 echo "API : $AFS_API"
