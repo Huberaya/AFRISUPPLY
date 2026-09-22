@@ -1,6 +1,6 @@
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useState } from 'react';
-import { Menu, X, ShoppingCart } from 'lucide-react';
+import { Menu, X, ShoppingCart, Home } from 'lucide-react';
 import { useCart } from '../../lib/cart';
 import { useAuth } from '../../lib/auth';
 import { Logo } from '../AppLayout';
@@ -17,8 +17,8 @@ export default function SiteLayout() {
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 lg:px-8">
           <Logo to="/" />
           <nav className="hidden items-center gap-6 text-sm font-medium md:flex">{NAV.map((n) => <NavLink key={n.to} to={n.to} className={({ isActive }) => isActive ? 'text-brand-700' : 'text-stone-600 hover:text-stone-900'}>{n.label}</NavLink>)}</nav>
-          <div className="hidden items-center gap-2 md:flex">{CartBtn}{user ? <Link to="/app" className="btn-primary">Mon espace</Link> : <><Link to="/connexion" className="btn-ghost">Se connecter</Link><Link to="/inscription" className="btn-primary">Créer un compte</Link></>}</div>
-          <div className="flex items-center md:hidden">{CartBtn}<button className="rounded-lg p-2" onClick={() => setOpen(!open)} aria-label="Menu">{open ? <X /> : <Menu />}</button></div>
+          <div className="hidden items-center gap-2 md:flex">{CartBtn}<Link to="/" className="btn-ghost !py-1.5" aria-label="Retour à l’accueil"><Home size={16} /> <span className="hidden lg:inline">Retour à l’accueil</span></Link>{user ? <Link to="/app" className="btn-primary">Mon espace</Link> : <><Link to="/connexion" className="btn-ghost">Se connecter</Link><Link to="/inscription" className="btn-primary">Créer un compte</Link></>}</div>
+          <div className="flex items-center md:hidden">{CartBtn}<Link to="/" className="rounded-lg p-2 text-stone-700 hover:bg-stone-100" aria-label="Retour à l’accueil"><Home size={20} /></Link><button className="rounded-lg p-2" onClick={() => setOpen(!open)} aria-label="Menu">{open ? <X /> : <Menu />}</button></div>
         </div>
         {open && <div className="border-t border-stone-100 px-4 py-3 md:hidden flex flex-col gap-2 text-sm">{NAV.map((n) => <Link key={n.to} to={n.to} onClick={() => setOpen(false)} className="py-1.5">{n.label}</Link>)}{user ? <Link to="/app" onClick={() => setOpen(false)} className="btn-primary justify-center">Mon espace</Link> : <><Link to="/connexion" onClick={() => setOpen(false)} className="py-1.5">Se connecter</Link><Link to="/inscription" onClick={() => setOpen(false)} className="btn-primary justify-center">Créer un compte</Link></>}</div>}
       </header>
