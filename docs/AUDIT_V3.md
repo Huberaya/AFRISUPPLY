@@ -272,12 +272,19 @@ migrations rejouables de bout en bout · `db:generate` → « No schema changes 
 
 ## 11. Audit lancement
 
-### 🔴 BLOQUANTS (avant d'ouvrir un compte à quiconque)
-1. **Déployer** (Vercel + Neon) et mettre à jour `APP_URL`.
-2. **Réinitialiser le mot de passe Neon** et **révoquer les jetons GitHub** utilisés.
-3. **Configurer l'encaissement** : `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, 3 prix, webhook déclaré.
-4. **Sauvegarde hors site** (S3/R2/Blob) **+ restauration testée depuis cette copie externe**.
-5. **Recette terrain** : 3 restaurateurs non formés, protocole prêt, non joué.
+### 🔴 BLOQUANTS (avant d'ouvrir un compte à quiconque) — *état au 22/09/2026 au soir*
+1. ~~**Déployer** (Vercel + Neon)~~ → **FAIT** : production `6fad9b5` READY, base Neon connectée,
+   `/api/health` 200, interface servie. Reste à fixer `APP_URL` et `ALLOWED_ORIGINS`.
+2. **Réinitialiser le mot de passe Neon** et **révoquer les jetons GitHub / Vercel** utilisés
+   (mot de passe et jetons ont circulé : cette action reste entièrement à faire, côté humain).
+3. **Configurer l'encaissement** : `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, 3 prix, webhook
+   déclaré — en ligne, `/api/billing/health` annonce honnêtement `ready:false`, `mode:'manuel'`.
+4. **Sauvegarde hors site** : **code livré et vérifié** (chantier 13, `chantier13_verif.py` 23/23)
+   → « à construire » devenu **« à activer »** : créer le seau, poser les 4 `BACKUP_S3_*`, lancer
+   une fois les trois gestes et lire le rapport. En attendant, la copie locale vit sur un disque
+   **éphémère** — désormais annoncé comme tel dans l'exploitation.
+5. **Recette terrain** : 3 restaurateurs non formés, protocole prêt, non joué — **le seul bloquant
+   que ni le code ni les tests ne peuvent lever**.
 
 ### 🟠 AVANT 10 CLIENTS
 6. Corriger les **500 sur identifiants invalides** (7 routes listées, §6.2).
@@ -425,7 +432,7 @@ produisait — éphémère en serverless. La copie vivait donc à côté de la b
 | La rétention distante ne s'appuie **jamais** sur le disque local | Instance neuve au disque vide : l'archive n'est pas effacée ; objets étrangers jamais touchés |
 | **Aucun succès simulé** | Sans configuration : variables manquantes nommées, envoi et essai refusés ; refus 403, seau ou région erronés, service injoignable, fichier absent : échec **nommé** à chaque fois |
 
-**Vérifications** : `offsite-backup.test.ts` **14/14** · `chantier13_verif.py` **22/22** (service
+**Vérifications** : `offsite-backup.test.ts` **14/14** · `chantier13_verif.py` **23/23** (service
 externe configuré) et **10/10** (non configuré) · batterie complète **529/529 · 13/13 scripts**, en
 local **et en CI** (`401a095`) · tests base 5 · API 426 · web 80 · lint 0 · types 0 · bundle conforme.
 
@@ -435,3 +442,37 @@ envoyer → essayer de restaurer depuis la copie externe) et lire le rapport. Pr
 `docs/SAUVEGARDE_HORS_SITE.md`. Le bloquant n°4 passe donc de « à construire » à « à activer ».
 
 **Rapport détaillé** : `docs/RAPPORT_CHANTIER_13_HORS_SITE.md`.
+
+## Vérification du déploiement en ligne — 22/09/2026 (soir)
+
+**Réponse** : **oui, tout ce qui est poussé est en ligne** — `origin/main` = `6fad9b5` =
+production READY sur `afrisupply-api-zeta.vercel.app`, base Neon connectée (`/api/health` 200),
+SPA servie, deux déploiements en échec expliqués (`7d801f2`, `npm ci --include=dev`, réparé par
+`3a39658`). **Mais 13 variables manquent en production** : sauvegarde hors site, Stripe, suivi
+d'erreurs, SMS, `SUPPORT_EMAIL`, `ALLOWED_ORIGINS` — présentes dans le code, **inactives en
+ligne**, chacune honnêtement annoncée « non configuré ».
+
+**La vérification en ligne a révélé deux vrais défauts, invisibles en local** (ils n'existent
+qu'en serverless), corrigés dans `a6097e2` :
+
+1. **Disque du projet en lecture seule sur Vercel** → la sauvegarde ne s'écrivait nulle part.
+   `backupDir()` bascule sur `tmpdir()` si `VERCEL` sans `BACKUP_DIR` ; le caractère **éphémère
+   est annoncé** (`ephemere`, note, problème listé dans l'exploitation : seule la copie hors site
+   est durable).
+2. **Cadences de supervision irréalistes** : surveiller `reminders`/`alerts-notify` à 3 h sur un
+   plan à **un cron par jour** = fausse alerte quotidienne garantie → seuils **26 h** / **30 h**,
+   surchargeables par `JOB_MAX_HOURS_<JOB>`, et `offsite-backup` supervisé **seulement** si le
+   hors site est configuré.
+
+**Le `backup: never` de production est expliqué et **n'est pas** un échec silencieux** :
+hypothèse testée puis **réfutée** (`backup-echec-visible.test.ts`) ; le dernier passage du cron
+(22/09 05 h 21 UTC) est **antérieur** au déploiement du code des sauvegardes. Prochain passage
+**23/09 à 04 h 30 UTC**.
+
+**Preuves après correctif** : `ops-backup.test.ts` **30/30** · `backup-echec-visible.test.ts`
+**5/5** · `chantier12_verif.py` **70/70** · `chantier13_verif.py` **23/23** · typecheck 0 ·
+lint 0. Les ✗ d'un premier passage en configuration « simulée Vercel » venaient de
+l'environnement de test (sans clé d'e-mail, la tâche quotidienne se déclare en dégradé à juste
+titre), **pas du code** : la même vérification passe 70/70 sur base neuve et configuration standard.
+
+**Rapport complet** : `docs/VERIFICATION_VERCEL.md`.

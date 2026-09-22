@@ -77,7 +77,7 @@ vérifié par test (ni clé d'accès, ni clé secrète, ni en-tête de signature
 | `apps/api/src/test/offsite-backup.test.ts` (nouveau) | 14 tests, faux service S3 **vérifiant la signature** |
 | `apps/api/src/test/faux-s3.ts` (nouveau) | Faux service S3 pour les tests : refuse, altère, tombe en panne, **exige une signature valide** |
 | `scripts/verifications/faux_s3.py` (nouveau) | Faux service S3 pour la CI (bibliothèque standard), qui **refuse toute requête non signée** |
-| `scripts/verifications/chantier13_verif.py` (nouveau) | Vérification de bout en bout (22 contrôles) |
+| `scripts/verifications/chantier13_verif.py` (nouveau) | Vérification de bout en bout (23 contrôles) |
 | `scripts/verifications/toutes.sh` | 13ᵉ script enregistré |
 | `.github/workflows/ci.yml` | Faux service S3 démarré, API configurée dessus, dossier de sauvegardes dédié |
 | `docs/SAUVEGARDE_HORS_SITE.md` (nouveau) | Configuration, garanties, procédure de **reprise après sinistre** |
@@ -88,7 +88,7 @@ vérifié par test (ni clé d'accès, ni clé secrète, ni en-tête de signature
 | Contrôle | Résultat |
 |---|---|
 | `offsite-backup.test.ts` | **14/14** — non configuré, envoi + relecture + empreinte, altération détectée et retirée, refus 403, service injoignable, rétention (dont disque local vide), restauration depuis la copie externe, copie tronquée refusée, état d'exploitation sans secret, job quotidien + `job_runs` |
-| `chantier13_verif.py` — service externe **configuré** | **22/22** : envoi réel, objet existant dans le stockage inspecté, empreintes comparées, **restauration depuis la copie externe (85 lignes, aucune table incomplète)**, téléchargement, refus d'une copie inexistante, fichier local introuvable nommé, rétention, état d'exploitation |
+| `chantier13_verif.py` — service externe **configuré** | **23/23** : envoi réel, objet existant dans le stockage inspecté, empreintes comparées, **restauration depuis la copie externe (85 lignes, aucune table incomplète)**, téléchargement, refus d'une copie inexistante, fichier local introuvable nommé, rétention, état d'exploitation |
 | `chantier13_verif.py` — service **non configuré** | **10/10** : l'API nomme les variables manquantes, n'annonce aucun succès, refuse l'envoi et l'essai de restauration |
 | Bout en bout complet | **13 scripts** exécutés (voir le total du passage) |
 | Types · lint | 0 erreur |
@@ -97,7 +97,30 @@ Un défaut a été trouvé **dans mon propre contrôleur de test** au passage : 
 requête en texte UTF-8, ce qui altère les données binaires (le gzip) et refusait à tort les envois
 corrects. C'est le genre d'erreur qu'un faux service « qui dit toujours oui » n'aurait jamais révélée.
 
-## 5. ⚠️ Ce qui reste à faire (côté humain, pas côté code)
+## 5. 🔧 Correctifs révélés par la production (mise en ligne vérifiée)
+
+La mise en ligne réelle a fait apparaître **deux vrais défauts** que ni les tests ni la CI ne
+pouvaient voir, parce qu'ils n'existent qu'en serverless :
+
+| Défaut observé en production | Cause | Correctif |
+|---|---|---|
+| La sauvegarde quotidienne ne s'écrivait nulle part : le disque du projet est **en lecture seule** sur Vercel, `<cwd>/.backups` est inécrivable | `backupDir()` supposait un disque inscriptible à côté du code | `backupDir()` bascule sur `tmpdir()/afrisupply-backups` dès que `VERCEL` est défini sans `BACKUP_DIR`. Le caractère **éphémère** est désormais annoncé : `backupDiskEphemere()`, champ `ephemere` + `note` dans `backupStorageStats()`, et **problème listé** dans `/api/admin/ops` (« seule la copie hors site est durable ») |
+| L'exploitation criait au loup : `reminders` et `alerts-notify` étaient supervisées à **3 h**, alors que le plan Hobby n'autorise **qu'un cron par jour** → fausse alerte quotidienne garantie | Seuils hérités d'un rythme de croisière, pas du plan réellement utilisé | Seuils **26 h** (`reminders`, `alerts-notify`) et **30 h** (`daily`, `backup`, `offsite-backup`), chacun **surchargeable** par `JOB_MAX_HOURS_<JOB>` ; `jobsSurveilles()` ne supervise `offsite-backup` **que si** le hors site est configuré |
+
+**Preuves après correctif** : `ops-backup.test.ts` **30/30** · `backup-echec-visible.test.ts`
+**5/5** (nouveau : disque `/tmp` en serverless, éphémère annoncé, cadences, supervision
+conditionnelle, ligne `job_runs` en erreur sans interrompre la tâche quotidienne) ·
+`chantier12_verif.py` **70/70** · `chantier13_verif.py` **23/23** contre une API configurée en
+« simulée Vercel » (dossier `/tmp/afrisupply-backups` annoncé, hors site supervisé) ·
+typecheck et lint 0 erreur.
+
+**Enseignement** : le `backup: never` vu en production n'était **pas** un échec de sauvegarde
+silencieux (hypothèse testée puis **réfutée**) : le code des sauvegardes a été déployé **après**
+le dernier passage du cron. La cause réelle du `never` est l'absence de passage, pas un bug
+d'enregistrement. Ce qui était cassé, en revanche, c'est l'écriture en serverless — et ça, aucun
+test local ne l'aurait dit.
+
+## 6. ⚠️ Ce qui reste à faire (côté humain, pas côté code)
 
 1. **Créer le seau et la clé** chez l'hébergeur (Cloudflare R2 ou Scaleway recommandés : données en
    Europe, pas de frais de sortie), renseigner les 4 variables sur Vercel.
@@ -107,7 +130,7 @@ corrects. C'est le genre d'erreur qu'un faux service « qui dit toujours oui » 
 4. **Inscrire la procédure de reprise** dans le runbook d'astreinte : elle est écrite telle quelle dans
    `docs/SAUVEGARDE_HORS_SITE.md`.
 
-## 6. ➡️ Suivant
+## 7. ➡️ Suivant
 
 Les bloquants de l'audit n°3 restants sont **hors code** : mise en ligne (Vercel + Neon, `APP_URL`),
 **réinitialisation du mot de passe Neon et révocation des jetons GitHub**, configuration de
