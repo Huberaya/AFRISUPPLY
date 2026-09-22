@@ -20,6 +20,6 @@ Réservé aux professionnels : tout le monde voit produits et prix HT, un compte
 | `POST /api/public/product-alert` | « prévenez-moi » → lead |
 
 ## Photos produits
-`apps/web/public/produits/<slug>.jpg` (slug = nom normalisé, cf. `docs/_products_slugs.json`). Générées par IA en lot (640 px, ~50 Ko) ; à défaut, icône de rayon. Génération par lots de 10 (limite outil) ; 269/324 au 22/09/2026 — à partir du lot 17, contenants variés (bocal, planche, panier, sac kraft, ardoise…) pour éviter la monotonie, même lumière et lin beige.
+`apps/web/public/produits/<slug>.jpg` (slug = nom normalisé, cf. `docs/_products_slugs.json`). Générées par IA en lot (640 px, ~50 Ko) ; à défaut, icône de rayon. Génération par lots de 10 (limite outil) ; 279/324 au 22/09/2026 — à partir du lot 17, contenants variés (bocal, planche, panier, sac kraft, ardoise…) pour éviter la monotonie, même lumière et lin beige.
 
 Code : `apps/api/src/routes/storefront.ts`, `apps/web/src/pages/store/*`, `apps/web/src/lib/cart.ts`. Tests : `apps/api/src/test/storefront.test.ts`.
