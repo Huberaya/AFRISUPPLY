@@ -40,9 +40,10 @@ describe('navigation', () => {
     // Le logo ramène TOUJOURS à la page d’accueil, quel que soit l’écran
     const logos = await screen.findAllByRole('link', { name: /afri/i });
     logos.forEach((l) => expect(l).toHaveAttribute('href', '/'));
-    // Et il y a un bouton explicite « Retour à l’accueil » → la vitrine /
-    const homeBtn = screen.getByRole('link', { name: /retour à l.accueil/i });
-    expect(homeBtn).toHaveAttribute('href', '/');
+    // Et il y a des boutons explicites « Retour à l’accueil » (en-tête + menu) → la vitrine /
+    const homeBtnsApp = screen.getAllByRole('link', { name: /retour à l.accueil/i });
+    expect(homeBtnsApp.length).toBeGreaterThan(0);
+    homeBtnsApp.forEach((l) => expect(l).toHaveAttribute('href', '/'));
     expect(screen.queryByText('Admin AFRISUPPLY')).not.toBeInTheDocument();
   });
 
@@ -87,5 +88,15 @@ describe('navigation', () => {
     const homeBtns = screen.getAllByRole('link', { name: /retour à l.accueil/i });
     expect(homeBtns.length).toBeGreaterThan(0);
     homeBtns.forEach((l) => expect(l).toHaveAttribute('href', '/'));
+  });
+
+  it('connexion : le bouton « Retour à l’accueil » mène à la vitrine', async () => {
+    mockApi({ '*': () => ({ body: {} }) });
+    window.history.pushState({}, '', '/connexion');
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Connexion' })).toBeInTheDocument();
+    const btns = screen.getAllByRole('link', { name: /retour à l.accueil/i });
+    expect(btns.length).toBeGreaterThan(0);
+    btns.forEach((l) => expect(l).toHaveAttribute('href', '/'));
   });
 });

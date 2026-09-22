@@ -92,6 +92,18 @@ export function Logo({ light = false, to = '/' }: { light?: boolean; to?: string
   );
 }
 
+// Bouton « Retour à l’accueil » — LE bouton, unique et toujours visible (libellé « Accueil »
+// sur petit écran), posé dans les en-têtes, les menus et les pages de connexion → la vitrine `/`.
+export function HomeButton({ light = false }: { light?: boolean }) {
+  return (
+    <Link to="/" aria-label="Retour à l’accueil" className={`btn-ghost !py-1.5 whitespace-nowrap ${light ? '!bg-stone-800 !text-stone-100 hover:!bg-stone-700' : ''}`}>
+      <Home size={16} />
+      <span className="sm:hidden">Accueil</span>
+      <span className="hidden sm:inline">Retour à l’accueil</span>
+    </Link>
+  );
+}
+
 export default function AppLayout() {
   const { user, restaurant, restaurants, logout, switchRestaurant, accessNotice, clearAccessNotice } = useAuth();
   const myRole = restaurant?.role ?? 'owner';
@@ -120,7 +132,10 @@ export default function AppLayout() {
 
   const Sidebar = (
     <aside className="flex h-full w-64 flex-col bg-stone-900 text-stone-200">
-      <div className="px-5 py-5 border-b border-stone-800"><span onClick={() => setOpen(false)} className="inline-flex cursor-pointer"><Logo light /></span></div>
+      <div className="px-5 py-5 border-b border-stone-800">
+        <span onClick={() => setOpen(false)} className="inline-flex cursor-pointer"><Logo light /></span>
+        <div className="mt-3" onClick={() => setOpen(false)}><HomeButton light /></div>
+      </div>
       <div className="px-4 py-4 border-b border-stone-800">
         <p className="text-[11px] uppercase tracking-wide text-stone-500">Restaurant</p>
         {restaurants.length > 1 ? (
@@ -196,7 +211,7 @@ export default function AppLayout() {
           <div className="lg:hidden"><Logo /></div>
           <div className="hidden lg:block text-sm text-stone-500">{new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
           <div className="flex items-center gap-2">
-            <Link to="/" className="btn-ghost !py-1.5" aria-label="Retour à l’accueil"><Home size={16} /> <span className="hidden sm:inline">Retour à l’accueil</span></Link>
+            <HomeButton />
             <Link to="/app" className="relative rounded-xl p-2 hover:bg-stone-100" aria-label={unread > 0 ? `${unread} alerte(s) non lue(s)` : 'Alertes'}><Bell size={18} />{unread > 0 && <span className="absolute -right-0.5 -top-0.5 h-4 min-w-4 rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-4 text-white">{unread}</span>}</Link>
             <Link to="/app/ia" className="btn-primary !py-1.5"><Sparkles size={16} /> <span className="hidden sm:inline">Demander à l’IA</span></Link>
           </div>
