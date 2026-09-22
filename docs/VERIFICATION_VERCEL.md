@@ -6,8 +6,10 @@
 **Réponse courte** : **OUI** — tout ce qui est poussé sur `main` est en ligne et répond.
 Mais « en ligne » n'est pas « complet » : **13 variables d'environnement manquent** à la
 production, donc trois fonctions (sauvegarde hors site, encaissement, suivi d'erreurs) sont
-**présentes dans le code et inactives en ligne**. Et la vérification a fait apparaître **deux
-vrais défauts qui n'existaient qu'en production** — ils sont corrigés et prouvés ci-dessous.
+**présentes dans le code et inactives en ligne**. Et la vérification a fait apparaître **trois
+vrais défauts invisibles en local** : deux défauts serverless (disque éphémère, cadences de
+supervision) **et un défaut de chaîne de déploiement** — la production n'exécutait pas les
+sources, mais un bundle précompilé resté en arrière. Les trois sont corrigés et prouvés ci-dessous.
 
 ---
 
@@ -24,8 +26,8 @@ vrais défauts qui n'existaient qu'en production** — ils sont corrigés et pro
 | Interface web | servie sur `/` et `/catalogue` | requêtes réelles |
 
 **Conclusion** : il n'y a **aucun retard de déploiement**. Tout ce qui a été poussé est en ligne.
-Les correctifs de ce soir (`a6097e2`) sont poussés à la suite de ce rapport et déclenchent un
-nouveau déploiement automatique.
+**Mais** le code *exécuté* avait un train de retard sur le code *poussé* (bundle précompilé, §5) :
+c'est corrigé, et le déploiement régénère désormais le bundle à chaque mise en ligne.
 
 ### Deux déploiements en échec, expliqués
 
@@ -86,7 +88,38 @@ et `backup-echec-visible.test.ts` (5/5, nouveau), scripts de vérification 12 et
 « simulée Vercel » (le dossier `/tmp/afrisupply-backups` est bien celui annoncé, le hors site est
 bien supervisé) · `chantier12_verif.py` **70/70** · typecheck 0 · lint 0.
 
-## 5. Les ✗ d'un premier passage, expliqués et levés
+## 5. Découverte n°3 — la production ne tournait pas sur les sources (bundle précompilé)
+
+En revérifiant la production **après** le déploiement des correctifs, `/api/status` annonçait toujours
+`reminders` et `alerts-notify` surveillées à **3 h**, alors que le code déployé dit **26 h**. Un seuil
+qui ne bouge pas après un déploiement, c'est le signe que le code exécuté n'est pas celui qu'on croit.
+
+**Cause** : Vercel n'exécute pas `apps/api/src`. La fonction déployée est **`api/index.js`, un bundle
+précompilé et committé** (`npm run build:api`), que la chaîne de déploiement **ne régénérait pas**. Le
+commit affiché (`9dd6e41`) était bien celui du dépôt, mais le code exécuté était celui du dernier bundle
+fabriqué à la main, au commit `b4e9523` : mes deux correctifs étaient **poussés, déployés… et
+inopérants**. Dit autrement : pendant ce temps, la production écrivait encore ses sauvegardes dans un
+dossier inécrivable et surveillait les tâches à 3 h.
+
+**Deux garde-fous ont fonctionné** :
+
+- `scripts/check-bundle.mjs` (présent dans `npm run verify` **et** dans la CI) est passé au rouge en
+  indiquant exactement la marche à suivre : « lancez `npm run build:api` et committez `api/index.js` » ;
+- la comparaison d'un **comportement observable** (les seuils affichés par `/api/status`) avec les
+  sources — c'est elle qui a révélé l'écart, pas le commit affiché.
+
+**Correctifs, en deux niveaux** :
+
+| Niveau | Action | Effet |
+|---|---|---|
+| Immédiat | `npm run build:api` → `api/index.js` régénéré (seuils 26 h et repli `tmpdir()` vérifiés **dans le bundle**) | la production exécute enfin le code testé |
+| **Cause racine** | `vercel.json` : le `buildCommand` **régénère le bundle à chaque déploiement** (`… && node api/build.mjs`) | la production **ne peut plus** servir un code différent des sources, même si le bundle n'est pas committé |
+
+**Leçon** : « le commit en ligne est le bon » ne prouve pas que **le code en ligne** est le bon. Ce qui le
+prouve, c'est de confronter un comportement observable à sa valeur dans les sources — et d'avoir un
+garde-fou automatique entre les deux.
+
+## 6. Les ✗ d'un premier passage, expliqués et levés
 
 Un premier passage de `chantier12_verif.py` contre une API configurée en « simulée Vercel »
 avait produit des échecs (employé renvoyé en 401, trois tâches « en problème », tâche quotidienne
@@ -95,7 +128,7 @@ e-mail ne peut partir, donc la tâche quotidienne se déclarait en dégradé —
 base neuve et une configuration standard, **le même script passe 70/70**. Leçon retenue :
 ne jamais conclure à une régression sur la base d'un environnement volontairement dégradé.
 
-## 6. Ce qu'il reste à faire — et qui n'est pas du code
+## 7. Ce qu'il reste à faire — et qui n'est pas du code
 
 1. **Créer le seau chez un hébergeur** (Cloudflare R2 ou Scaleway recommandés : données en Europe,
    pas de frais de sortie), puis poser les **4 variables** `BACKUP_S3_*` sur Vercel.
@@ -109,7 +142,7 @@ ne jamais conclure à une régression sur la base d'un environnement volontairem
 6. **Recette terrain** : 3 restaurateurs devant l'écran, sans aide (c'est le seul point que ni
    les tests ni la vérification du déploiement ne peuvent trancher).
 
-## 7. Réponse en une phrase
+## 8. Réponse en une phrase
 
 **Oui, tout est déployé et la production est saine et honnête** — l'application répond, la base est
 connectée, le commit en ligne est exactement celui du dépôt, et la vérification a même permis de

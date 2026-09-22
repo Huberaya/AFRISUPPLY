@@ -476,3 +476,10 @@ l'environnement de test (sans clé d'e-mail, la tâche quotidienne se déclare e
 titre), **pas du code** : la même vérification passe 70/70 sur base neuve et configuration standard.
 
 **Rapport complet** : `docs/VERIFICATION_VERCEL.md`.
+
+**Troisième défaut trouvé — et le plus grave** : la production **n'exécutait pas les sources**. La
+fonction Vercel est un **bundle précompilé committé** (`api/index.js`), que la chaîne de déploiement ne
+régénérait pas : mes deux correctifs étaient poussés, déployés… **et inopérants** (le seuil affiché
+restait à 3 h). Le garde-fou `check:bundle` (CI) est passé au rouge comme prévu, le bundle a été
+régénéré, et surtout **`vercel.json` régénère désormais le bundle à chaque déploiement** — la
+production ne peut plus servir un code différent des sources.
