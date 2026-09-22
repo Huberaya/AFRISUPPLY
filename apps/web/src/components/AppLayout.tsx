@@ -85,8 +85,8 @@ const MOBILE_TABS: NavItem[] = [
 
 export function Logo({ light = false, to = '/' }: { light?: boolean; to?: string }) {
   return (
-    <Link to={to} className="flex items-center gap-2">
-      <svg viewBox="0 0 64 64" className="h-8 w-8"><rect width="64" height="64" rx="14" fill="#c2410c" /><path d="M18 44 L32 16 L46 44 Z" fill="none" stroke="#fff7ed" strokeWidth="5" strokeLinejoin="round" /><circle cx="32" cy="38" r="4" fill="#facc15" /></svg>
+    <Link to={to} className="flex items-center gap-2 shrink-0">
+      <svg viewBox="0 0 64 64" className="h-8 w-8 shrink-0"><rect width="64" height="64" rx="14" fill="#c2410c" /><path d="M18 44 L32 16 L46 44 Z" fill="none" stroke="#fff7ed" strokeWidth="5" strokeLinejoin="round" /><circle cx="32" cy="38" r="4" fill="#facc15" /></svg>
       <span className={`font-extrabold tracking-tight text-lg ${light ? 'text-white' : 'text-stone-900'}`}>AFRI<span className="text-brand-600">SUPPLY</span></span>
     </Link>
   );
@@ -99,7 +99,7 @@ export function HomeButton({ light = false }: { light?: boolean }) {
     <Link
       to="/"
       aria-label="Retour à l’accueil"
-      className={`inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-semibold transition shadow-sm whitespace-nowrap ${
+      className={`inline-flex items-center gap-1.5 sm:gap-2 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold transition shadow-sm whitespace-nowrap shrink-0 ${
         light
           ? 'bg-stone-800 text-white border border-stone-700 hover:bg-stone-700 hover:border-stone-600'
           : 'bg-white text-stone-900 border-2 border-stone-300 hover:border-brand-500 hover:text-brand-700 hover:bg-stone-50'
@@ -213,18 +213,49 @@ export default function AppLayout() {
   return (
     <div className="min-h-screen bg-stone-50 lg:flex">
       <div className="hidden lg:block lg:fixed lg:inset-y-0">{Sidebar}</div>
-      {open && <div className="fixed inset-0 z-40 flex lg:hidden"><div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} /><div className="relative z-50">{Sidebar}</div></div>}
-      <div className="flex-1 lg:pl-64">
-        <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-stone-200 bg-white/90 px-4 py-3 backdrop-blur lg:px-8">
-          <div className="flex items-center gap-3">
-            <button className="rounded-lg p-1 hover:bg-stone-100 lg:hidden" onClick={() => setOpen(!open)} aria-label={open ? 'Fermer le menu' : 'Ouvrir le menu'}>{open ? <X /> : <Menu />}</button>
-            <div className="lg:hidden"><Logo /></div>
-            <HomeButton />
-            <div className="hidden xl:block text-sm text-stone-500">{new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
+      {open && (
+        <div className="fixed inset-0 z-40 flex lg:hidden">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div className="relative z-50 flex h-full w-72 max-w-[85vw] shadow-2xl">
+            {Sidebar}
           </div>
-          <div className="flex items-center gap-2">
-            <Link to="/app" className="relative rounded-xl p-2 hover:bg-stone-100" aria-label={unread > 0 ? `${unread} alerte(s) non lue(s)` : 'Alertes'}><Bell size={18} />{unread > 0 && <span className="absolute -right-0.5 -top-0.5 h-4 min-w-4 rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-4 text-white">{unread}</span>}</Link>
-            <Link to="/app/ia" className="btn-primary !py-1.5"><Sparkles size={16} /> <span className="hidden sm:inline">Demander à l’IA</span></Link>
+        </div>
+      )}
+      <div className="flex-1 lg:pl-64">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-2 sm:gap-3 border-b border-stone-200 bg-white/90 px-3 sm:px-4 py-2.5 sm:py-3 backdrop-blur lg:px-8">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button
+              className="rounded-lg p-1.5 text-stone-700 hover:bg-stone-100 lg:hidden shrink-0 touch-manipulation"
+              onClick={() => setOpen(!open)}
+              aria-label={open ? 'Fermer le menu' : 'Ouvrir le menu'}
+            >
+              {open ? <X size={20} /> : <Menu size={20} />}
+            </button>
+            <div className="lg:hidden shrink-0">
+              <Logo />
+            </div>
+            <HomeButton />
+            <div className="hidden xl:block text-sm text-stone-500 truncate">
+              {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <Link
+              to="/app"
+              className="relative rounded-xl p-2 text-stone-700 hover:bg-stone-100 touch-manipulation"
+              aria-label={unread > 0 ? `${unread} alerte(s) non lue(s)` : 'Alertes'}
+            >
+              <Bell size={18} />
+              {unread > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 h-4 min-w-4 rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-4 text-white">
+                  {unread}
+                </span>
+              )}
+            </Link>
+            <Link to="/app/ia" className="btn-primary !py-1.5 !px-2.5 sm:!px-4 shrink-0">
+              <Sparkles size={16} />
+              <span className="hidden sm:inline">Demander à l’IA</span>
+            </Link>
           </div>
         </header>
         <TrialBanner />
@@ -244,15 +275,17 @@ export default function AppLayout() {
       </div>
 
       {/* Barre mobile : les 4 gestes du quotidien, sans ouvrir le menu. */}
-      <nav aria-label="Navigation rapide" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-stone-200 bg-white/95 backdrop-blur lg:hidden">
-        {mobileTabs.map(({ to, icon: Icon, label, end }) => (
-          <NavLink key={to} to={to} end={end}
-            className={({ isActive }) => `relative flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold ${isActive ? 'text-brand-700' : 'text-stone-500'}`}>
-            <Icon size={20} />
-            {label}
-            {to === '/app' && unread > 0 && <span className="absolute right-1/4 top-1.5 h-2 w-2 rounded-full bg-red-500" />}
-          </NavLink>
-        ))}
+      <nav aria-label="Navigation rapide" className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 backdrop-blur lg:hidden">
+        <div className="mx-auto grid max-w-md grid-cols-4">
+          {mobileTabs.map(({ to, icon: Icon, label, end }) => (
+            <NavLink key={to} to={to} end={end}
+              className={({ isActive }) => `relative flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold transition touch-manipulation ${isActive ? 'text-brand-700' : 'text-stone-500 hover:text-stone-800'}`}>
+              <Icon size={20} />
+              <span>{label}</span>
+              {to === '/app' && unread > 0 && <span className="absolute right-1/4 top-1.5 h-2 w-2 rounded-full bg-red-500" />}
+            </NavLink>
+          ))}
+        </div>
       </nav>
     </div>
   );
