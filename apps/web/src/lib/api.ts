@@ -8,6 +8,9 @@ export const tokenStore = {
   authed: () => localStorage.getItem(AUTHED_KEY) === '1',
   setAuthed: () => localStorage.setItem(AUTHED_KEY, '1'),
   clear: () => { localStorage.removeItem(AUTHED_KEY); localStorage.removeItem(RESTAURANT_KEY); },
+  // Chantier 8 : l'établissement courant n'est plus accessible → on oublie l'identifiant mémorisé
+  // (l'authentification, elle, reste valide : inutile de déconnecter l'utilisateur).
+  clearRestaurant: () => localStorage.removeItem(RESTAURANT_KEY),
   restaurant: () => localStorage.getItem(RESTAURANT_KEY),
   setRestaurant: (id: string) => localStorage.setItem(RESTAURANT_KEY, id),
 };
