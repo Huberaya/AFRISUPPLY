@@ -23,6 +23,7 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   const res = await fetch(`/api${path}`, { ...init, headers, body, credentials: 'include' });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (res.status === 402 && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('afs:paywall', { detail: data?.error ?? 'Abonnement requis' }));
+  if (res.status === 402 && (data?.code === 'plan_required' || data?.code === 'member_limit') && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('afs:access-notice', { detail: data?.error ?? 'Cette fonction nécessite une autre formule' }));
   if (!res.ok) throw new ApiError(res.status, data?.error ?? `Erreur ${res.status}`, data?.details, data?.code);
   return data as T;
 }

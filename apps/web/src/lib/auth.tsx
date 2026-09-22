@@ -2,11 +2,12 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, tokenStore } from './api';
 
-export type User = { id: string; email: string; fullName: string; isAdmin?: boolean };
+export type User = { id: string; email: string; fullName: string; isAdmin?: boolean; emailVerified?: boolean; emailVerifiedAt?: string | null };
 export type Restaurant = { id: string; name: string; city: string | null; plan: string; trialEndsAt: string | null; coversPerDay: number | null; role: string };
 
 type Ctx = {
   user: User | null; restaurants: Restaurant[]; restaurant: Restaurant | null; loading: boolean;
+  accessNotice: string | null; clearAccessNotice: () => void;
   login: (email: string, password: string) => Promise<void>;
   register: (p: { email: string; password: string; fullName: string; restaurantName: string; city?: string; coversPerDay?: number; inviteCode?: string }) => Promise<void>;
   logout: () => Promise<void>; refresh: () => Promise<void>; switchRestaurant: (id: string) => void;
@@ -18,6 +19,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [restaurantId, setRestaurantId] = useState<string | null>(tokenStore.restaurant());
   const [loading, setLoading] = useState(true);
+  // « accessNotice » : message d'accès refusé (formule insuffisante, plafond d'équipe…) —
+  // émis par api.ts (402 plan_required / member_limit), affiché puis effaçable dans l'AppLayout.
+  const [accessNotice, setAccessNotice] = useState<string | null>(null);
+  useEffect(() => {
+    const h = (e: Event) => setAccessNotice((e as CustomEvent<string>).detail);
+    window.addEventListener('afs:access-notice', h);
+    return () => window.removeEventListener('afs:access-notice', h);
+  }, []);
+  const clearAccessNotice = useCallback(() => setAccessNotice(null), []);
 
   const refresh = useCallback(async () => {
     if (!tokenStore.authed()) { setUser(null); setRestaurants([]); setLoading(false); return; }
@@ -43,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const switchRestaurant = (id: string) => { tokenStore.setRestaurant(id); setRestaurantId(id); window.location.reload(); };
 
   const restaurant = restaurants.find((r) => r.id === restaurantId) ?? restaurants[0] ?? null;
-  return <AuthContext.Provider value={{ user, restaurants, restaurant, loading, login, register, logout, refresh, switchRestaurant }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, restaurants, restaurant, loading, accessNotice, clearAccessNotice, login, register, logout, refresh, switchRestaurant }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() { const c = useContext(AuthContext); if (!c) throw new Error('useAuth hors AuthProvider'); return c; }
