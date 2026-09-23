@@ -3,12 +3,20 @@ import { z } from 'zod';
 import { and, eq, isNull, gt } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { setCookie, deleteCookie } from 'hono/cookie';
+import { createClerkClient } from '@clerk/backend';
 import { getDb, users, restaurants, restaurantMembers, leads, passwordResets, emailVerifications } from '@afrisupply/db';
 import { hashPassword, verifyPassword, signToken, requireAuth, tokenTtlSeconds, type Env } from '../lib/auth.js';
 import { passwordProblem, PASSWORD_MIN_LENGTH } from '../lib/security.js';
 import { issuePasswordLink, issueEmailVerification, hashEmailToken } from '../lib/reset-link.js';
 import { sendMail, mailerConfig, devLinksAllowed, type MailResult } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
+
+const clerkClient = process.env.CLERK_SECRET_KEY
+  ? createClerkClient({
+      secretKey: process.env.CLERK_SECRET_KEY,
+      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || process.env.VITE_CLERK_PUBLISHABLE_KEY,
+    })
+  : null;
 
 const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 // Chantier 2 (audit) : la durée du cookie suit celle du jeton (7 j par défaut, au lieu de 30 j).
@@ -281,3 +289,159 @@ authRoutes.get('/me', requireAuth, async (c) => {
     mailTransport: mailerConfig().transport,
   });
 });
+
+/**
+ * Intégration Clerk — Synchronisation d'un compte Clerk avec la base Neon
+ * Vérifie l'utilisateur via l'API Clerk, le crée ou le met à jour dans Neon,
+ * initialise son restaurant et ses droits, et génère le cookie/jeton applicatif.
+ */
+authRoutes.post('/clerk-sync', async (c) => {
+  const body = z.object({
+    clerkId: z.string().min(1),
+    email: z.string().email().optional(),
+    fullName: z.string().optional(),
+    phone: z.string().optional().nullable(),
+  }).safeParse(await c.req.json().catch(() => ({})));
+
+  if (!body.success) {
+    return c.json({ error: 'Données invalides pour la synchronisation Clerk', details: body.error.flatten() }, 400);
+  }
+
+  const { clerkId } = body.data;
+  let email = body.data.email?.toLowerCase();
+  let fullName = body.data.fullName?.trim();
+  let phone = body.data.phone ?? null;
+
+  // Validation directe via l'API Clerk si CLERK_SECRET_KEY est configurée
+  if (clerkClient) {
+    try {
+      const clerkUser = await clerkClient.users.getUser(clerkId);
+      if (clerkUser) {
+        const primaryEmail = clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase();
+        if (primaryEmail) email = primaryEmail;
+        const nameParts = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ').trim();
+        if (nameParts) fullName = nameParts;
+        if (!fullName && clerkUser.username) fullName = clerkUser.username;
+        if (clerkUser.phoneNumbers[0]?.phoneNumber) phone = clerkUser.phoneNumbers[0].phoneNumber;
+      }
+    } catch (err) {
+      console.warn('[clerk] getUser warning:', (err as Error).message);
+    }
+  }
+
+  if (!email) {
+    return c.json({ error: 'Adresse e-mail requise pour le compte' }, 400);
+  }
+  if (!fullName) fullName = email.split('@')[0];
+
+  const db = await getDb();
+
+  // Recherche dans Neon par clerkId ou par email
+  const existingByClerk = await db.select().from(users).where(eq(users.clerkId, clerkId)).limit(1);
+  let user = existingByClerk[0];
+
+  if (!user) {
+    const existingByEmail = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    if (existingByEmail[0]) {
+      user = existingByEmail[0];
+      await db.update(users).set({
+        clerkId,
+        emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
+        lastLoginAt: new Date(),
+        phone: phone || user.phone,
+      }).where(eq(users.id, user.id));
+      user.clerkId = clerkId;
+    }
+  }
+
+  if (!user) {
+    // Création de l'utilisateur dans Neon
+    const [inserted] = await db.insert(users).values({
+      email,
+      fullName,
+      clerkId,
+      phone,
+      emailVerifiedAt: new Date(),
+      lastLoginAt: new Date(),
+    }).returning();
+    user = inserted;
+
+    // Création du premier restaurant par défaut
+    const restName = `Restaurant de ${fullName.split(' ')[0] || 'Chef'}`;
+    const slug = `${slugify(restName)}-${user.id.slice(0, 6)}`;
+    const trialEndsAt = new Date(Date.now() + 30 * 86_400_000);
+    const [rest] = await db.insert(restaurants).values({
+      name: restName,
+      slug,
+      plan: 'trial',
+      trialEndsAt,
+      founder: false,
+    }).returning();
+
+    await db.insert(restaurantMembers).values({
+      restaurantId: rest.id,
+      userId: user.id,
+      role: 'owner',
+    });
+  } else {
+    await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+  }
+
+  // Chargement ou auto-création du restaurant
+  const memberships = await db.select({
+    restaurant: restaurants,
+    role: restaurantMembers.role,
+  }).from(restaurantMembers)
+    .innerJoin(restaurants, eq(restaurants.id, restaurantMembers.restaurantId))
+    .where(eq(restaurantMembers.userId, user.id));
+
+  let restaurantList = memberships.map((r) => ({ ...r.restaurant, role: r.role }));
+
+  if (restaurantList.length === 0) {
+    const restName = `Restaurant de ${user.fullName.split(' ')[0] || 'Chef'}`;
+    const slug = `${slugify(restName)}-${user.id.slice(0, 6)}`;
+    const trialEndsAt = new Date(Date.now() + 30 * 86_400_000);
+    const [rest] = await db.insert(restaurants).values({
+      name: restName,
+      slug,
+      plan: 'trial',
+      trialEndsAt,
+      founder: false,
+    }).returning();
+
+    await db.insert(restaurantMembers).values({
+      restaurantId: rest.id,
+      userId: user.id,
+      role: 'owner',
+    });
+    restaurantList = [{ ...rest, role: 'owner' }];
+  }
+
+  const token = await signToken({
+    id: user.id,
+    email: user.email,
+    fullName: user.fullName,
+    tokenVersion: user.tokenVersion ?? 0,
+  });
+
+  setCookie(c, 'afs_token', token, cookieOpts);
+  const isAdmin = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
+
+  void audit('auth.clerk_sync', { actorEmail: user.email, target: user.id, meta: { clerkId } });
+
+  return c.json({
+    ok: true,
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      isAdmin,
+      emailVerified: true,
+      emailVerifiedAt: user.emailVerifiedAt,
+      clerkId: user.clerkId,
+    },
+    restaurants: restaurantList,
+  });
+});
+

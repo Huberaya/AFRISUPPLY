@@ -35,8 +35,9 @@ export const plan = pgEnum('plan', ['trial', 'starter', 'pro', 'business']);
 // -------------------------------------------------------------
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
+  clerkId: text('clerk_id').unique(),
   email: text('email').notNull().unique(),
-  passwordHash: text('password_hash').notNull(),
+  passwordHash: text('password_hash'),
   fullName: text('full_name').notNull(),
   phone: text('phone'),
   // Chantier 2 (audit) : numéro de génération de session. Incrémenté à chaque changement de mot de

@@ -1,9 +1,10 @@
-// Auth maison (remplace Supabase Auth) : mot de passe bcrypt + JWT HS256 (jose)
+// Auth maison (remplace Supabase Auth) : mot de passe bcrypt + JWT HS256 (jose) + synchronisation Clerk
 import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { eq, and } from 'drizzle-orm';
+import { createClerkClient } from '@clerk/backend';
 import { getDb, users, restaurantMembers, restaurants } from '@afrisupply/db';
 import { accessState, billingEnforced, PLAN_RANK } from './billing.js';
 import { isKnownPath, roleAtLeast } from './security.js';
@@ -11,6 +12,13 @@ import { isKnownPath, roleAtLeast } from './security.js';
 const secret = new TextEncoder().encode(process.env.JWT_SECRET ?? 'dev-secret-change-me-in-production');
 // Chantier 2 (audit) : durée de session réduite (30 j → 7 j par défaut) et révocable (voir `tokenVersion`).
 const TOKEN_TTL = process.env.AUTH_TOKEN_TTL ?? '7d';
+
+const clerkClient = process.env.CLERK_SECRET_KEY
+  ? createClerkClient({
+      secretKey: process.env.CLERK_SECRET_KEY,
+      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || process.env.VITE_CLERK_PUBLISHABLE_KEY,
+    })
+  : null;
 
 /** Durée de vie du cookie, alignée sur celle du jeton (« 7d », « 12h », « 3600 » …). */
 export function tokenTtlSeconds(ttl: string = TOKEN_TTL): number {
@@ -23,7 +31,10 @@ export function tokenTtlSeconds(ttl: string = TOKEN_TTL): number {
 export type AuthUser = { id: string; email: string; fullName: string; phone?: string | null; tokenVersion?: number };
 
 export async function hashPassword(pw: string) { return bcrypt.hash(pw, 10); }
-export async function verifyPassword(pw: string, hash: string) { return bcrypt.compare(pw, hash); }
+export async function verifyPassword(pw: string, hash: string | null | undefined) {
+  if (!hash) return false;
+  return bcrypt.compare(pw, hash);
+}
 
 export async function signToken(user: AuthUser, tokenVersion = user.tokenVersion ?? 0) {
   return new SignJWT({ email: user.email, fullName: user.fullName, tv: tokenVersion })
@@ -39,7 +50,7 @@ export async function verifyToken(token: string): Promise<AuthUser | null> {
 
 export type Env = { Variables: { user: AuthUser; restaurantId: string; plan: string; role: string } };
 
-/** Middleware : exige un JWT (header Authorization: Bearer ou cookie afs_token). */
+/** Middleware : exige un JWT (header Authorization: Bearer ou cookie afs_token) ou session Clerk. */
 export async function requireAuth(c: Context<Env>, next: Next) {
   const header = c.req.header('authorization');
   const token = header?.startsWith('Bearer ') ? header.slice(7) : getCookie(c, 'afs_token');
@@ -49,7 +60,29 @@ export async function requireAuth(c: Context<Env>, next: Next) {
     if (!isKnownPath(c.req.path)) return c.json({ error: 'Route inconnue' }, 404);
     return c.json({ error: 'Non authentifié' }, 401);
   }
-  const user = await verifyToken(token);
+  let user = await verifyToken(token);
+
+  // Fallback Clerk : si le jeton n'est pas un JWT applicatif local, on vérifie via Clerk
+  if (!user && clerkClient) {
+    try {
+      const authState = await clerkClient.authenticateRequest(c.req.raw);
+      if (authState.isSignedIn) {
+        const clerkAuth = authState.toAuth();
+        const clerkId = clerkAuth.userId;
+        if (clerkId) {
+          const db = await getDb();
+          const [row] = await db.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, tokenVersion: users.tokenVersion })
+            .from(users).where(eq(users.clerkId, clerkId)).limit(1);
+          if (row) {
+            user = { id: row.id, email: row.email, fullName: row.fullName, phone: row.phone, tokenVersion: row.tokenVersion };
+          }
+        }
+      }
+    } catch {
+      // Ignorer pour laisser le flux d'erreur normal
+    }
+  }
+
   if (!user) return c.json({ error: 'Session expirée, reconnectez-vous.', code: 'session_invalid' }, 401);
   const db = await getDb();
   const [row] = await db.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, tokenVersion: users.tokenVersion })

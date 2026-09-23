@@ -1,12 +1,19 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { ClerkProvider } from '@clerk/clerk-react';
 import { AuthProvider, useAuth } from './lib/auth';
 import AppLayout from './components/AppLayout';
 import SiteLayout from './components/site/SiteLayout';
 import { Loader } from './components/ui';
 
+const CLERK_PUBLISHABLE_KEY =
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ||
+  import.meta.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ||
+  'pk_test_Y2FyZWZ1bC1wYXJha2VldC0yNzY0LmNsZXJrLmFjY291bnRzLmRldiQ';
+
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const Profile = lazy(() => import('./pages/Profile'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Stock = lazy(() => import('./pages/Stock'));
 const Suppliers = lazy(() => import('./pages/Suppliers'));
@@ -58,7 +65,7 @@ const Terms = lazy(() => import('./pages/site/Terms'));
 const StatusPage = lazy(() => import('./pages/site/Status'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
-// Port de ethimarket/src/components/ProtectedRoute.tsx
+// Protection des routes de l'application
 function Protected() {
   const { user, loading } = useAuth();
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader /></div>;
@@ -67,73 +74,76 @@ function Protected() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader /></div>}>
-          <Routes>
-            <Route element={<SiteLayout />}>
-              <Route path="/" element={<StoreHome />} />
-              <Route path="/catalogue" element={<Catalogue />} />
-              <Route path="/produit/:id" element={<ProductDetail />} />
-              <Route path="/panier" element={<Cart />} />
-              <Route path="/pour-les-restaurants" element={<ForRestaurants />} />
-              <Route path="/tarifs" element={<Pricing />} />
-              <Route path="/fonctionnalites" element={<Features />} />
-              <Route path="/faq" element={<Faq />} />
-              <Route path="/demander-un-acces" element={<RequestAccess />} />
-              <Route path="/mentions-legales" element={<Legal />} />
-              <Route path="/cgv" element={<Terms />} />
-              <Route path="/cgv-fournisseur" element={<VendorTerms />} />
-              <Route path="/statut" element={<StatusPage />} />
-            </Route>
-            <Route path="/connexion" element={<Login />} />
-            <Route path="/mot-de-passe-oublie" element={<Forgot />} />
-            <Route path="/reinitialiser" element={<Reset />} />
-            <Route path="/bienvenue" element={<Reset />} />
-            <Route path="/verifier-email" element={<VerifyEmail />} />
-            <Route path="/fournisseur" element={<VendorSpace />} />
-            <Route path="/inscription" element={<Register />} />
-            <Route element={<Protected />}>
-              <Route path="/app" element={<AppLayout />}>
-                <Route index element={<Dashboard />} />
-                <Route path="achats" element={<Orders />} />
-                <Route path="achats/comparer/:productId" element={<Compare />} />
-                <Route path="stock" element={<Stock />} />
-                <Route path="stock/prevision" element={<Forecast />} />
-                <Route path="achats/panier" element={<SmartCart />} />
-                <Route path="achats/ecarts" element={<Discrepancies />} />
-                <Route path="ventes" element={<Sales />} />
-                <Route path="fournisseurs" element={<Suppliers />} />
-                <Route path="marketplace" element={<Marketplace />} />
-                <Route path="courses" element={<ShoppingList />} />
-                <Route path="admin/fournisseurs" element={<AdminVendors />} />
-                <Route path="admin/abonnements" element={<AdminBilling />} />
-                <Route path="admin/pilotes" element={<AdminPilots />} />
-                <Route path="admin/prospection" element={<AdminProspects />} />
-                <Route path="admin/referentiel" element={<AdminReference />} />
-                <Route path="admin" element={<AdminDashboard />} />
-                <Route path="admin/litiges" element={<AdminClaims />} />
-                <Route path="admin/exploitation" element={<AdminOps />} />
-                <Route path="mes-donnees" element={<MesDonnees />} />
-                <Route path="abonnement" element={<Billing />} />
-                <Route path="etablissements" element={<Establishments />} />
-                <Route path="fournisseurs/:id" element={<SupplierDetail />} />
-                <Route path="recettes" element={<Recipes />} />
-                <Route path="analyse" element={<Analysis />} />
-                <Route path="ia" element={<Assistant />} />
-                <Route path="catalogue" element={<Catalog />} />
-                <Route path="demarrer" element={<Onboarding />} />
-                <Route path="import" element={<Import />} />
-                <Route path="parametres" element={<Settings />} />
-                <Route path="equipe" element={<Team />} />
-                <Route path="express" element={<Express />} />
-                <Route path="*" element={<NotFound />} />
+    <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
+      <AuthProvider>
+        <BrowserRouter>
+          <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader /></div>}>
+            <Routes>
+              <Route element={<SiteLayout />}>
+                <Route path="/" element={<StoreHome />} />
+                <Route path="/catalogue" element={<Catalogue />} />
+                <Route path="/produit/:id" element={<ProductDetail />} />
+                <Route path="/panier" element={<Cart />} />
+                <Route path="/pour-les-restaurants" element={<ForRestaurants />} />
+                <Route path="/tarifs" element={<Pricing />} />
+                <Route path="/fonctionnalites" element={<Features />} />
+                <Route path="/faq" element={<Faq />} />
+                <Route path="/demander-un-acces" element={<RequestAccess />} />
+                <Route path="/mentions-legales" element={<Legal />} />
+                <Route path="/cgv" element={<Terms />} />
+                <Route path="/cgv-fournisseur" element={<VendorTerms />} />
+                <Route path="/statut" element={<StatusPage />} />
               </Route>
-            </Route>
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
-    </AuthProvider>
+              <Route path="/connexion" element={<Login />} />
+              <Route path="/mot-de-passe-oublie" element={<Forgot />} />
+              <Route path="/reinitialiser" element={<Reset />} />
+              <Route path="/bienvenue" element={<Reset />} />
+              <Route path="/verifier-email" element={<VerifyEmail />} />
+              <Route path="/fournisseur" element={<VendorSpace />} />
+              <Route path="/inscription" element={<Register />} />
+              <Route element={<Protected />}>
+                <Route path="/app" element={<AppLayout />}>
+                  <Route index element={<Dashboard />} />
+                  <Route path="profil" element={<Profile />} />
+                  <Route path="achats" element={<Orders />} />
+                  <Route path="achats/comparer/:productId" element={<Compare />} />
+                  <Route path="stock" element={<Stock />} />
+                  <Route path="stock/prevision" element={<Forecast />} />
+                  <Route path="achats/panier" element={<SmartCart />} />
+                  <Route path="achats/ecarts" element={<Discrepancies />} />
+                  <Route path="ventes" element={<Sales />} />
+                  <Route path="fournisseurs" element={<Suppliers />} />
+                  <Route path="marketplace" element={<Marketplace />} />
+                  <Route path="courses" element={<ShoppingList />} />
+                  <Route path="admin/fournisseurs" element={<AdminVendors />} />
+                  <Route path="admin/abonnements" element={<AdminBilling />} />
+                  <Route path="admin/pilotes" element={<AdminPilots />} />
+                  <Route path="admin/prospection" element={<AdminProspects />} />
+                  <Route path="admin/referentiel" element={<AdminReference />} />
+                  <Route path="admin" element={<AdminDashboard />} />
+                  <Route path="admin/litiges" element={<AdminClaims />} />
+                  <Route path="admin/exploitation" element={<AdminOps />} />
+                  <Route path="mes-donnees" element={<MesDonnees />} />
+                  <Route path="abonnement" element={<Billing />} />
+                  <Route path="etablissements" element={<Establishments />} />
+                  <Route path="fournisseurs/:id" element={<SupplierDetail />} />
+                  <Route path="recettes" element={<Recipes />} />
+                  <Route path="analyse" element={<Analysis />} />
+                  <Route path="ia" element={<Assistant />} />
+                  <Route path="catalogue" element={<Catalog />} />
+                  <Route path="demarrer" element={<Onboarding />} />
+                  <Route path="import" element={<Import />} />
+                  <Route path="parametres" element={<Settings />} />
+                  <Route path="equipe" element={<Team />} />
+                  <Route path="express" element={<Express />} />
+                  <Route path="*" element={<NotFound />} />
+                </Route>
+              </Route>
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+      </AuthProvider>
+    </ClerkProvider>
   );
 }

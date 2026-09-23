@@ -1,31 +1,75 @@
-// Port de ethimarket/src/lib/auth.tsx — sans Supabase : JWT + /api/auth/me
+// Contexte d'authentification AFRISUPPLY — Intégration Clerk & base de données Neon
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { useUser, useClerk } from '@clerk/clerk-react';
 import { api, tokenStore } from './api';
 
-export type User = { id: string; email: string; fullName: string; isAdmin?: boolean; emailVerified?: boolean; emailVerifiedAt?: string | null };
-export type Restaurant = { id: string; name: string; city: string | null; plan: string; trialEndsAt: string | null; coversPerDay: number | null; role: string };
+export type User = {
+  id: string;
+  email: string;
+  fullName: string;
+  isAdmin?: boolean;
+  emailVerified?: boolean;
+  emailVerifiedAt?: string | null;
+  clerkId?: string | null;
+};
+
+export type Restaurant = {
+  id: string;
+  name: string;
+  city: string | null;
+  plan: string;
+  trialEndsAt: string | null;
+  coversPerDay: number | null;
+  role: string;
+};
 
 type Ctx = {
-  user: User | null; restaurants: Restaurant[]; restaurant: Restaurant | null; loading: boolean;
+  user: User | null;
+  restaurants: Restaurant[];
+  restaurant: Restaurant | null;
+  loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (p: { email: string; password: string; fullName: string; restaurantName: string; city?: string; coversPerDay?: number; inviteCode?: string }) => Promise<void>;
-  logout: () => Promise<void>; refresh: () => Promise<void>; switchRestaurant: (id: string) => void;
-  // Bandeau d'information quand l'accès change (voir les deux événements dans AuthProvider).
-  accessNotice: string | null; clearAccessNotice: () => void;
+  logout: () => Promise<void>;
+  refresh: () => Promise<void>;
+  switchRestaurant: (id: string) => void;
+  accessNotice: string | null;
+  clearAccessNotice: () => void;
 };
+
 const AuthContext = createContext<Ctx | undefined>(undefined);
 
+function useSafeClerk() {
+  try {
+    const userHook = useUser();
+    const clerk = useClerk();
+    return {
+      available: true,
+      isLoaded: userHook.isLoaded,
+      isSignedIn: userHook.isSignedIn ?? false,
+      clerkUser: userHook.user,
+      clerk,
+    };
+  } catch {
+    return {
+      available: false,
+      isLoaded: true,
+      isSignedIn: false,
+      clerkUser: null,
+      clerk: null,
+    };
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const { available: clerkAvailable, isLoaded: clerkLoaded, isSignedIn, clerkUser, clerk } = useSafeClerk();
+
   const [user, setUser] = useState<User | null>(null);
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [restaurantId, setRestaurantId] = useState<string | null>(tokenStore.restaurant());
   const [loading, setLoading] = useState(true);
-  // « accessNotice » : deux causes d'accès modifié, deux événements, un seul bandeau.
-  //   • 402 plan_required / member_limit (formule insuffisante, plafond d'équipe) → api.ts émet
-  //     `afs:access-notice` : on affiche, l'utilisateur peut fermer ;
-  //   • 403 restaurant_forbidden / no_restaurant (établissement retiré, rôle modifié) → api.ts émet
-  //     `afs:access` : on oublie l'établissement mémorisé et on recharge la liste, puis on affiche.
   const [accessNotice, setAccessNotice] = useState<string | null>(null);
+
   useEffect(() => {
     const h = (e: Event) => setAccessNotice((e as CustomEvent<string>).detail);
     window.addEventListener('afs:access-notice', h);
@@ -34,22 +78,95 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearAccessNotice = useCallback(() => setAccessNotice(null), []);
 
   const refresh = useCallback(async () => {
-    if (!tokenStore.authed()) { setUser(null); setRestaurants([]); setLoading(false); return; }
+    if (!tokenStore.authed()) {
+      setUser(null);
+      setRestaurants([]);
+      setLoading(false);
+      return;
+    }
     try {
       const me = await api<{ user: User; restaurants: Restaurant[] }>('/auth/me');
-      setUser(me.user); setRestaurants(me.restaurants);
+      setUser(me.user);
+      setRestaurants(me.restaurants);
       const rid = me.restaurants.some((r) => r.id === restaurantId) ? restaurantId! : me.restaurants[0]?.id;
-      if (rid) { tokenStore.setRestaurant(rid); setRestaurantId(rid); }
-    } catch { tokenStore.clear(); setUser(null); setRestaurants([]); }
-    finally { setLoading(false); }
+      if (rid) {
+        tokenStore.setRestaurant(rid);
+        setRestaurantId(rid);
+      }
+    } catch {
+      tokenStore.clear();
+      setUser(null);
+      setRestaurants([]);
+    } finally {
+      setLoading(false);
+    }
   }, [restaurantId]);
-  useEffect(() => { void refresh(); }, [refresh]);
-  // Chantier 8 : le serveur signale que l'établissement courant n'est plus accessible → on recharge
-  // les appartenances et on repart sur un établissement valide, avec un message clair.
+
+  // Synchronisation avec Clerk ou session existante
+  useEffect(() => {
+    // 1. Si Clerk est connecté avec un utilisateur : synchronisation avec Neon
+    if (clerkAvailable && isSignedIn && clerkUser) {
+      const currentClerkUser = clerkUser;
+      let active = true;
+      setLoading(true);
+
+      api<{
+        ok: boolean;
+        token: string;
+        user: User;
+        restaurants: Restaurant[];
+      }>('/auth/clerk-sync', {
+        method: 'POST',
+        json: {
+          clerkId: currentClerkUser.id,
+          email: currentClerkUser.primaryEmailAddress?.emailAddress,
+          fullName: currentClerkUser.fullName || currentClerkUser.firstName || currentClerkUser.username,
+          phone: currentClerkUser.primaryPhoneNumber?.phoneNumber,
+        },
+      }).then((res) => {
+        if (active) {
+          tokenStore.setAuthed();
+          setUser(res.user);
+          setRestaurants(res.restaurants);
+          const currentRid = tokenStore.restaurant();
+          const validRid = res.restaurants.some((r) => r.id === currentRid)
+            ? currentRid!
+            : res.restaurants[0]?.id;
+          if (validRid) {
+            tokenStore.setRestaurant(validRid);
+            setRestaurantId(validRid);
+          }
+        }
+      }).catch((err) => {
+        console.error('[auth] Sync Clerk ↔ Neon failed:', err);
+      }).finally(() => {
+        if (active) setLoading(false);
+      });
+
+      return () => {
+        active = false;
+      };
+    }
+
+    // 2. Sinon, si on est déjà authentifié par token/cookie (session locale, test, etc.)
+    if (tokenStore.authed()) {
+      void refresh();
+      return;
+    }
+
+    // 3. Si Clerk a fini de charger ou n'est pas présent, et personne n'est connecté
+    if (!clerkAvailable || clerkLoaded) {
+      setUser(null);
+      setRestaurants([]);
+      setLoading(false);
+    }
+  }, [clerkAvailable, clerkLoaded, isSignedIn, clerkUser, refresh]);
+
   useEffect(() => {
     const onAccess = (e: Event) => {
       const d = (e as CustomEvent<{ error?: string }>).detail;
-      tokenStore.clearRestaurant(); setRestaurantId(null);
+      tokenStore.clearRestaurant();
+      setRestaurantId(null);
       setAccessNotice(`${d?.error ?? 'Accès modifié'} — nous avons rechargé la liste de vos établissements.`);
       void refresh();
     };
@@ -59,17 +176,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     await api('/auth/login', { method: 'POST', json: { email, password } });
-    tokenStore.setAuthed(); setLoading(true); await refresh();
+    tokenStore.setAuthed();
+    setLoading(true);
+    await refresh();
   };
+
   const register: Ctx['register'] = async (p) => {
     await api('/auth/register', { method: 'POST', json: p });
-    tokenStore.setAuthed(); setLoading(true); await refresh();
+    tokenStore.setAuthed();
+    setLoading(true);
+    await refresh();
   };
-  const logout = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => null); tokenStore.clear(); setUser(null); setRestaurants([]); };
-  const switchRestaurant = (id: string) => { tokenStore.setRestaurant(id); setRestaurantId(id); window.location.reload(); };
+
+  const logout = async () => {
+    try {
+      await api('/auth/logout', { method: 'POST' }).catch(() => null);
+      if (clerk && clerk.signOut) {
+        await clerk.signOut();
+      }
+    } finally {
+      tokenStore.clear();
+      setUser(null);
+      setRestaurants([]);
+    }
+  };
+
+  const switchRestaurant = (id: string) => {
+    tokenStore.setRestaurant(id);
+    setRestaurantId(id);
+    window.location.reload();
+  };
 
   const restaurant = restaurants.find((r) => r.id === restaurantId) ?? restaurants[0] ?? null;
-  return <AuthContext.Provider value={{ user, restaurants, restaurant, loading, accessNotice, clearAccessNotice, login, register, logout, refresh, switchRestaurant }}>{children}</AuthContext.Provider>;
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        restaurants,
+        restaurant,
+        loading,
+        accessNotice,
+        clearAccessNotice,
+        login,
+        register,
+        logout,
+        refresh,
+        switchRestaurant,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
-export function useAuth() { const c = useContext(AuthContext); if (!c) throw new Error('useAuth hors AuthProvider'); return c; }
+export function useAuth() {
+  const c = useContext(AuthContext);
+  if (!c) throw new Error('useAuth hors AuthProvider');
+  return c;
+}
