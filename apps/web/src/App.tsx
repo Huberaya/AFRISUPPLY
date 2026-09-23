@@ -9,7 +9,7 @@ import { Loader } from './components/ui';
 const CLERK_PUBLISHABLE_KEY =
   import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ||
   import.meta.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ||
-  'pk_test_Y2FyZWZ1bC1wYXJha2VldC0yNzY0LmNsZXJrLmFjY291bnRzLmRldiQ';
+  'pk_test_cGlja2VkLXdlcmV3b2xmLTY4MDQuY2xlcmsuYWNjb3VudHMuZGV2JA';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
