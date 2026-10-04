@@ -191,6 +191,16 @@ export default function Register() {
             <button className="btn-primary w-full justify-center" disabled={busy}>
               {busy ? 'Création…' : 'Démarrer l’essai gratuit'}
             </button>
+            <p className="text-xs text-stone-500 text-center leading-normal">
+              En créant votre espace, vous acceptez nos{' '}
+              <Link to="/cgv" target="_blank" className="underline text-stone-700 hover:text-brand-700">
+                Conditions Générales (CGU/CGV)
+              </Link>{' '}
+              et notre{' '}
+              <Link to="/mentions-legales" target="_blank" className="underline text-stone-700 hover:text-brand-700">
+                Politique de confidentialité
+              </Link>.
+            </p>
             <div className="rounded-xl bg-brand-50/50 border border-brand-100 p-2.5 text-center">
               <button
                 type="button"

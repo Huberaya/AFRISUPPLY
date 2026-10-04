@@ -31,7 +31,7 @@ export default function VendorTerms() {
   return (
     <div className={cls}>
       <h1>Conditions générales fournisseur</h1>
-      <p className="text-sm text-stone-500">Version {VENDOR_CGV_VERSION} — septembre 2026. Complètent les <Link className="underline" to="/cgv">CGV/CGU</Link> et les <Link className="underline" to="/mentions-legales">mentions légales</Link>. À faire relire par un conseil avant les premières commissions.</p>
+      <p className="text-sm text-stone-500">Version {VENDOR_CGV_VERSION} — En vigueur au 1er octobre 2026. Complètent les <Link className="underline" to="/cgv">CGV/CGU</Link> et les <Link className="underline" to="/mentions-legales">mentions légales</Link>.</p>
       <VendorTermsBody />
     </div>
   );
