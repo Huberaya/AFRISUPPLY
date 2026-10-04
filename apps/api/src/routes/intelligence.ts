@@ -340,17 +340,29 @@ intelligenceRoutes.post('/assistant/ask', async (c) => {
         draft = cost.status !== 'complet'
           ? `Je ne peux pas te conseiller sur le prix du **${r.name}** pour l'instant : ${cost.unpriced.length} ingrédient${cost.unpriced.length > 1 ? 's sont' : ' est'} sans prix (${cost.unpriced.slice(0, 3).join(', ')}) et la marge reste à calculer. ${!cost.reliable ? 'Plus de 30 % du coût est inconnu. ' : ''}Complète les prix et je comparerai à ton objectif de ${target} % de marge.`
           : !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un coût matière de ${eur(cost.total)} et un objectif de ${target} % de marge, le prix conseillé serait **${eur(m.suggestedPrice!)}**.`
-          : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur(sell)} pour ${eur(cost.total)} de matières, soit ${m.marginPct} % de marge, sous ton objectif de ${target} %. **Prix conseillé : ${eur(m.suggestedPrice)}**. Alternative : réduire le poste ${top[0].productName.toLowerCase()} (${eur(top[0].cost)}).`
-          : `Pas nécessaire : à ${eur(sell)}, ton ${r.name} dégage ${m.marginPct} % de marge brute (${eur(m.grossMargin!)}), au-dessus de ton objectif. Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de coût.`;
+          : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur(sell)} pour ${eur(cost.total)} de matières, soit ${m.marginPct} % de marge, sous ton objectif de ${target} %. **Prix conseillé : ${eur(m.suggestedPrice)}**.${top[0] ? ` Alternative : réduire le poste ${top[0].productName.toLowerCase()} (${eur(top[0].cost)}).` : ''}`
+          : `Pas nécessaire : à ${eur(sell)}, ton ${r.name} dégage ${m.marginPct} % de marge brute (${eur(m.grossMargin!)}), au-dessus de ton objectif.${top[0] ? ` Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de coût.` : ''}`;
       }
       actions.push({ label: 'Voir les recettes', url: '/app/recettes' });
       break;
     }
     case 'most_reliable_supplier': {
-      const rows = supplierNames.map((name) => { const id = ctx.offers.find((o) => o.supplierName === name)!.supplierId; return { name, ...(ctx.stats.get(id) ?? { delivered: 0, late: 0, discrepancies: 0, spent: 0, reliability: 85 }) }; }).sort((a, b) => b.reliability - a.reliability || b.delivered - a.delivered);
+      const rows = supplierNames.map((name) => {
+        const supOffer = ctx.offers.find((o) => o.supplierName === name);
+        if (!supOffer) return null;
+        const id = supOffer.supplierId;
+        return { name, ...(ctx.stats.get(id) ?? { delivered: 0, late: 0, discrepancies: 0, spent: 0, reliability: 85 }) };
+      }).filter((r): r is { name: string; delivered: number; late: number; discrepancies: number; spent: number; reliability: number } => r !== null)
+        .sort((a, b) => b.reliability - a.reliability || b.delivered - a.delivered);
+
       facts.push(...rows.map((r) => `- ${r.name} : fiabilité ${r.reliability} %, ${r.delivered} livraisons, ${r.late} retards, ${r.discrepancies} écarts, ${eur(r.spent)} dépensés`));
-      const best = rows.find((r) => r.delivered > 0) ?? rows[0]; const worst = [...rows].reverse().find((r) => r.delivered > 0);
-      draft = `Ton fournisseur le plus fiable est **${best.name}** (${best.reliability} % sur ${best.delivered} livraisons, ${best.late} retard${best.late > 1 ? 's' : ''}, ${best.discrepancies} écart${best.discrepancies > 1 ? 's' : ''}).${worst && worst.name !== best.name ? ` À surveiller : ${worst.name} (${worst.reliability} %, ${worst.late} retard${worst.late > 1 ? 's' : ''} et ${worst.discrepancies} écart${worst.discrepancies > 1 ? 's' : ''} sur ${worst.delivered}).` : ''}`;
+      if (!rows.length) {
+        draft = 'Tu n\'as pas encore de fournisseur actif avec des offres enregistrées ou des livraisons. Ajoute tes premiers fournisseurs ou lie un grossiste depuis la Marketplace, et je calculerai leur taux de fiabilité au fil des réceptions.';
+      } else {
+        const best = rows.find((r) => r.delivered > 0) ?? rows[0];
+        const worst = [...rows].reverse().find((r) => r.delivered > 0);
+        draft = `Ton fournisseur le plus fiable est **${best.name}** (${best.reliability} % sur ${best.delivered} livraisons, ${best.late} retard${best.late > 1 ? 's' : ''}, ${best.discrepancies} écart${best.discrepancies > 1 ? 's' : ''}).${worst && worst.name !== best.name ? ` À surveiller : ${worst.name} (${worst.reliability} %, ${worst.late} retard${worst.late > 1 ? 's' : ''} et ${worst.discrepancies} écart${worst.discrepancies > 1 ? 's' : ''} sur ${worst.delivered}).` : ''}`;
+      }
       actions.push({ label: 'Voir les fournisseurs', url: '/app/fournisseurs' });
       break;
     }
