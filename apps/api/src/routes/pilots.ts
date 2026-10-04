@@ -109,7 +109,9 @@ pilotRoutes.get('/feedback/nps-due', async (c) => {
 
 /** Mesure d'usage minimaliste : le front envoie des lots d'événements (page vue, action). Pas de tiers, pas de cookie. */
 pilotRoutes.post('/usage', async (c) => {
-  const b = z.object({ events: z.array(z.object({ event: z.string().max(80), meta: z.record(z.unknown()).optional(), at: z.string().optional() })).max(50) }).parse(await c.req.json());
+  const parsed = z.object({ events: z.array(z.object({ event: z.string().max(80), meta: z.record(z.unknown()).optional(), at: z.string().optional() })).max(50) }).safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'Format d’événement invalide', details: parsed.error.flatten() }, 400);
+  const b = parsed.data;
   if (!b.events.length) return c.json({ ok: true });
   const db = await getDb(); const rid = c.get('restaurantId'); const uid = c.get('user').id;
   await db.insert(usageEvents).values(b.events.map((e) => ({ restaurantId: rid, userId: uid, event: e.event, meta: e.meta, at: e.at ? new Date(e.at) : new Date() })));
