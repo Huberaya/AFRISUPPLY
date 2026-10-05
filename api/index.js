@@ -133,8 +133,9 @@ var init_schema = __esm({
     plan = pgEnum("plan", ["trial", "starter", "pro", "business"]);
     users = pgTable("users", {
       id: uuid("id").primaryKey().defaultRandom(),
+      clerkId: text("clerk_id").unique(),
       email: text("email").notNull().unique(),
-      passwordHash: text("password_hash").notNull(),
+      passwordHash: text("password_hash"),
       fullName: text("full_name").notNull(),
       phone: text("phone"),
       // Chantier 2 (audit) : numéro de génération de session. Incrémenté à chaque changement de mot de
@@ -1066,24 +1067,44 @@ var init_limits = __esm({
 // packages/db/src/migrate.ts
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+function resolveMigrationsFolder() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(process.cwd(), "packages/db/drizzle"),
+    path.resolve(here, "../drizzle"),
+    path.resolve(here, "../packages/db/drizzle"),
+    path.resolve(here, "../../packages/db/drizzle"),
+    "/var/task/packages/db/drizzle"
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(path.join(c, "meta", "_journal.json"))) {
+        return c;
+      }
+    } catch {
+    }
+  }
+  return path.resolve(here, "../drizzle");
+}
 async function runMigrations(target) {
   const db = target ?? await getDb();
+  const folder = resolveMigrationsFolder();
   if (!target && isNeon()) {
     const { migrate } = await import("drizzle-orm/neon-serverless/migrator");
-    await migrate(db, { migrationsFolder });
+    await migrate(db, { migrationsFolder: folder });
   } else {
     const { migrate } = await import("drizzle-orm/pglite/migrator");
-    await migrate(db, { migrationsFolder });
+    await migrate(db, { migrationsFolder: folder });
   }
   console.log("[db] migrations appliqu\xE9es");
 }
-var here, migrationsFolder;
+var migrationsFolder;
 var init_migrate = __esm({
   "packages/db/src/migrate.ts"() {
     "use strict";
     init_client();
-    here = path.dirname(fileURLToPath(import.meta.url));
-    migrationsFolder = path.resolve(here, "../drizzle");
+    migrationsFolder = resolveMigrationsFolder();
     if (process.argv[1] && process.argv[1].endsWith("migrate.ts")) {
       runMigrations().then(() => process.exit(0)).catch((e) => {
         console.error(e);
@@ -2837,6 +2858,7 @@ import { SignJWT, jwtVerify } from "jose";
 import bcrypt2 from "bcryptjs";
 import { getCookie } from "hono/cookie";
 import { eq as eq4, and as and3 } from "drizzle-orm";
+import { createClerkClient } from "@clerk/backend";
 function tokenTtlSeconds(ttl = TOKEN_TTL) {
   const m = /^(\d+)\s*([smhd])?$/.exec(ttl.trim());
   if (!m) return 7 * 86400;
@@ -2848,6 +2870,7 @@ async function hashPassword(pw) {
   return bcrypt2.hash(pw, 10);
 }
 async function verifyPassword(pw, hash) {
+  if (!hash) return false;
   return bcrypt2.compare(pw, hash);
 }
 async function signToken(user, tokenVersion = user.tokenVersion ?? 0) {
@@ -2868,7 +2891,24 @@ async function requireAuth(c, next) {
     if (!isKnownPath(c.req.path)) return c.json({ error: "Route inconnue" }, 404);
     return c.json({ error: "Non authentifi\xE9" }, 401);
   }
-  const user = await verifyToken(token);
+  let user = await verifyToken(token);
+  if (!user && clerkClient) {
+    try {
+      const authState = await clerkClient.authenticateRequest(c.req.raw);
+      if (authState.isSignedIn) {
+        const clerkAuth = authState.toAuth();
+        const clerkId = clerkAuth.userId;
+        if (clerkId) {
+          const db2 = await getDb();
+          const [row2] = await db2.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, tokenVersion: users.tokenVersion }).from(users).where(eq4(users.clerkId, clerkId)).limit(1);
+          if (row2) {
+            user = { id: row2.id, email: row2.email, fullName: row2.fullName, phone: row2.phone, tokenVersion: row2.tokenVersion };
+          }
+        }
+      }
+    } catch {
+    }
+  }
   if (!user) return c.json({ error: "Session expir\xE9e, reconnectez-vous.", code: "session_invalid" }, 401);
   const db = await getDb();
   const [row] = await db.select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, tokenVersion: users.tokenVersion }).from(users).where(eq4(users.id, user.id)).limit(1);
@@ -2925,7 +2965,7 @@ function requireMinRole(min) {
     await next();
   };
 }
-var secret, TOKEN_TTL, PRO_PATHS, BUSINESS_PATHS;
+var secret, TOKEN_TTL, clerkClient, PRO_PATHS, BUSINESS_PATHS;
 var init_auth = __esm({
   "apps/api/src/lib/auth.ts"() {
     "use strict";
@@ -2934,6 +2974,10 @@ var init_auth = __esm({
     init_security();
     secret = new TextEncoder().encode(process.env.JWT_SECRET ?? "dev-secret-change-me-in-production");
     TOKEN_TTL = process.env.AUTH_TOKEN_TTL ?? "7d";
+    clerkClient = process.env.CLERK_SECRET_KEY ? createClerkClient({
+      secretKey: process.env.CLERK_SECRET_KEY,
+      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || process.env.VITE_CLERK_PUBLISHABLE_KEY
+    }) : null;
     PRO_PATHS = ["/api/forecast", "/api/compare", "/api/smart-cart", "/api/assistant", "/api/recipes", "/api/reorder-rules", "/api/quick/invoice"];
     BUSINESS_PATHS = ["/api/marketplace/group-buys"];
   }
@@ -3099,7 +3143,7 @@ __export(backup_exports, {
   writeBackupFile: () => writeBackupFile
 });
 import { createHash as createHash2, randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
 import path2 from "node:path";
@@ -3345,13 +3389,13 @@ async function restoreDrill(backup) {
   }
 }
 async function writeBackupFile(backup, dir = backupDir()) {
-  await fs.mkdir(dir, { recursive: true });
+  await fs2.mkdir(dir, { recursive: true });
   const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").slice(0, 15);
   const base = `afs-${String(backup.restaurant.id).slice(0, 8)}-${stamp}-${backup.mode}`;
   let name = `${base}.json.gz`;
   for (let i = 2; await exists(path2.join(dir, name)); i++) name = `${base}-${i}.json.gz`;
   const body3 = gzipSync(Buffer.from(JSON.stringify(backup)));
-  await fs.writeFile(path2.join(dir, name), body3);
+  await fs2.writeFile(path2.join(dir, name), body3);
   const meta = {
     name,
     sizeBytes: body3.length,
@@ -3364,16 +3408,16 @@ async function writeBackupFile(backup, dir = backupDir()) {
     version: backup.version,
     mode: backup.mode
   };
-  await fs.writeFile(path2.join(dir, `${name}.meta.json`), JSON.stringify(meta, null, 2));
+  await fs2.writeFile(path2.join(dir, `${name}.meta.json`), JSON.stringify(meta, null, 2));
   return meta;
 }
 async function listBackups(dir = backupDir()) {
   try {
-    const files = (await fs.readdir(dir)).filter((f) => f.endsWith(".json.gz.meta.json"));
+    const files = (await fs2.readdir(dir)).filter((f) => f.endsWith(".json.gz.meta.json"));
     const out = [];
     for (const f of files) {
       try {
-        out.push(JSON.parse(await fs.readFile(path2.join(dir, f), "utf8")));
+        out.push(JSON.parse(await fs2.readFile(path2.join(dir, f), "utf8")));
       } catch {
       }
     }
@@ -3384,7 +3428,7 @@ async function listBackups(dir = backupDir()) {
 }
 async function readBackupFile(name, dir = backupDir()) {
   if (!/^[A-Za-z0-9._-]+\.json\.gz$/.test(name)) throw new Error("Nom de sauvegarde invalide");
-  const raw = await fs.readFile(path2.join(dir, name));
+  const raw = await fs2.readFile(path2.join(dir, name));
   return JSON.parse(gunzipSync(raw).toString("utf8"));
 }
 async function pruneBackups(keep = retentionDays(), dir = backupDir()) {
@@ -3398,8 +3442,8 @@ async function pruneBackups(keep = retentionDays(), dir = backupDir()) {
   }
   for (const [, list] of byRestaurant) {
     for (const b of list.slice(keep)) {
-      await fs.rm(path2.join(dir, b.name), { force: true });
-      await fs.rm(path2.join(dir, `${b.name}.meta.json`), { force: true });
+      await fs2.rm(path2.join(dir, b.name), { force: true });
+      await fs2.rm(path2.join(dir, `${b.name}.meta.json`), { force: true });
       removed.push(b.name);
     }
     kept.push(...list.slice(0, keep).map((b) => b.name));
@@ -3489,7 +3533,7 @@ var init_backup = __esm({
     CHUNK = 200;
     exists = async (p) => {
       try {
-        await fs.access(p);
+        await fs2.access(p);
         return true;
       } catch {
         return false;
@@ -3503,7 +3547,7 @@ var init_backup = __esm({
 
 // apps/api/src/lib/offsite.ts
 import { createHash as createHash3, createHmac as createHmac2 } from "node:crypto";
-import { promises as fs2 } from "node:fs";
+import { promises as fs3 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import path3 from "node:path";
 function offsiteConfig() {
@@ -3648,7 +3692,7 @@ async function uploadFile(fileName, dir = backupDir(), cfg = offsiteConfig()) {
   if (!cfg.configured) return vide(cfg.why);
   let body3;
   try {
-    body3 = await fs2.readFile(path3.join(dir, fileName));
+    body3 = await fs3.readFile(path3.join(dir, fileName));
   } catch (e) {
     return vide(`fichier local illisible \xAB ${fileName} \xBB : ${e.message}`);
   }
@@ -3719,7 +3763,7 @@ async function offsiteSweep(opts = {}) {
     let trouve = false;
     for (const fichier of [`${name}`, `${name}.meta.json`]) {
       try {
-        await fs2.access(path3.join(dir, fichier));
+        await fs3.access(path3.join(dir, fichier));
       } catch {
         continue;
       }
@@ -3760,9 +3804,9 @@ async function downloadBackup(name, dir = backupDir(), cfg = offsiteConfig()) {
   if (!distant.ok) return { ok: false, configured: true, name, key: distant.key, tookMs: Date.now() - debut, error: distant.error };
   const liste = await listObjects(cfg);
   const meta = liste.objects.find((o) => o.name === name);
-  await fs2.mkdir(dir, { recursive: true });
+  await fs3.mkdir(dir, { recursive: true });
   const chemin = path3.join(dir, name);
-  await fs2.writeFile(chemin, distant.body);
+  await fs3.writeFile(chemin, distant.body);
   let backup;
   try {
     const { gunzipSync: gunzipSync2 } = await import("node:zlib");
@@ -3789,7 +3833,7 @@ async function offsiteDrill(name, opts = {}) {
   const debut = Date.now();
   const cfg = offsiteConfig();
   if (!cfg.configured) return { ok: false, configured: false, source: "hors site", name, downloadMs: 0, error: cfg.why };
-  const dossier = opts.dir ?? await fs2.mkdtemp(path3.join(tmpdir2(), "afs-hors-site-"));
+  const dossier = opts.dir ?? await fs3.mkdtemp(path3.join(tmpdir2(), "afs-hors-site-"));
   const copie = await downloadBackup(name, dossier, cfg);
   const downloadMs = Date.now() - debut;
   if (!copie.ok) return { ok: false, configured: true, source: "hors site", name, key: copie.key, bytes: copie.bytes, sha256: copie.sha256, downloadMs, error: copie.error };
@@ -6076,20 +6120,26 @@ var init_intelligence = __esm({
           if (cls.intent === "dish_cost") {
             draft = !cost.reliable ? `Je ne peux pas chiffrer ton **${r.name}** de fa\xE7on fiable : ${cost.unpriced.length} des ${cost.lines.length} ingr\xE9dients sont sans prix (${cost.unpriced.slice(0, 3).join(", ")}) \u2014 plus de 30 % du co\xFBt est inconnu. Ajoute leurs prix (import fournisseurs ou fiche offre) et je te donne le co\xFBt mati\xE8re et la marge.` : cost.status === "incomplet" ? `Ton **${r.name}** co\xFBte **au moins ${eur2(cost.total)}** de mati\xE8res par portion${sell ? `, pour un prix de vente de ${eur2(sell)}` : ""}. ${cost.unpriced.length} ingr\xE9dient${cost.unpriced.length > 1 ? "s" : ""} sans prix (${cost.unpriced.slice(0, 3).join(", ")}) : le co\xFBt r\xE9el est un peu plus \xE9lev\xE9, et la marge reste \xE0 calculer. Les postes d\xE9j\xE0 chiffr\xE9s : ${top.map((l) => `${l.productName.toLowerCase()} (${eur2(l.cost)})`).join(", ")}.` : `Ton **${r.name}** te co\xFBte **${eur2(cost.total)}** de mati\xE8res par portion${sell ? `, pour un prix de vente de ${eur2(sell)} : marge brute **${eur2(m.grossMargin)}** (${m.marginPct} %)` : ""}. Les postes principaux : ${top.map((l) => `${l.productName.toLowerCase()} (${eur2(l.cost)})`).join(", ")}.`;
           } else {
-            draft = cost.status !== "complet" ? `Je ne peux pas te conseiller sur le prix du **${r.name}** pour l'instant : ${cost.unpriced.length} ingr\xE9dient${cost.unpriced.length > 1 ? "s sont" : " est"} sans prix (${cost.unpriced.slice(0, 3).join(", ")}) et la marge reste \xE0 calculer. ${!cost.reliable ? "Plus de 30 % du co\xFBt est inconnu. " : ""}Compl\xE8te les prix et je comparerai \xE0 ton objectif de ${target} % de marge.` : !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un co\xFBt mati\xE8re de ${eur2(cost.total)} et un objectif de ${target} % de marge, le prix conseill\xE9 serait **${eur2(m.suggestedPrice)}**.` : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur2(sell)} pour ${eur2(cost.total)} de mati\xE8res, soit ${m.marginPct} % de marge, sous ton objectif de ${target} %. **Prix conseill\xE9 : ${eur2(m.suggestedPrice)}**. Alternative : r\xE9duire le poste ${top[0].productName.toLowerCase()} (${eur2(top[0].cost)}).` : `Pas n\xE9cessaire : \xE0 ${eur2(sell)}, ton ${r.name} d\xE9gage ${m.marginPct} % de marge brute (${eur2(m.grossMargin)}), au-dessus de ton objectif. Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de co\xFBt.`;
+            draft = cost.status !== "complet" ? `Je ne peux pas te conseiller sur le prix du **${r.name}** pour l'instant : ${cost.unpriced.length} ingr\xE9dient${cost.unpriced.length > 1 ? "s sont" : " est"} sans prix (${cost.unpriced.slice(0, 3).join(", ")}) et la marge reste \xE0 calculer. ${!cost.reliable ? "Plus de 30 % du co\xFBt est inconnu. " : ""}Compl\xE8te les prix et je comparerai \xE0 ton objectif de ${target} % de marge.` : !sell ? `Renseigne d'abord le prix de vente du ${r.name}. Avec un co\xFBt mati\xE8re de ${eur2(cost.total)} et un objectif de ${target} % de marge, le prix conseill\xE9 serait **${eur2(m.suggestedPrice)}**.` : m.suggestedPrice ? `Oui, je te le conseille : le ${r.name} est vendu ${eur2(sell)} pour ${eur2(cost.total)} de mati\xE8res, soit ${m.marginPct} % de marge, sous ton objectif de ${target} %. **Prix conseill\xE9 : ${eur2(m.suggestedPrice)}**.${top[0] ? ` Alternative : r\xE9duire le poste ${top[0].productName.toLowerCase()} (${eur2(top[0].cost)}).` : ""}` : `Pas n\xE9cessaire : \xE0 ${eur2(sell)}, ton ${r.name} d\xE9gage ${m.marginPct} % de marge brute (${eur2(m.grossMargin)}), au-dessus de ton objectif.${top[0] ? ` Surveille surtout ${top[0].productName.toLowerCase()}, premier poste de co\xFBt.` : ""}`;
           }
           actions.push({ label: "Voir les recettes", url: "/app/recettes" });
           break;
         }
         case "most_reliable_supplier": {
           const rows = supplierNames.map((name) => {
-            const id = ctx.offers.find((o) => o.supplierName === name).supplierId;
+            const supOffer = ctx.offers.find((o) => o.supplierName === name);
+            if (!supOffer) return null;
+            const id = supOffer.supplierId;
             return { name, ...ctx.stats.get(id) ?? { delivered: 0, late: 0, discrepancies: 0, spent: 0, reliability: 85 } };
-          }).sort((a, b) => b.reliability - a.reliability || b.delivered - a.delivered);
+          }).filter((r) => r !== null).sort((a, b) => b.reliability - a.reliability || b.delivered - a.delivered);
           facts.push(...rows.map((r) => `- ${r.name} : fiabilit\xE9 ${r.reliability} %, ${r.delivered} livraisons, ${r.late} retards, ${r.discrepancies} \xE9carts, ${eur2(r.spent)} d\xE9pens\xE9s`));
-          const best = rows.find((r) => r.delivered > 0) ?? rows[0];
-          const worst = [...rows].reverse().find((r) => r.delivered > 0);
-          draft = `Ton fournisseur le plus fiable est **${best.name}** (${best.reliability} % sur ${best.delivered} livraisons, ${best.late} retard${best.late > 1 ? "s" : ""}, ${best.discrepancies} \xE9cart${best.discrepancies > 1 ? "s" : ""}).${worst && worst.name !== best.name ? ` \xC0 surveiller : ${worst.name} (${worst.reliability} %, ${worst.late} retard${worst.late > 1 ? "s" : ""} et ${worst.discrepancies} \xE9cart${worst.discrepancies > 1 ? "s" : ""} sur ${worst.delivered}).` : ""}`;
+          if (!rows.length) {
+            draft = "Tu n'as pas encore de fournisseur actif avec des offres enregistr\xE9es ou des livraisons. Ajoute tes premiers fournisseurs ou lie un grossiste depuis la Marketplace, et je calculerai leur taux de fiabilit\xE9 au fil des r\xE9ceptions.";
+          } else {
+            const best = rows.find((r) => r.delivered > 0) ?? rows[0];
+            const worst = [...rows].reverse().find((r) => r.delivered > 0);
+            draft = `Ton fournisseur le plus fiable est **${best.name}** (${best.reliability} % sur ${best.delivered} livraisons, ${best.late} retard${best.late > 1 ? "s" : ""}, ${best.discrepancies} \xE9cart${best.discrepancies > 1 ? "s" : ""}).${worst && worst.name !== best.name ? ` \xC0 surveiller : ${worst.name} (${worst.reliability} %, ${worst.late} retard${worst.late > 1 ? "s" : ""} et ${worst.discrepancies} \xE9cart${worst.discrepancies > 1 ? "s" : ""} sur ${worst.delivered}).` : ""}`;
+          }
           actions.push({ label: "Voir les fournisseurs", url: "/app/fournisseurs" });
           break;
         }
@@ -7630,7 +7680,9 @@ ${APP3()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) \u2014 pag
       return c.json({ due: !last, window });
     });
     pilotRoutes.post("/usage", async (c) => {
-      const b = z7.object({ events: z7.array(z7.object({ event: z7.string().max(80), meta: z7.record(z7.unknown()).optional(), at: z7.string().optional() })).max(50) }).parse(await c.req.json());
+      const parsed = z7.object({ events: z7.array(z7.object({ event: z7.string().max(80), meta: z7.record(z7.unknown()).optional(), at: z7.string().optional() })).max(50) }).safeParse(await c.req.json().catch(() => null));
+      if (!parsed.success) return c.json({ error: "Format d\u2019\xE9v\xE9nement invalide", details: parsed.error.flatten() }, 400);
+      const b = parsed.data;
       if (!b.events.length) return c.json({ ok: true });
       const db = await getDb();
       const rid2 = c.get("restaurantId");
@@ -8612,6 +8664,7 @@ import { z } from "zod";
 import { and as and6, eq as eq7, isNull as isNull4, gt } from "drizzle-orm";
 import { createHash as createHash4 } from "node:crypto";
 import { setCookie, deleteCookie } from "hono/cookie";
+import { createClerkClient as createClerkClient2 } from "@clerk/backend";
 
 // apps/api/src/lib/reset-link.ts
 init_src();
@@ -8652,6 +8705,10 @@ async function issueEmailVerification(userId, email, opts = {}) {
 // apps/api/src/routes/auth.ts
 init_mailer();
 init_ops();
+var clerkClient2 = process.env.CLERK_SECRET_KEY ? createClerkClient2({
+  secretKey: process.env.CLERK_SECRET_KEY,
+  publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || process.env.VITE_CLERK_PUBLISHABLE_KEY
+}) : null;
 var slugify = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 var cookieOpts = { httpOnly: true, sameSite: "Lax", path: "/", maxAge: tokenTtlSeconds(), secure: process.env.NODE_ENV === "production" };
 var hashResetToken2 = (t) => createHash4("sha256").update(t).digest("hex");
@@ -8913,6 +8970,130 @@ authRoutes.get("/me", requireAuth, async (c) => {
     user: { ...user, isAdmin: isAdmin9, emailVerified: emailVerifiedAt !== null, emailVerifiedAt },
     restaurants: rows.map((r) => ({ ...r.restaurant, role: r.role })),
     mailTransport: mailerConfig().transport
+  });
+});
+authRoutes.post("/clerk-sync", async (c) => {
+  const body3 = z.object({
+    clerkId: z.string().min(1),
+    email: z.string().email().optional(),
+    fullName: z.string().optional(),
+    phone: z.string().optional().nullable()
+  }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body3.success) {
+    return c.json({ error: "Donn\xE9es invalides pour la synchronisation Clerk", details: body3.error.flatten() }, 400);
+  }
+  const { clerkId } = body3.data;
+  let email = body3.data.email?.toLowerCase();
+  let fullName = body3.data.fullName?.trim();
+  let phone = body3.data.phone ?? null;
+  if (clerkClient2) {
+    try {
+      const clerkUser = await clerkClient2.users.getUser(clerkId);
+      if (clerkUser) {
+        const primaryEmail = clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase();
+        if (primaryEmail) email = primaryEmail;
+        const nameParts = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ").trim();
+        if (nameParts) fullName = nameParts;
+        if (!fullName && clerkUser.username) fullName = clerkUser.username;
+        if (clerkUser.phoneNumbers[0]?.phoneNumber) phone = clerkUser.phoneNumbers[0].phoneNumber;
+      }
+    } catch (err) {
+      console.warn("[clerk] getUser warning:", err.message);
+    }
+  }
+  if (!email) {
+    return c.json({ error: "Adresse e-mail requise pour le compte" }, 400);
+  }
+  if (!fullName) fullName = email.split("@")[0];
+  const db = await getDb();
+  const existingByClerk = await db.select().from(users).where(eq7(users.clerkId, clerkId)).limit(1);
+  let user = existingByClerk[0];
+  if (!user) {
+    const existingByEmail = await db.select().from(users).where(eq7(users.email, email)).limit(1);
+    if (existingByEmail[0]) {
+      user = existingByEmail[0];
+      await db.update(users).set({
+        clerkId,
+        emailVerifiedAt: user.emailVerifiedAt ?? /* @__PURE__ */ new Date(),
+        lastLoginAt: /* @__PURE__ */ new Date(),
+        phone: phone || user.phone
+      }).where(eq7(users.id, user.id));
+      user.clerkId = clerkId;
+    }
+  }
+  if (!user) {
+    const [inserted] = await db.insert(users).values({
+      email,
+      fullName,
+      clerkId,
+      phone,
+      emailVerifiedAt: /* @__PURE__ */ new Date(),
+      lastLoginAt: /* @__PURE__ */ new Date()
+    }).returning();
+    user = inserted;
+    const restName = `Restaurant de ${fullName.split(" ")[0] || "Chef"}`;
+    const slug = `${slugify(restName)}-${user.id.slice(0, 6)}`;
+    const trialEndsAt = new Date(Date.now() + 30 * 864e5);
+    const [rest] = await db.insert(restaurants).values({
+      name: restName,
+      slug,
+      plan: "trial",
+      trialEndsAt,
+      founder: false
+    }).returning();
+    await db.insert(restaurantMembers).values({
+      restaurantId: rest.id,
+      userId: user.id,
+      role: "owner"
+    });
+  } else {
+    await db.update(users).set({ lastLoginAt: /* @__PURE__ */ new Date() }).where(eq7(users.id, user.id));
+  }
+  const memberships = await db.select({
+    restaurant: restaurants,
+    role: restaurantMembers.role
+  }).from(restaurantMembers).innerJoin(restaurants, eq7(restaurants.id, restaurantMembers.restaurantId)).where(eq7(restaurantMembers.userId, user.id));
+  let restaurantList = memberships.map((r) => ({ ...r.restaurant, role: r.role }));
+  if (restaurantList.length === 0) {
+    const restName = `Restaurant de ${user.fullName.split(" ")[0] || "Chef"}`;
+    const slug = `${slugify(restName)}-${user.id.slice(0, 6)}`;
+    const trialEndsAt = new Date(Date.now() + 30 * 864e5);
+    const [rest] = await db.insert(restaurants).values({
+      name: restName,
+      slug,
+      plan: "trial",
+      trialEndsAt,
+      founder: false
+    }).returning();
+    await db.insert(restaurantMembers).values({
+      restaurantId: rest.id,
+      userId: user.id,
+      role: "owner"
+    });
+    restaurantList = [{ ...rest, role: "owner" }];
+  }
+  const token = await signToken({
+    id: user.id,
+    email: user.email,
+    fullName: user.fullName,
+    tokenVersion: user.tokenVersion ?? 0
+  });
+  setCookie(c, "afs_token", token, cookieOpts);
+  const isAdmin9 = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
+  void audit("auth.clerk_sync", { actorEmail: user.email, target: user.id, meta: { clerkId } });
+  return c.json({
+    ok: true,
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      isAdmin: isAdmin9,
+      emailVerified: true,
+      emailVerifiedAt: user.emailVerifiedAt,
+      clerkId: user.clerkId
+    },
+    restaurants: restaurantList
   });
 });
 
@@ -12689,9 +12870,9 @@ adminOpsRoutes.get("/admin/backups/:name", requireAuth, adminOnly, async (c) => 
   const name = c.req.param("name");
   if (!/^[A-Za-z0-9._-]+\.json\.gz$/.test(name)) return c.json({ error: "Nom invalide" }, 400);
   const { backupDir: backupDir2 } = await Promise.resolve().then(() => (init_backup(), backup_exports));
-  const fs3 = await import("node:fs/promises");
+  const fs4 = await import("node:fs/promises");
   try {
-    const buf = await fs3.readFile(`${backupDir2()}/${name}`);
+    const buf = await fs4.readFile(`${backupDir2()}/${name}`);
     c.header("Content-Type", "application/gzip");
     c.header("Content-Disposition", `attachment; filename="${name}"`);
     return c.body(buf);
