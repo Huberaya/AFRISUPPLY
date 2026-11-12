@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { getDb, prospects } from '@afrisupply/db';
-import { requireAuth, type Env } from '../lib/auth.js';
+import { requireAuth, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { audit } from '../lib/ops.js';
 import { SignJWT, jwtVerify } from 'jose';
 import { sendMail } from '../lib/mailer.js';
@@ -21,7 +21,6 @@ prospectPublicRoutes.get('/public/vendor-invite/:token', async (c) => {
   return c.json({ invite: { ...inv, converted: p?.status === 'converti' } });
 });
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 export const PROSPECT_STATUS = ['a_contacter', 'contacte', 'rdv', 'interesse', 'converti', 'perdu'] as const;
 const body = z.object({
   kind: z.enum(['restaurant', 'fournisseur']), name: z.string().min(2).max(120), address: z.string().max(200).nullable().optional(), city: z.string().max(80).nullable().optional(),
@@ -31,8 +30,8 @@ const body = z.object({
 
 export const prospectRoutes = new Hono<Env>();
 prospectRoutes.use('/admin/prospects', requireAuth); prospectRoutes.use('/admin/prospects/*', requireAuth);
-prospectRoutes.use('/admin/prospects', async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
-prospectRoutes.use('/admin/prospects/*', async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+prospectRoutes.use('/admin/prospects', async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+prospectRoutes.use('/admin/prospects/*', async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
 
 prospectRoutes.get('/admin/prospects', async (c) => {
   const db = await getDb(); const kind = c.req.query('kind'); const q = c.req.query('q')?.trim(); const status = c.req.query('status');
@@ -51,7 +50,7 @@ prospectRoutes.post('/admin/prospects', async (c) => {
 
 /** Import en masse : lignes { kind, name, address, city, phone, email, contactName } (collées depuis un tableur). */
 prospectRoutes.post('/admin/prospects/import', async (c) => {
-  const { rows } = z.object({ rows: z.array(z.record(z.unknown())).max(500) }).parse(await c.req.json());
+  const { rows } = z.object({ rows: z.array(z.record(z.string(), z.unknown())).max(500) }).parse(await c.req.json());
   const kindDefault = (c.req.query('kind') as 'restaurant' | 'fournisseur' | undefined) ?? 'restaurant'; const db = await getDb();
   const rowSchema = body.partial({ kind: true });
   const valid = rows.map((r) => rowSchema.safeParse({ ...r, email: (r.email as string) || undefined })).filter((p) => p.success).map((p) => ({ ...p.data, kind: p.data.kind ?? kindDefault, email: p.data.email || null }));
@@ -68,7 +67,8 @@ prospectRoutes.put('/admin/prospects/:id', async (c) => {
 });
 
 prospectRoutes.delete('/admin/prospects/:id', async (c) => {
-  const db = await getDb(); await db.delete(prospects).where(eq(prospects.id, c.req.param('id')));
+  const db = await getDb(); const del = await db.delete(prospects).where(eq(prospects.id, c.req.param('id'))).returning({ id: prospects.id });
+  if (!del.length) return c.json({ error: 'Introuvable' }, 404);
   return c.json({ ok: true });
 });
 

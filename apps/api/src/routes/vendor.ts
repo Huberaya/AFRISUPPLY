@@ -6,7 +6,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb, vendorCreditTerms, vendorRoutes as vendorRoutesTable, vendors, vendorMembers, vendorOffers, products, orders, orderLines, restaurants, restaurantMembers, users, groupBuys, groupBuyParticipations, commissions, commissionInvoices, suppliers, supplierOffers, priceHistory } from '@afrisupply/db';
 import { similarity } from '../lib/quick.js';
 import { insertWithFreshReference } from '../lib/reference.js';
-import { requireAuth, type Env } from '../lib/auth.js';
+import { requireAuth, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { SUPPORT } from '../lib/ops-health.js';
 import { sendMail } from '../lib/mailer.js';
 import { sendMessage, waLink } from '../lib/sms.js';
@@ -30,8 +30,21 @@ type VEnv = { Variables: Env['Variables'] & { vendorId: string } };
 export const vendorRoutes = new Hono<VEnv>();
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
+
+/**
+ * Ce restaurant est-il client de ce fournisseur ? (il lui a déjà commandé, ou l'a ajouté à ses fournisseurs)
+ * Chantier P0.2 — c'est la seule relation qui autorise un fournisseur à enregistrer quoi que ce soit
+ * au sujet d'un restaurant (prix négocié, conditions de paiement) ou à en lire le nom.
+ */
+async function isCustomerOf(vendorId: string, restaurantId: string): Promise<boolean> {
+  const db = await getDb();
+  const [known] = await db.select({ id: orders.id }).from(orders).where(and(eq(orders.vendorId, vendorId), eq(orders.restaurantId, restaurantId))).limit(1);
+  if (known) return true;
+  const [linked] = await db.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.vendorId, vendorId), eq(suppliers.restaurantId, restaurantId))).limit(1);
+  return !!linked;
+}
 
 /** Résout le vendor courant (header X-Vendor-Id ou 1er du membre). */
 async function requireVendor(c: Context<VEnv>, next: Next) {
@@ -66,7 +79,7 @@ vendorRoutes.post('/vendor/register', requireAuth, async (c) => {
 vendorRoutes.get('/vendor/me', requireAuth, async (c) => {
   const db = await getDb(); const user = c.get('user');
   const rows = await db.select({ vendor: vendors, role: vendorMembers.role }).from(vendorMembers).innerJoin(vendors, eq(vendors.id, vendorMembers.vendorId)).where(eq(vendorMembers.userId, user.id));
-  return c.json({ vendors: rows.map((r) => ({ ...r.vendor, role: r.role, cgvUpToDate: r.vendor.cgvVersion === VENDOR_CGV_VERSION })), isAdmin: isAdmin(user.email), cgvVersion: VENDOR_CGV_VERSION });
+  return c.json({ vendors: rows.map((r) => ({ ...r.vendor, role: r.role, cgvUpToDate: r.vendor.cgvVersion === VENDOR_CGV_VERSION })), isAdmin: isPlatformAdmin(user), cgvVersion: VENDOR_CGV_VERSION });
 });
 
 /** Chantier 22 : (ré)acceptation des CGV fournisseur (nouvelle version). */
@@ -148,7 +161,11 @@ vendorRoutes.post('/vendor/offers/import', async (c) => {
 });
 
 vendorRoutes.delete('/vendor/offers/:id', async (c) => {
-  const db = await getDb(); await db.delete(vendorOffers).where(and(eq(vendorOffers.id, c.req.param('id')), eq(vendorOffers.vendorId, c.get('vendorId')))); return c.json({ ok: true });
+  const db = await getDb();
+  // Chantier P0.3 : « ok » n'est répondu que si une offre de CE fournisseur a réellement été supprimée
+  // (avant : 200 même pour une offre inconnue ou appartenant à un autre fournisseur).
+  const del = await db.delete(vendorOffers).where(and(eq(vendorOffers.id, c.req.param('id')), eq(vendorOffers.vendorId, c.get('vendorId')))).returning({ id: vendorOffers.id });
+  return del.length ? c.json({ ok: true }) : c.json({ error: 'Offre introuvable' }, 404);
 });
 
 // ---- commandes reçues ----
@@ -311,9 +328,7 @@ vendorRoutes.post('/vendor/customer-prices', async (c) => {
   if (!d.packPriceEur && !d.discountPct) return c.json({ error: 'Indiquez un prix ferme ou une remise %' }, 400);
   if (!d.vendorOfferId && d.packPriceEur) return c.json({ error: 'Un prix ferme s’applique à une offre précise ; pour tout le catalogue, utilisez une remise %' }, 400);
   if (d.vendorOfferId) { const [o] = await db.select().from(vendorOffers).where(and(eq(vendorOffers.id, d.vendorOfferId), eq(vendorOffers.vendorId, vid))); if (!o) return c.json({ error: 'Offre introuvable' }, 404); if (d.packPriceEur && d.packPriceEur >= n(o.packPriceEur)) return c.json({ error: `Le prix négocié doit être inférieur au catalogue (${eur(n(o.packPriceEur))})` }, 400); }
-  const [known] = await db.select({ id: orders.id }).from(orders).where(and(eq(orders.vendorId, vid), eq(orders.restaurantId, d.restaurantId))).limit(1);
-  const [linked] = await db.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.vendorId, vid), eq(suppliers.restaurantId, d.restaurantId))).limit(1);
-  if (!known && !linked) return c.json({ error: 'Ce restaurant n’est pas encore votre client sur AFRISUPPLY' }, 400);
+  if (!(await isCustomerOf(vid, d.restaurantId))) return c.json({ error: 'Ce restaurant n’est pas encore votre client sur AFRISUPPLY' }, 400);
   const existing = await db.select().from(vendorCustomerPrices).where(and(eq(vendorCustomerPrices.vendorId, vid), eq(vendorCustomerPrices.restaurantId, d.restaurantId), d.vendorOfferId ? eq(vendorCustomerPrices.vendorOfferId, d.vendorOfferId) : sql`${vendorCustomerPrices.vendorOfferId} is null`));
   const vals = { packPriceEur: d.packPriceEur?.toFixed(2) ?? null, discountPct: d.packPriceEur ? null : d.discountPct?.toFixed(2) ?? null, validUntil: d.validUntil ?? null, note: d.note, updatedAt: new Date() };
   const [row] = existing[0] ? await db.update(vendorCustomerPrices).set(vals).where(eq(vendorCustomerPrices.id, existing[0].id)).returning() : await db.insert(vendorCustomerPrices).values({ vendorId: vid, restaurantId: d.restaurantId, vendorOfferId: d.vendorOfferId ?? null, ...vals }).returning();
@@ -443,13 +458,13 @@ vendorRoutes.get('/vendor/commissions', async (c) => {
 export const vendorAdminRoutes = new Hono<Env>();
 vendorAdminRoutes.use('/admin/vendors/*', requireAuth); vendorAdminRoutes.use('/admin/vendors', requireAuth);
 vendorAdminRoutes.get('/admin/vendors', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const db = await getDb();
   const rows = await db.select({ v: vendors, offerCount: sql<number>`(select count(*) from vendor_offers o where o.vendor_id = ${vendors.id})`, orderCount: sql<number>`(select count(*) from orders o where o.vendor_id = ${vendors.id})` }).from(vendors).orderBy(desc(vendors.createdAt));
   return c.json({ vendors: rows.map((r) => ({ ...r.v, offerCount: Number(r.offerCount), orderCount: Number(r.orderCount) })) });
 });
 vendorAdminRoutes.put('/admin/vendors/:id', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const body = z.object({ status: z.enum(['en_attente', 'actif', 'suspendu']).optional(), commissionPct: z.number().min(0).max(20).optional() }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const db = await getDb();
   const [v] = await db.update(vendors).set({ status: body.data.status, commissionPct: body.data.commissionPct?.toFixed(2) }).where(eq(vendors.id, c.req.param('id'))).returning();
@@ -583,7 +598,11 @@ vendorRoutes.get('/vendor/orders/:id/pdf', async (c) => {
 });
 
 // ---- Chantier 19 : tournées de livraison ----
-const routeSchema = z.object({ name: z.string().min(2).max(60), weekday: z.number().int().min(0).max(6), zones: z.array(z.string().min(1).max(40)).max(50).default([]), slots: z.array(z.string().min(2).max(20)).max(8).default([]), cutoffDaysBefore: z.number().int().min(0).max(7).default(1), cutoffTime: z.string().regex(/^\d{2}:\d{2}$/).default('14:00'), capacity: z.number().int().positive().max(500).nullable().optional(), active: z.boolean().default(true) });
+const routeFields = { name: z.string().min(2).max(60), weekday: z.number().int().min(0).max(6), zones: z.array(z.string().min(1).max(40)).max(50), slots: z.array(z.string().min(2).max(20)).max(8), cutoffDaysBefore: z.number().int().min(0).max(7), cutoffTime: z.string().regex(/^\d{2}:\d{2}$/), capacity: z.number().int().positive().max(500).nullable().optional(), active: z.boolean() };
+const routeSchema = z.object({ ...routeFields, zones: routeFields.zones.default([]), slots: routeFields.slots.default([]), cutoffDaysBefore: routeFields.cutoffDaysBefore.default(1), cutoffTime: routeFields.cutoffTime.default('14:00'), active: routeFields.active.default(true) });
+// Modification : aucune valeur par défaut (un champ absent n'est pas modifié — sinon renommer une
+// tournée effacerait ses zones, ses créneaux et son heure limite).
+const routeUpdateSchema = z.object(routeFields).partial();
 vendorRoutes.get('/vendor/routes', async (c) => {
   const db = await getDb(); const vid = c.get('vendorId');
   const rows = await db.select().from(vendorRoutesTable).where(eq(vendorRoutesTable.vendorId, vid)).orderBy(vendorRoutesTable.weekday, vendorRoutesTable.name);
@@ -596,7 +615,7 @@ vendorRoutes.post('/vendor/routes', async (c) => {
   const db = await getDb(); const [r] = await db.insert(vendorRoutesTable).values({ ...body.data, capacity: body.data.capacity ?? null, vendorId: c.get('vendorId') }).returning(); return c.json({ route: r }, 201);
 });
 vendorRoutes.put('/vendor/routes/:id', async (c) => {
-  const body = routeSchema.partial().safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Tournée invalide' }, 400);
+  const body = routeUpdateSchema.safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Tournée invalide' }, 400);
   const db = await getDb(); const [r] = await db.update(vendorRoutesTable).set(body.data).where(and(eq(vendorRoutesTable.id, c.req.param('id')), eq(vendorRoutesTable.vendorId, c.get('vendorId')))).returning(); if (!r) return c.json({ error: 'Tournée introuvable' }, 404); return c.json({ route: r });
 });
 vendorRoutes.delete('/vendor/routes/:id', async (c) => {
@@ -607,11 +626,14 @@ vendorRoutes.delete('/vendor/routes/:id', async (c) => {
 vendorRoutes.get('/vendor/credit', async (c) => {
   const db = await getDb(); const vid = c.get('vendorId'); const t = new Date().toISOString().slice(0, 10);
   const clients = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city }).from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId)).where(eq(orders.vendorId, vid)).groupBy(restaurants.id, restaurants.name, restaurants.city);
-  const terms = await db.select().from(vendorCreditTerms).where(eq(vendorCreditTerms.vendorId, vid));
+  // Chantier P0.2 : seuls les restaurants réellement clients (commande passée, ou fournisseur ajouté)
+  // apparaissent ici. Des conditions enregistrées pour un autre restaurant — possible avant la
+  // correction de la route PUT ci-dessous — ne donnent plus accès à son nom ni à sa ville.
+  const linked = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city }).from(suppliers).innerJoin(restaurants, eq(restaurants.id, suppliers.restaurantId)).where(eq(suppliers.vendorId, vid));
+  const names = new Map([...linked, ...clients].map((x) => [x.id, x]));
+  const terms = (await db.select().from(vendorCreditTerms).where(eq(vendorCreditTerms.vendorId, vid))).filter((x) => names.has(x.restaurantId));
   const ids = [...new Set([...clients.map((x) => x.id), ...terms.map((x) => x.restaurantId)])];
   const exp = await exposureFor(vid, ids);
-  const names = new Map(clients.map((x) => [x.id, x]));
-  const extra = ids.filter((id) => !names.has(id)); if (extra.length) for (const r of await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city }).from(restaurants).where(inArray(restaurants.id, extra))) names.set(r.id, r);
   const rows = ids.map((id) => { const tm = terms.find((x) => x.restaurantId === id); const r = names.get(id)!; return { restaurantId: id, name: r.name, city: r.city, paymentDays: tm?.paymentDays ?? 0, creditLimitEur: tm?.creditLimitEur === null || tm?.creditLimitEur === undefined ? null : n(tm.creditLimitEur), blocked: tm?.blocked ?? false, note: tm?.note ?? null, ...exp.get(id)! }; }).sort((a, b) => b.outstandingEur - a.outstandingEur);
   const receivables = await db.select({ id: orders.id, reference: orders.reference, restaurantId: orders.restaurantId, restaurantName: restaurants.name, totalEur: orders.totalEur, feeEur: orders.deliveryFeeEur, paidAmountEur: orders.paidAmountEur, dueAt: orders.dueAt, paymentDays: orders.paymentDays, status: orders.status, deliveredAt: sql<string | null>`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})` })
     .from(orders).innerJoin(restaurants, eq(restaurants.id, orders.restaurantId)).where(and(eq(orders.vendorId, vid), sql`(${orders.status} in ('livree','livree_partiel') or ${orders.vendorDeliveredAt} is not null)`, sql`${orders.paidAt} is null`)).orderBy(orders.dueAt);
@@ -621,7 +643,11 @@ vendorRoutes.get('/vendor/credit', async (c) => {
 vendorRoutes.put('/vendor/credit/:restaurantId', async (c) => {
   const body = z.object({ paymentDays: z.number().int().min(0).max(90).optional(), creditLimitEur: z.number().min(0).max(1_000_000).nullable().optional(), blocked: z.boolean().optional(), note: z.string().max(300).nullable().optional() }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Conditions invalides (délai 0–90 jours)' }, 400);
   const db = await getDb(); const vid = c.get('vendorId'); const rid = c.req.param('restaurantId');
-  const [r] = await db.select({ id: restaurants.id }).from(restaurants).where(eq(restaurants.id, rid)); if (!r) return c.json({ error: 'Restaurant introuvable' }, 404);
+  // Chantier P0.2 — un fournisseur ne fixe des conditions que pour SES clients. Avant, l'identifiant de
+  // n'importe quel restaurant était accepté ; la liste des encours en renvoyait ensuite le nom et la ville.
+  // Un restaurant inconnu et un restaurant qui n'est pas client reçoivent la même réponse.
+  if (!UUID_RE.test(rid) || !(await isCustomerOf(vid, rid))) return c.json({ error: 'Restaurant introuvable parmi vos clients' }, 404);
+  if (!Object.values(body.data).some((v) => v !== undefined)) return c.json({ error: 'Aucune modification fournie : indiquez au moins un champ à changer.', code: 'empty_update' }, 400);
   const vals = { ...body.data, creditLimitEur: body.data.creditLimitEur === undefined ? undefined : body.data.creditLimitEur === null ? null : body.data.creditLimitEur.toFixed(2), updatedAt: new Date() };
   const [row] = await db.insert(vendorCreditTerms).values({ vendorId: vid, restaurantId: rid, ...vals }).onConflictDoUpdate({ target: [vendorCreditTerms.vendorId, vendorCreditTerms.restaurantId], set: vals }).returning();
   return c.json({ terms: row });

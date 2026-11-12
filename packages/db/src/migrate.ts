@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 
-function resolveMigrationsFolder(): string {
+export function resolveMigrationsFolder(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     path.resolve(process.cwd(), 'packages/db/drizzle'),
@@ -24,8 +24,6 @@ function resolveMigrationsFolder(): string {
   }
   return path.resolve(here, '../drizzle');
 }
-
-const migrationsFolder = resolveMigrationsFolder();
 
 /** Applique les migrations sur la base courante, ou sur une base fournie (base neuve de vérification). */
 export async function runMigrations(target?: Db) {

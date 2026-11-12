@@ -41,6 +41,7 @@ import {
   listObjects, pruneOffsite, putObject, getObject,
 } from '../lib/offsite.js';
 import { demarrerFauxS3, configurerFauxS3, journalS3, type FauxS3 } from './faux-s3.js';
+import { confirmerAdresse } from './aide-comptes.js';
 
 type Json = Record<string, unknown>;
 const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => {
@@ -318,7 +319,7 @@ describe('6. Restauration depuis la copie EXTERNE (la preuve)', () => {
 
 describe('7. L’exploitation voit l’état hors site', () => {
   it('l’API admin expose la configuration, les objets et le dernier envoi (jamais de secret)', async () => {
-    const admin = await call('POST', '/api/auth/register', { email: 'admin@afrisupply.fr', password: 'Plantain-Yassa-42', fullName: 'Admin', restaurantName: 'AFRISUPPORT', city: 'Nantes' });
+    const admin = await call('POST', '/api/auth/register', { email: 'admin@afrisupply.fr', password: 'Plantain-Yassa-42', fullName: 'Admin', restaurantName: 'AFRISUPPORT', city: 'Nantes' }); await confirmerAdresse('admin@afrisupply.fr');
     const tok = (admin.json as { token: string }).token;
     const h = { authorization: `Bearer ${tok}`, 'x-restaurant-id': (admin.json as { restaurant: { id: string } }).restaurant.id };
     const res = await call('GET', '/api/admin/ops', undefined, h);

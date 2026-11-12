@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, sql, desc } from 'drizzle-orm';
 import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors, orders, restaurantMembers, users } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { applyOrderPayment, createOrderCheckout, paymentAvailability } from '../lib/payments.js';
 import { PLANS, FOUNDER_OFFER } from './public.js';
 import { SUPPORT } from '../lib/ops-health.js';
@@ -18,7 +18,6 @@ import { recordJobRun } from '../lib/job-runs.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
 
 // ---------- Webhook Stripe (public, signé) ----------
@@ -174,6 +173,8 @@ billingRoutes.on(['POST'], '/billing/checkout', requireMinRole('owner'));
 billingRoutes.on(['POST'], '/billing/portal', requireMinRole('owner'));
 billingRoutes.on(['POST'], '/billing/sync', requireMinRole('owner'));
 billingRoutes.use('*', requireAuth, requireRestaurant);
+// Chantier P0.2 — renvoyer une facture d'abonnement par e-mail : propriétaire, comme le reste de la facturation.
+billingRoutes.on(['POST'], '/billing/invoices/:id/send', requireMinRole('owner'));
 
 // Chantier 25 : payer une commande marketplace en ligne (CB / SEPA) — responsable ou propriétaire.
 billingRoutes.on(['POST'], '/orders/:id/pay', requireMinRole('manager'));
@@ -279,7 +280,7 @@ billingAdminRoutes.use('/admin/billing/*', requireAuth);
 billingAdminRoutes.use('/admin/billing', requireAuth);
 
 billingAdminRoutes.get('/admin/billing', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const db = await getDb();
   const rows = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city, plan: restaurants.plan, founder: restaurants.founder, subscriptionStatus: restaurants.subscriptionStatus, trialEndsAt: restaurants.trialEndsAt, currentPeriodEnd: restaurants.currentPeriodEnd, createdAt: restaurants.createdAt }).from(restaurants).orderBy(desc(restaurants.createdAt));
   const founders = rows.filter((r) => r.founder).length;
@@ -295,7 +296,7 @@ billingAdminRoutes.get('/admin/billing', async (c) => {
 
 /** Émet une facture d'abonnement à la main (paiement par virement, geste commercial) et l'envoie. */
 billingAdminRoutes.post('/admin/billing/restaurants/:id/invoice', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ amountEur: z.number().positive().max(100000).optional(), vatRate: z.number().min(0).max(20).optional(), months: z.number().int().min(1).max(12).default(1), send: z.boolean().default(true), note: z.string().max(300).optional() }).parse(await c.req.json().catch(() => ({})));
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.req.param('id')));
   if (!r) return c.json({ error: 'Restaurant introuvable' }, 404);
@@ -313,7 +314,7 @@ billingAdminRoutes.post('/admin/billing/restaurants/:id/invoice', async (c) => {
 
 /** Marque une facture d'abonnement payée (virement reçu) ou annulée. */
 billingAdminRoutes.put('/admin/billing/invoices/:id', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ status: z.enum(['payee', 'ouverte', 'annulee']) }).parse(await c.req.json());
   const db = await getDb();
   const [upd] = await db.update(subscriptionInvoices).set({ status: b.status, paidAt: b.status === 'payee' ? new Date() : null }).where(eq(subscriptionInvoices.id, c.req.param('id'))).returning();
@@ -324,7 +325,7 @@ billingAdminRoutes.put('/admin/billing/invoices/:id', async (c) => {
 
 /** Marque un restaurant « pilote fondateur » (−50 % à vie), prolonge l'essai si demandé. */
 billingAdminRoutes.put('/admin/billing/restaurants/:id', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ founder: z.boolean().optional(), extendTrialDays: z.number().int().min(1).max(180).optional(), plan: z.enum(['trial', 'starter', 'pro', 'business']).optional(), subscriptionStatus: z.enum(['trialing', 'active', 'past_due', 'canceled', 'expired']).optional() }).parse(await c.req.json());
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.req.param('id'))); if (!r) return c.json({ error: 'Restaurant introuvable' }, 404);
   const patch: Partial<typeof restaurants.$inferInsert> = {};
@@ -390,7 +391,7 @@ export async function invoiceCommissions(period: string, opts: { dryRun?: boolea
 }
 
 billingAdminRoutes.post('/admin/billing/commissions/invoice', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ period: z.string().regex(/^\d{4}-\d{2}$/).optional(), dryRun: z.boolean().optional() }).parse(await c.req.json().catch(() => ({})));
   const prev = new Date(); prev.setUTCDate(0); // dernier jour du mois précédent
   const res = await invoiceCommissions(b.period ?? prev.toISOString().slice(0, 7), { dryRun: b.dryRun });

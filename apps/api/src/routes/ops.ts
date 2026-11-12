@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { getDb, restaurants, auditLog, jobRuns } from '@afrisupply/db';
 import type { MiddlewareHandler } from 'hono';
-import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { buildInfo, sentryEnabled, audit } from '../lib/ops.js';
 import { SUPPORT, jobHealth, watchdog } from '../lib/ops-health.js';
 import {
@@ -18,7 +18,6 @@ import { mailerConfig, mailStats, outboxCount } from '../lib/mailer.js';
 import { smsConfig, smsStats } from '../lib/sms.js';
 import { recordJobRun, statusFrom } from '../lib/job-runs.js';
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 
 export const opsRoutes = new Hono<Env>();
 
@@ -60,7 +59,7 @@ export const adminOpsRoutes = new Hono<Env>();
 // sous /api reviendrait à filtrer TOUTES les requêtes de la plateforme. Chaque route admin se
 // déclare donc elle-même « admin uniquement », sans effet de bord.
 const adminOnly: MiddlewareHandler<Env> = async (c, next) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   await next();
 };
 

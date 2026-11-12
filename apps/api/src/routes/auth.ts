@@ -1,22 +1,15 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { and, eq, isNull, gt } from 'drizzle-orm';
+import { and, eq, isNull, gt, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
-import { setCookie, deleteCookie } from 'hono/cookie';
-import { createClerkClient } from '@clerk/backend';
+import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
 import { getDb, users, restaurants, restaurantMembers, leads, passwordResets, emailVerifications } from '@afrisupply/db';
-import { hashPassword, verifyPassword, signToken, requireAuth, tokenTtlSeconds, type Env } from '../lib/auth.js';
+import { hashPassword, verifyPassword, signToken, verifyToken, requireAuth, tokenTtlSeconds, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { passwordProblem, PASSWORD_MIN_LENGTH } from '../lib/security.js';
 import { issuePasswordLink, issueEmailVerification, hashEmailToken } from '../lib/reset-link.js';
-import { sendMail, mailerConfig, devLinksAllowed, type MailResult } from '../lib/mailer.js';
-import { audit } from '../lib/ops.js';
-
-const clerkClient = process.env.CLERK_SECRET_KEY
-  ? createClerkClient({
-      secretKey: process.env.CLERK_SECRET_KEY,
-      publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || process.env.VITE_CLERK_PUBLISHABLE_KEY,
-    })
-  : null;
+import { sendMail, mailerConfig, mailDeliverable, devLinksAllowed, type MailResult } from '../lib/mailer.js';
+import { audit, clientIp } from '../lib/ops.js';
+import { clerkIdentityFromRequest, ClerkAuthError, type ClerkIdentity } from '../lib/clerk.js';
 
 const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 // Chantier 2 (audit) : la durée du cookie suit celle du jeton (7 j par défaut, au lieu de 30 j).
@@ -177,7 +170,29 @@ authRoutes.post('/login', async (c) => {
   });
 });
 
-authRoutes.post('/logout', (c) => { deleteCookie(c, 'afs_token', { path: '/' }); return c.json({ ok: true }); });
+/**
+ * Déconnexion.
+ * Chantier P0.3 : effacer le cookie ne suffisait pas — un jeton copié auparavant restait valable
+ * jusqu'à son expiration (7 jours). La déconnexion révoque désormais les sessions du compte
+ * (numéro de génération incrémenté) : le jeton présenté, et toute copie, cessent de fonctionner.
+ * Sans session valide, la route reste sans effet et répond tout de même « ok » (idempotente).
+ */
+authRoutes.post('/logout', async (c) => {
+  const header = c.req.header('authorization');
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : getCookie(c, 'afs_token');
+  deleteCookie(c, 'afs_token', { path: '/' });
+  if (token) {
+    const claimed = await verifyToken(token);
+    if (claimed) {
+      const db = await getDb();
+      // Seule la génération portée par CE jeton est révoquée : rejouer un vieux jeton ne déconnecte personne.
+      const revoked = await db.update(users).set({ tokenVersion: sql`${users.tokenVersion} + 1` })
+        .where(and(eq(users.id, claimed.id), eq(users.tokenVersion, claimed.tokenVersion ?? 0))).returning({ id: users.id, email: users.email });
+      if (revoked.length) void audit('session.logout', { actorEmail: revoked[0].email, target: revoked[0].id });
+    }
+  }
+  return c.json({ ok: true });
+});
 
 /** Règles de mot de passe, exposées publiquement pour que le web affiche les mêmes que le serveur. */
 authRoutes.get('/password-policy', (c) => c.json({
@@ -193,14 +208,26 @@ authRoutes.get('/password-policy', (c) => c.json({
  */
 authRoutes.post('/forgot-password', async (c) => {
   const body = z.object({ email: z.string().email() }).safeParse(await c.req.json().catch(() => ({})));
-  const generic = { ok: true, message: 'Si un compte existe avec cette adresse, un lien de réinitialisation vient d’être envoyé (valable 1 heure).' };
+  // Chantier P0.3 — la réponse est STRICTEMENT la même que le compte existe ou non : même message,
+  // mêmes champs. Seul l'état du service d'envoi (un fait du serveur, pas du compte) est indiqué.
+  // Avant, les champs `delivered` / `transport` n'apparaissaient que pour une adresse connue : il
+  // suffisait de comparer deux réponses pour savoir si une adresse avait un compte.
+  const deliverable = mailDeliverable();
+  const generic = {
+    ok: true,
+    message: deliverable
+      ? 'Si un compte existe avec cette adresse, un lien de réinitialisation vient d’être envoyé (valable 1 heure).'
+      : 'L’envoi d’e-mails n’est pas configuré sur ce serveur : si un compte existe avec cette adresse, demandez votre lien au support.',
+    delivered: deliverable,
+    ...(deliverable ? {} : { code: 'mail_not_delivered' }),
+  };
   if (!body.success) return c.json(generic);
   const db = await getDb();
   const email = body.data.email.toLowerCase();
   const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  if (!user) { void audit('password.forgot.unknown', { actorEmail: email, meta: { ip: c.req.header('x-forwarded-for') } }); return c.json(generic); }
+  if (!user) { void audit('password.forgot.unknown', { actorEmail: email, meta: { ip: clientIp(c) } }); return c.json(generic); }
 
-  const { link, expiryMinutes: RESET_TTL } = await issuePasswordLink(user.id, { requestedIp: c.req.header('x-forwarded-for') ?? null });
+  const { link, expiryMinutes: RESET_TTL } = await issuePasswordLink(user.id, { requestedIp: clientIp(c) });
   const firstName = user.fullName.split(' ')[0] || 'chef';
   const res = await sendMail({
     to: user.email, subject: 'AFRISUPPLY — réinitialiser votre mot de passe',
@@ -208,16 +235,10 @@ authRoutes.post('/forgot-password', async (c) => {
     html: `<p>Bonjour ${firstName},</p><p>Vous avez demandé à réinitialiser votre mot de passe AFRISUPPLY.</p><p><a href="${link}">Choisir un nouveau mot de passe</a> (lien valable ${RESET_TTL} minutes).</p><p>Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : votre mot de passe reste inchangé.</p>`,
     tags: { type: 'password_reset' },
   });
-  void audit('password.forgot', { actorEmail: email, target: user.id, meta: { transport: res.transport } });
-  const status = mailStatus(res, link, 'reset');
-  return c.json({
-    ...generic,
-    ...status,
-    // Chantier 5 : on ne prétend plus « lien envoyé » quand aucun e-mail ne peut partir.
-    message: status.delivered
-      ? generic.message
-      : 'Compte trouvé, mais l’envoi d’e-mails n’est pas configuré sur ce serveur : demandez au support de vous transmettre votre lien, ou réessayez plus tard.',
-  });
+  void audit('password.forgot', { actorEmail: email, target: user.id, meta: { transport: res.transport, sent: res.ok } });
+  // Poste de développement uniquement (ni clé d'envoi, ni production, ni déploiement) : le lien est
+  // renvoyé pour pouvoir tester le parcours. Jamais ailleurs.
+  return c.json({ ...generic, ...(devLinksAllowed() ? { devLink: link } : {}) });
 });
 
 /** Chantier 2 (audit) — réinitialisation : jeton à usage unique, expiration, révocation des sessions ouvertes. */
@@ -280,9 +301,10 @@ authRoutes.get('/me', requireAuth, async (c) => {
   const rows = await db.select({ restaurant: restaurants, role: restaurantMembers.role })
     .from(restaurantMembers).innerJoin(restaurants, eq(restaurants.id, restaurantMembers.restaurantId))
     .where(eq(restaurantMembers.userId, user.id));
-  const isAdmin = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
   const [row] = await db.select({ emailVerifiedAt: users.emailVerifiedAt }).from(users).where(eq(users.id, user.id));
   const emailVerifiedAt = row?.emailVerifiedAt ?? null;
+  // Les droits d'exploitant exigent une adresse prouvée (voir `isPlatformAdmin`).
+  const isAdmin = isPlatformAdmin({ email: user.email, emailVerified: emailVerifiedAt !== null });
   return c.json({
     user: { ...user, isAdmin, emailVerified: emailVerifiedAt !== null, emailVerifiedAt },
     restaurants: rows.map((r) => ({ ...r.restaurant, role: r.role })),
@@ -291,157 +313,94 @@ authRoutes.get('/me', requireAuth, async (c) => {
 });
 
 /**
- * Intégration Clerk — Synchronisation d'un compte Clerk avec la base Neon
- * Vérifie l'utilisateur via l'API Clerk, le crée ou le met à jour dans Neon,
- * initialise son restaurant et ses droits, et génère le cookie/jeton applicatif.
+ * Connexion par Clerk : échange une identité Clerk PROUVÉE contre une session AFRISUPPLY.
+ *
+ * Chantier P0.2 (défaut critique corrigé). Avant, cette route croyait le navigateur sur parole :
+ * elle recevait `{ clerkId, email }` dans le corps et ouvrait une session sur le compte portant
+ * cette adresse. Toute personne connaissant l'adresse e-mail d'un client — ou de l'exploitant —
+ * obtenait donc sa session, sans mot de passe et sans compte Clerk.
+ *
+ * Désormais :
+ *   1. l'identité vient uniquement du jeton de session Clerk (en-tête Authorization), vérifié côté
+ *      serveur : signature, expiration, origine autorisée ; le corps de la requête est ignoré ;
+ *   2. l'adresse e-mail est lue chez Clerk avec la clé secrète du serveur et doit y être vérifiée ;
+ *   3. un compte déjà relié à Clerk n'est ouvert que si l'adresse vérifiée est bien la sienne ;
+ *   4. un compte existant n'est relié que si son adresse a déjà été prouvée côté AFRISUPPLY ;
+ *   5. sans clé Clerk côté serveur, ou si Clerk ne répond pas, aucune session n'est ouverte.
  */
 authRoutes.post('/clerk-sync', async (c) => {
-  const body = z.object({
-    clerkId: z.string().min(1),
-    email: z.string().email().optional(),
-    fullName: z.string().optional(),
-    phone: z.string().optional().nullable(),
-  }).safeParse(await c.req.json().catch(() => ({})));
-
-  if (!body.success) {
-    return c.json({ error: 'Données invalides pour la synchronisation Clerk', details: body.error.flatten() }, 400);
+  let identity: ClerkIdentity;
+  try {
+    identity = await clerkIdentityFromRequest(c.req.raw);
+  } catch (e) {
+    if (!(e instanceof ClerkAuthError)) throw e;
+    if (e.status !== 503) void audit('auth.clerk_sync.refused', { meta: { code: e.code, ip: clientIp(c) } });
+    return c.json({ error: e.message, code: e.code }, e.status);
   }
-
-  const { clerkId } = body.data;
-  let email = body.data.email?.toLowerCase();
-  let fullName = body.data.fullName?.trim();
-  let phone = body.data.phone ?? null;
-
-  // Validation directe via l'API Clerk si CLERK_SECRET_KEY est configurée
-  if (clerkClient) {
-    try {
-      const clerkUser = await clerkClient.users.getUser(clerkId);
-      if (clerkUser) {
-        const primaryEmail = clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase();
-        if (primaryEmail) email = primaryEmail;
-        const nameParts = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ').trim();
-        if (nameParts) fullName = nameParts;
-        if (!fullName && clerkUser.username) fullName = clerkUser.username;
-        if (clerkUser.phoneNumbers[0]?.phoneNumber) phone = clerkUser.phoneNumbers[0].phoneNumber;
-      }
-    } catch (err) {
-      console.warn('[clerk] getUser warning:', (err as Error).message);
-    }
+  const refuse = (status: 403 | 409, code: string, error: string, target?: string) => {
+    void audit('auth.clerk_sync.refused', { actorEmail: identity.email, target, meta: { code, clerkId: identity.clerkId, ip: clientIp(c) } });
+    return c.json({ error, code }, status);
+  };
+  if (!identity.emailVerified) {
+    return refuse(403, 'clerk_email_unverified', 'Votre adresse e-mail n’est pas encore vérifiée auprès de Clerk : confirmez-la, puis reconnectez-vous.');
   }
-
-  if (!email) {
-    return c.json({ error: 'Adresse e-mail requise pour le compte' }, 400);
-  }
-  if (!fullName) fullName = email.split('@')[0];
 
   const db = await getDb();
+  let [user] = await db.select().from(users).where(eq(users.clerkId, identity.clerkId)).limit(1);
+  let outcome: 'existing' | 'linked' | 'created' = 'existing';
 
-  // Recherche dans Neon par clerkId ou par email
-  const existingByClerk = await db.select().from(users).where(eq(users.clerkId, clerkId)).limit(1);
-  let user = existingByClerk[0];
-
-  if (!user) {
-    const existingByEmail = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    if (existingByEmail[0]) {
-      user = existingByEmail[0];
-      await db.update(users).set({
-        clerkId,
-        emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
-        lastLoginAt: new Date(),
-        phone: phone || user.phone,
-      }).where(eq(users.id, user.id));
-      user.clerkId = clerkId;
+  if (user) {
+    // Compte déjà relié : l'adresse vérifiée chez Clerk doit toujours être celle du compte. Un lien
+    // posé avant cette correction (identifiant Clerk arbitraire) ne donne donc accès à rien.
+    if (user.email.toLowerCase() !== identity.email) {
+      return refuse(409, 'clerk_identity_mismatch', 'L’adresse de votre compte Clerk ne correspond pas à celle de ce compte AFRISUPPLY. Contactez le support pour mettre votre compte à jour.', user.id);
+    }
+  } else {
+    const [byEmail] = await db.select().from(users).where(eq(users.email, identity.email)).limit(1);
+    if (byEmail) {
+      if (byEmail.clerkId) {
+        return refuse(409, 'clerk_identity_conflict', 'Ce compte AFRISUPPLY est déjà relié à une autre identité Clerk. Contactez le support.', byEmail.id);
+      }
+      // Un compte créé par mot de passe dont l'adresse n'a jamais été confirmée a pu être ouvert par
+      // n'importe qui avec cette adresse : on ne le relie pas tant que son titulaire ne l'a pas prouvée.
+      if (!byEmail.emailVerifiedAt) {
+        return refuse(409, 'local_email_unverified', 'Un compte AFRISUPPLY existe déjà avec cette adresse, mais elle n’y a jamais été confirmée. Utilisez « Mot de passe oublié » pour la confirmer, puis reconnectez-vous.', byEmail.id);
+      }
+      const [linked] = await db.update(users).set({ clerkId: identity.clerkId, phone: byEmail.phone ?? identity.phone })
+        .where(and(eq(users.id, byEmail.id), isNull(users.clerkId))).returning();
+      if (!linked) return refuse(409, 'clerk_identity_conflict', 'Ce compte AFRISUPPLY vient d’être relié à une autre identité Clerk. Contactez le support.', byEmail.id);
+      user = linked; outcome = 'linked';
+    } else {
+      const fullName = identity.fullName ?? identity.email.split('@')[0];
+      [user] = await db.insert(users).values({
+        email: identity.email, fullName, clerkId: identity.clerkId, phone: identity.phone, emailVerifiedAt: new Date(), lastLoginAt: new Date(),
+      }).returning();
+      // Premier restaurant du nouveau compte (même parcours que l'inscription par mot de passe).
+      const restName = `Restaurant de ${fullName.split(' ')[0] || 'Chef'}`;
+      const [rest] = await db.insert(restaurants).values({
+        name: restName, slug: `${slugify(restName)}-${user.id.slice(0, 6)}`, plan: 'trial', trialEndsAt: new Date(Date.now() + 30 * 86_400_000), founder: false,
+      }).returning();
+      await db.insert(restaurantMembers).values({ restaurantId: rest.id, userId: user.id, role: 'owner' });
+      outcome = 'created';
     }
   }
+  await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
 
-  if (!user) {
-    // Création de l'utilisateur dans Neon
-    const [inserted] = await db.insert(users).values({
-      email,
-      fullName,
-      clerkId,
-      phone,
-      emailVerifiedAt: new Date(),
-      lastLoginAt: new Date(),
-    }).returning();
-    user = inserted;
+  const memberships = await db.select({ restaurant: restaurants, role: restaurantMembers.role }).from(restaurantMembers)
+    .innerJoin(restaurants, eq(restaurants.id, restaurantMembers.restaurantId)).where(eq(restaurantMembers.userId, user.id));
 
-    // Création du premier restaurant par défaut
-    const restName = `Restaurant de ${fullName.split(' ')[0] || 'Chef'}`;
-    const slug = `${slugify(restName)}-${user.id.slice(0, 6)}`;
-    const trialEndsAt = new Date(Date.now() + 30 * 86_400_000);
-    const [rest] = await db.insert(restaurants).values({
-      name: restName,
-      slug,
-      plan: 'trial',
-      trialEndsAt,
-      founder: false,
-    }).returning();
-
-    await db.insert(restaurantMembers).values({
-      restaurantId: rest.id,
-      userId: user.id,
-      role: 'owner',
-    });
-  } else {
-    await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
-  }
-
-  // Chargement ou auto-création du restaurant
-  const memberships = await db.select({
-    restaurant: restaurants,
-    role: restaurantMembers.role,
-  }).from(restaurantMembers)
-    .innerJoin(restaurants, eq(restaurants.id, restaurantMembers.restaurantId))
-    .where(eq(restaurantMembers.userId, user.id));
-
-  let restaurantList = memberships.map((r) => ({ ...r.restaurant, role: r.role }));
-
-  if (restaurantList.length === 0) {
-    const restName = `Restaurant de ${user.fullName.split(' ')[0] || 'Chef'}`;
-    const slug = `${slugify(restName)}-${user.id.slice(0, 6)}`;
-    const trialEndsAt = new Date(Date.now() + 30 * 86_400_000);
-    const [rest] = await db.insert(restaurants).values({
-      name: restName,
-      slug,
-      plan: 'trial',
-      trialEndsAt,
-      founder: false,
-    }).returning();
-
-    await db.insert(restaurantMembers).values({
-      restaurantId: rest.id,
-      userId: user.id,
-      role: 'owner',
-    });
-    restaurantList = [{ ...rest, role: 'owner' }];
-  }
-
-  const token = await signToken({
-    id: user.id,
-    email: user.email,
-    fullName: user.fullName,
-    tokenVersion: user.tokenVersion ?? 0,
-  });
-
+  const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, 'afs_token', token, cookieOpts);
-  const isAdmin = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
-
-  void audit('auth.clerk_sync', { actorEmail: user.email, target: user.id, meta: { clerkId } });
+  void audit('auth.clerk_sync', { actorEmail: user.email, target: user.id, meta: { clerkId: identity.clerkId, outcome, ip: clientIp(c) } });
 
   return c.json({
     ok: true,
     token,
     user: {
-      id: user.id,
-      email: user.email,
-      fullName: user.fullName,
-      isAdmin,
-      emailVerified: true,
-      emailVerifiedAt: user.emailVerifiedAt,
-      clerkId: user.clerkId,
+      id: user.id, email: user.email, fullName: user.fullName,
+      isAdmin: isPlatformAdmin({ email: user.email, emailVerified: user.emailVerifiedAt !== null }),
+      emailVerified: user.emailVerifiedAt !== null, emailVerifiedAt: user.emailVerifiedAt, clerkId: user.clerkId,
     },
-    restaurants: restaurantList,
+    restaurants: memberships.map((r) => ({ ...r.restaurant, role: r.role })),
   });
 });
-

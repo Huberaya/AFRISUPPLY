@@ -3,6 +3,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { runMigrations } from '@afrisupply/db';
 import { app } from '../app.js';
 import { buildWeeklyPilotReport, makeInviteCode } from '../routes/pilots.js';
+import { confirmerAdresse } from './aide-comptes.js';
 
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://pilots'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr'; delete process.env.STRIPE_SECRET_KEY; delete process.env.BILLING_ENFORCE;
 type Json = Record<string, any>;
@@ -11,10 +12,13 @@ const call = async (method: string, path: string, body?: unknown, headers: Recor
   let json: Json = {}; try { json = await res.json(); } catch { /* */ } return { status: res.status, json };
 };
 let ADM: Record<string, string>; let code = ''; let P: { h: Record<string, string>; rid: string };
-beforeAll(async () => { await runMigrations(); const r = await call('POST', '/api/auth/register', { email: 'admin@afrisupply.fr', password: 'Plantain-Yassa-42', fullName: 'Admin', restaurantName: 'Admin' }); ADM = { authorization: `Bearer ${r.json.token}` }; }, 60_000);
+beforeAll(async () => { await runMigrations(); const r = await call('POST', '/api/auth/register', { email: 'admin@afrisupply.fr', password: 'Plantain-Yassa-42', fullName: 'Admin', restaurantName: 'Admin' }); await confirmerAdresse('admin@afrisupply.fr'); ADM = { authorization: `Bearer ${r.json.token}` }; }, 60_000);
 
 describe('programme pilote', () => {
-  it('code lisible', () => { expect(makeInviteCode()).toMatch(/^PILOTE-[A-Z2-9]{4}$/); });
+  it('code lisible, long et imprévisible (10 caractères tirés au hasard cryptographique)', () => {
+    expect(makeInviteCode()).toMatch(/^PILOTE-[A-Z2-9]{10}$/);
+    expect(new Set(Array.from({ length: 200 }, () => makeInviteCode())).size).toBe(200);
+  });
   it('admin invite un restaurant → code + lien ; le code public renvoie les infos pré-remplies', async () => {
     const inv = await call('POST', '/api/admin/pilots/invite', { email: 'fatou@lateranga.fr', restaurantName: 'La Teranga', contactName: 'Fatou Ndiaye', city: 'Nantes' }, ADM);
     expect(inv.status).toBe(200); code = inv.json.code; expect(inv.json.link).toContain(`/inscription?code=${code}`);

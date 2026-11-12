@@ -1,15 +1,26 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import type { ReactNode } from 'react';
 import { ClerkProvider } from '@clerk/clerk-react';
-import { AuthProvider, useAuth } from './lib/auth';
+import { AuthProvider, ClerkAuthProvider, useAuth } from './lib/auth';
+import { CLERK_PUBLISHABLE_KEY, clerkEnabled } from './lib/clerk';
 import AppLayout from './components/AppLayout';
 import SiteLayout from './components/site/SiteLayout';
 import { Loader } from './components/ui';
 
-const CLERK_PUBLISHABLE_KEY =
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ||
-  import.meta.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ||
-  'pk_test_cGlja2VkLXdlcmV3b2xmLTY4MDQuY2xlcmsuYWNjb3VudHMuZGV2JA';
+/**
+ * Authentification : Clerk n'est monté que si une clé publique est configurée au build
+ * (VITE_CLERK_PUBLISHABLE_KEY). Sinon l'application fonctionne avec la seule connexion par
+ * e-mail et mot de passe — sans jamais se rabattre sur une instance Clerk de test.
+ */
+function Authentification({ children }: { children: ReactNode }) {
+  if (!clerkEnabled) return <AuthProvider>{children}</AuthProvider>;
+  return (
+    <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
+      <ClerkAuthProvider>{children}</ClerkAuthProvider>
+    </ClerkProvider>
+  );
+}
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
@@ -74,8 +85,7 @@ function Protected() {
 
 export default function App() {
   return (
-    <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
-      <AuthProvider>
+    <Authentification>
         <BrowserRouter>
           <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader /></div>}>
             <Routes>
@@ -143,7 +153,6 @@ export default function App() {
             </Routes>
           </Suspense>
         </BrowserRouter>
-      </AuthProvider>
-    </ClerkProvider>
+    </Authentification>
   );
 }

@@ -16,6 +16,7 @@ import { loadPricing, priceFor } from '../lib/pricing.js';
 import { nextSlots, WEEKDAYS_FR } from '../lib/routes.js';
 import { checkCredit, exposureFor, termsFor } from '../lib/credit.js';
 import { reliabilityFor, emptyReliability } from '../lib/reliability.js';
+import { vendorOffersProblem } from '../lib/tenant.js';
 
 export const marketplaceRoutes = new Hono<Env>();
 
@@ -23,6 +24,13 @@ export const marketplaceRoutes = new Hono<Env>();
 marketplaceRoutes.on(['POST'], '/marketplace/vendors/:id/orders', requireMinRole('manager'));
 marketplaceRoutes.on(['POST'], '/marketplace/vendors/:id/link', requireMinRole('manager'));
 marketplaceRoutes.on(['POST'], '/marketplace/group-buys/:id/join', requireMinRole('manager'));
+// Chantier P0.2 — tout ce qui passe ou programme une commande auprès d'un grossiste suit la même règle
+// (envoi d'une commande préparée, « recommander », commandes récurrentes) : responsable requis.
+marketplaceRoutes.on(['POST'], '/marketplace/orders/:id/send', requireMinRole('manager'));
+marketplaceRoutes.on(['POST'], '/orders/:id/reorder', requireMinRole('manager'));
+marketplaceRoutes.on(['POST'], '/recurring', requireMinRole('manager'));
+marketplaceRoutes.on(['PUT', 'DELETE'], '/recurring/:id', requireMinRole('manager'));
+marketplaceRoutes.on(['POST'], '/recurring/:id/run', requireMinRole('manager'));
 
 /** Chantier 1 (audit) : plafonds structurels d'une commande (ligne = colis, panier = lignes). */
 const MAX_PACKS_PER_LINE = 1000;
@@ -184,8 +192,16 @@ marketplaceRoutes.post('/marketplace/orders/:id/send', async (c) => {
 });
 
 /** Chantier 29 : mes conditions de paiement et mon encours chez ce grossiste. */
+/** Fournisseur actif de la place de marché, ou null : une réponse « 200 vide » pour un identifiant inconnu masquait les erreurs. */
+async function activeVendor(vid: string) {
+  const db = await getDb();
+  const [v] = await db.select({ id: vendors.id }).from(vendors).where(and(eq(vendors.id, vid), eq(vendors.status, 'actif'))).limit(1);
+  return v ?? null;
+}
+
 marketplaceRoutes.get('/marketplace/vendors/:id/credit', async (c) => {
   const rid = c.get('restaurantId'); const vid = c.req.param('id');
+  if (!(await activeVendor(vid))) return c.json({ error: 'Fournisseur introuvable' }, 404);
   const terms = await termsFor(vid, rid); const exposure = (await exposureFor(vid, [rid])).get(rid)!;
   return c.json({ terms: terms ? { paymentDays: terms.paymentDays, creditLimitEur: terms.creditLimitEur === null ? null : n(terms.creditLimitEur), blocked: terms.blocked } : { paymentDays: 0, creditLimitEur: null, blocked: false }, exposure });
 });
@@ -201,6 +217,7 @@ marketplaceRoutes.get('/marketplace/payables', async (c) => {
 /** Chantier 19 : prochaines dates/créneaux de livraison de ce grossiste pour mon restaurant. */
 marketplaceRoutes.get('/marketplace/vendors/:id/slots', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
+  if (!(await activeVendor(c.req.param('id')))) return c.json({ error: 'Fournisseur introuvable' }, 404);
   const [r] = await db.select({ city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants).where(eq(restaurants.id, rid));
   const slots = await nextSlots(c.req.param('id'), r);
   return c.json({ slots: slots.map((s) => ({ ...s, weekdayLabel: WEEKDAYS_FR[s.weekday] })), hasRoutes: slots.length > 0 });
@@ -260,6 +277,10 @@ marketplaceRoutes.post('/recurring', async (c) => {
   let { vendorId, lines } = body.data;
   if (body.data.fromOrderId) { const [o] = await db.select().from(orders).where(and(eq(orders.id, body.data.fromOrderId), eq(orders.restaurantId, rid))); if (!o?.vendorId) return c.json({ error: 'Commande introuvable' }, 404); vendorId = o.vendorId; if (!lines) { const prev = await db.select().from(orderLines).where(eq(orderLines.orderId, o.id)); const offers = await db.select().from(vendorOffers).where(eq(vendorOffers.vendorId, o.vendorId)); lines = prev.map((l) => { const off = offers.find((x) => x.productId === l.productId && x.packLabel === l.packLabel) ?? offers.find((x) => x.productId === l.productId); return off ? { vendorOfferId: off.id, packs: n(l.packs) } : null; }).filter((x): x is { vendorOfferId: string; packs: number } => !!x); } }
   if (!vendorId || !lines?.length) return c.json({ error: 'Fournisseur et lignes requis' }, 400);
+  // Chantier P0.3 : le grossiste doit exister et chaque offre lui appartenir (avant : identifiant
+  // inconnu → erreur 500 à l'enregistrement, ou commande récurrente vouée à échouer chaque matin).
+  const problem = await vendorOffersProblem(vendorId, lines.map((l) => l.vendorOfferId));
+  if (problem) return c.json({ error: problem }, 400);
   const [row] = await db.insert(recurringOrders).values({ restaurantId: rid, vendorId, name: body.data.name, weekdays: [...new Set(body.data.weekdays)].sort(), lines, mode: body.data.mode, notes: body.data.notes, nextRunOn: nextRunOn(body.data.weekdays), createdBy: user.id }).returning();
   return c.json({ recurring: row, message: `« ${row.name} » programmée : ${row.weekdays.map((d) => DAYS[d]).join(', ')} (prochaine le ${row.nextRunOn}).` }, 201);
 });
@@ -267,8 +288,13 @@ marketplaceRoutes.put('/recurring/:id', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
   const body = z.object({ name: z.string().min(2).max(60).optional(), weekdays: z.array(z.number().int().min(0).max(6)).min(1).optional(), mode: z.enum(['auto', 'confirm']).optional(), enabled: z.boolean().optional(), notes: z.string().max(300).nullable().optional(), lines: z.array(z.object({ vendorOfferId: z.string().uuid(), packs: z.number().int().positive() })).min(1).optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
-  const patch: Partial<typeof recurringOrders.$inferInsert> = { ...body.data, notes: body.data.notes ?? undefined }; if (body.data.weekdays) { patch.weekdays = [...new Set(body.data.weekdays)].sort(); patch.nextRunOn = nextRunOn(patch.weekdays); }
-  const [row] = await db.update(recurringOrders).set(patch).where(and(eq(recurringOrders.id, c.req.param('id')), eq(recurringOrders.restaurantId, rid))).returning(); if (!row) return c.json({ error: 'Introuvable' }, 404);
+  // Chantier P0.3 : un corps vide est une demande sans objet (400), pas une panne (500).
+  if (!Object.values(body.data).some((v) => v !== undefined)) return c.json({ error: 'Aucune modification fournie : indiquez au moins un champ à changer.', code: 'empty_update' }, 400);
+  const [cur] = await db.select().from(recurringOrders).where(and(eq(recurringOrders.id, c.req.param('id')), eq(recurringOrders.restaurantId, rid))); if (!cur) return c.json({ error: 'Introuvable' }, 404);
+  if (body.data.lines) { const problem = await vendorOffersProblem(cur.vendorId, body.data.lines.map((l) => l.vendorOfferId)); if (problem) return c.json({ error: problem }, 400); }
+  // `notes: null` efface la note ; un champ absent n'est pas modifié.
+  const patch: Partial<typeof recurringOrders.$inferInsert> = { ...body.data, notes: body.data.notes }; if (body.data.weekdays) { patch.weekdays = [...new Set(body.data.weekdays)].sort(); patch.nextRunOn = nextRunOn(patch.weekdays); }
+  const [row] = await db.update(recurringOrders).set(patch).where(eq(recurringOrders.id, cur.id)).returning(); if (!row) return c.json({ error: 'Introuvable' }, 404);
   return c.json({ recurring: row });
 });
 marketplaceRoutes.delete('/recurring/:id', async (c) => {

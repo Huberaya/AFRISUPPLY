@@ -4,6 +4,7 @@ import { runMigrations, getDb, notifications, orders } from '@afrisupply/db';
 import { eq } from 'drizzle-orm';
 import { app } from '../app.js';
 import { normalizePhone, waLink } from '../lib/sms.js';
+import { confirmerAdresse } from './aide-comptes.js';
 type Json = Record<string, any>;
 const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined }); return { status: r.status, json: (await r.clone().json().catch(() => ({}))) as Json }; };
 const reg = async (email: string, name: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'Test', restaurantName: name, city: 'Nantes' }); return { h: { Authorization: `Bearer ${r.json.token}` } }; };
@@ -142,7 +143,7 @@ describe('chantier 26 — litiges & avoirs', () => {
     const partial = await call('POST', `/api/vendor/claims/${cl.json.claim.id}/respond`, { resolution: 'avoir', creditEur: 10, message: 'Geste commercial' }, V); expect(partial.json.claim.status).toBe('propose');
     const esc = await call('POST', `/api/claims/${cl.json.claim.id}/close`, { action: 'escalate', message: 'Insuffisant' }, R); expect(esc.json.claim.status).toBe('escalade');
     expect((await call('GET', '/api/admin/claims', undefined, R)).status).toBe(403);
-    const ADM = (await reg('admin@afrisupply.fr', 'Admin')).h;
+    const ADM = (await reg('admin@afrisupply.fr', 'Admin')).h; await confirmerAdresse('admin@afrisupply.fr');
     const all = await call('GET', '/api/admin/claims', undefined, ADM); expect(all.json.items.some((c: Json) => c.status === 'escalade')).toBe(true);
     const arb = await call('POST', `/api/admin/claims/${cl.json.claim.id}/arbitrate`, { resolution: 'avoir', creditEur: 30, message: 'Photo probante, avoir intégral' }, ADM); expect(arb.json.claim.status).toBe('clos'); expect(Number(arb.json.claim.creditEur)).toBe(30);
     expect((await call('GET', '/api/discrepancies?all=1', undefined, R)).json.items.find((d: Json) => d.id === disc.id).resolved).toBe(true);

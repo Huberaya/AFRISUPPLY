@@ -2,19 +2,24 @@
 // mesure d'usage, cockpit admin (santé de chaque pilote) et rapport hebdo.
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { randomInt } from 'node:crypto';
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { getDb, restaurants, restaurantMembers, users, leads, feedback, usageEvents, suppliers, supplierOffers, inventoryItems, recipes, sales, orders, deliveries, stockMovements, alerts } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 import { FOUNDER_OFFER } from './public.js';
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 const APP = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const n = (v: unknown) => Number(v ?? 0);
 
-/** Code d'invitation lisible : PILOTE-XXXX (sans caractères ambigus). */
-export function makeInviteCode() { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for (let i = 0; i < 4; i++) s += A[Math.floor(Math.random() * A.length)]; return `PILOTE-${s}`; }
+/**
+ * Code d'invitation lisible : PILOTE-XXXXXXXXXX (10 caractères, sans caractères ambigus).
+ * Chantier P0.3 : tirage cryptographique et 32^10 combinaisons. Avant : 4 caractères tirés avec
+ * Math.random (un million de combinaisons, prévisibles) alors que le code ouvre droit à la remise
+ * fondateur et révèle le nom et l'adresse du prospect invité.
+ */
+export function makeInviteCode() { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for (let i = 0; i < 10; i++) s += A[randomInt(A.length)]; return `PILOTE-${s}`; }
 
 /** Étapes de la première semaine : id, libellé, comment on la détecte automatiquement. */
 export const ONBOARDING_STEPS = [
@@ -109,7 +114,7 @@ pilotRoutes.get('/feedback/nps-due', async (c) => {
 
 /** Mesure d'usage minimaliste : le front envoie des lots d'événements (page vue, action). Pas de tiers, pas de cookie. */
 pilotRoutes.post('/usage', async (c) => {
-  const parsed = z.object({ events: z.array(z.object({ event: z.string().max(80), meta: z.record(z.unknown()).optional(), at: z.string().optional() })).max(50) }).safeParse(await c.req.json().catch(() => null));
+  const parsed = z.object({ events: z.array(z.object({ event: z.string().max(80), meta: z.record(z.string(), z.unknown()).optional(), at: z.string().optional() })).max(50) }).safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: 'Format d’événement invalide', details: parsed.error.flatten() }, 400);
   const b = parsed.data;
   if (!b.events.length) return c.json({ ok: true });
@@ -151,7 +156,7 @@ export async function pilotHealth(rid: string, now = new Date()) {
 }
 
 pilotAdminRoutes.get('/admin/pilots', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const db = await getDb();
   const all = await db.select({ id: restaurants.id }).from(restaurants).orderBy(desc(restaurants.createdAt)).limit(200);
   const pilots = []; for (const r of all) pilots.push(await pilotHealth(r.id));
@@ -164,7 +169,7 @@ pilotAdminRoutes.get('/admin/pilots', async (c) => {
 
 /** Inviter un lead : génère un code, envoie l'e-mail d'invitation avec le lien d'inscription pré-rempli. */
 pilotAdminRoutes.post('/admin/pilots/invite', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ leadId: z.string().uuid().optional(), email: z.string().email().optional(), restaurantName: z.string().min(2).optional(), contactName: z.string().min(2).optional(), city: z.string().optional(), resend: z.boolean().optional() }).parse(await c.req.json());
   const db = await getDb();
   let lead = b.leadId ? (await db.select().from(leads).where(eq(leads.id, b.leadId)))[0] : undefined;
@@ -184,7 +189,7 @@ pilotAdminRoutes.post('/admin/pilots/invite', async (c) => {
 });
 
 pilotAdminRoutes.put('/admin/pilots/feedback/:id', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ status: z.enum(['nouveau', 'traite']).optional(), published: z.boolean().optional() }).parse(await c.req.json());
   if (b.status === undefined && b.published === undefined) return c.json({ error: 'Rien à mettre à jour (status ou published).' }, 400);
   const db = await getDb();

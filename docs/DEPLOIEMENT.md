@@ -13,29 +13,52 @@ Migrations Drizzle appliquées et démo « Chez Awa » seedée (awa@chezawa.fr /
 
 ## 2. Vercel — 5 minutes
 1. **Add New Project** → dépôt `Huberaya/AFRISUPPLY` → Root Directory : **laisser la racine** (le `vercel.json` racine gère build web + fonction API). Framework preset : *Other*.
-2. **Environment Variables** (Production + Preview) :
+2. **Environment Variables**. La portée compte : une variable de production ne doit pas être offerte aux prévisualisations.
+
+| Variable | Portée | Valeur |
+|---|---|---|
+| `DATABASE_URL` | **Production uniquement** | chaîne Neon pooler de la base de production |
+| `PREVIEW_DATABASE_URL` | **Preview uniquement** | chaîne d'une base ou d'une branche Neon **dédiée** aux prévisualisations (jamais la production) |
+| `JWT_SECRET` | Production, et une **autre valeur** pour Preview | `openssl rand -hex 32` (32 caractères minimum) |
+
+Les autres variables (même tableau, colonne « Portée » = Production ; à dupliquer en Preview avec des valeurs de test si l'on veut une prévisualisation complète) :
 
 | Variable | Valeur |
 |---|---|
-| `DATABASE_URL` | chaîne Neon pooler |
-| `JWT_SECRET` | `openssl rand -hex 32` |
 | `CRON_SECRET` | `openssl rand -hex 24` — Vercel l'envoie automatiquement au cron en `Authorization: Bearer` |
 | `APP_URL` | `https://<votre-projet>.vercel.app` (liens du mail) |
 | `ADMIN_EMAILS` | votre e-mail (liste des leads) |
 | `RESEND_API_KEY`, `MAIL_FROM` | optionnels — sans clé, aucun mail ne part |
 | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | optionnels (assistant) |
 | `NODE_ENV` | `production` |
+| `VITE_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | optionnels — connexion Clerk ; même instance des deux côtés, instance de production (`pk_live_` / `sk_live_`) |
+
+**Ce que fait l'application si une variable manque ou est dangereuse** (chantiers P0.2 / P0.4) :
+- `JWT_SECRET` absent, court ou d'exemple en production → l'API répond **503 sur toutes les routes** (sauf `/api/health`, qui indique `config: "a_corriger"`). Elle ne signe jamais une session avec une valeur de repli.
+- prévisualisation sans `PREVIEW_DATABASE_URL` → l'API de prévisualisation répond 503 ; elle n'utilise jamais `DATABASE_URL`.
+- `CLERK_SECRET_KEY` absent → la connexion Clerk est refusée (la connexion par mot de passe fonctionne).
 
 3. **Deploy**. Vérifier `https://<projet>.vercel.app/api/health` → `{"ok":true,"db":"neon"}`, puis le site `/` et la connexion démo sur `/app`.
 4. Onglet **Cron Jobs** : `/api/jobs/daily` à `30 4 * * *` (UTC) apparaît ; bouton *Run* pour tester. Les logs sont dans *Logs* → fonction `api/index`.
 
-## 3. Migrations futures
-La fonction serverless **n'applique pas** les migrations au démarrage (cold start). Après un changement de schéma :
+## 3. Migrations
+Règle (chantier P0.4, `scripts/deploy-migrate.mjs`) :
+
+| Situation | Ce que fait le build |
+|---|---|
+| Prévisualisation sans `PREVIEW_DATABASE_URL` | **aucune connexion à une base** (`DATABASE_URL` est ignoré) |
+| Prévisualisation avec `PREVIEW_DATABASE_URL` (base dédiée) | contrôle en lecture seule de cette base ; avec `MIGRATE_ON_BUILD=apply` en portée Preview : l'aligne |
+| Production | **contrôle en lecture seule** : si la base est en retard sur le code, le build échoue et la version en ligne reste en place |
+| Production avec `MIGRATE_ON_BUILD=apply` posé pour ce déploiement | applique les migrations, puis construit |
+
+La fonction serverless n'applique jamais de migration à l'exécution. Après un changement de schéma :
 ```bash
-npm run db:generate                      # génère packages/db/drizzle/00xx_*.sql
-DATABASE_URL=… npm run db:migrate        # applique sur Neon, avant/après le push
+npm run db:generate                               # génère packages/db/drizzle/00xx_*.sql
+DATABASE_URL=… npm run migrate:status -w packages/db   # LIT l'état de la base (aucune écriture)
+DATABASE_URL=… npm run db:migrate                 # APPLIQUE sur la base désignée — opération à autoriser et à tracer
 ```
-(Option : ajouter `npm run db:migrate` au `buildCommand` de `vercel.json` avec `DATABASE_URL` disponible au build.)
+L'état réel de la base se lit aussi sans console : `GET /api/status` → `checks.schema`
+(`a_jour`, `en_retard`, `en_avance`, `divergente`, `non_initialisee`, avec le nombre de migrations attendues et appliquées).
 
 ## 4. Limites Vercel à connaître
 - Fonction : 60 s max (Hobby) / 300 s (Pro) — le job quotidien prend ~8 s par restaurant : OK jusqu'à ~6 restaurants en Hobby, passer en Pro ou appeler `?restaurantId=` par restaurant au-delà.

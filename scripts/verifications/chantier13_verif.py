@@ -99,8 +99,17 @@ def main():
     print("=" * 62)
 
     # Un compte à nous : un administrateur (pour les routes /admin) et un restaurant avec des données.
-    t_admin, _, _ = inscription("admin@afrisupply.fr", "AFRISUPPORT")
+    t_admin, _, j_admin = inscription("admin@afrisupply.fr", "AFRISUPPORT")
     check("compte administrateur plateforme disponible", bool(t_admin))
+    # Chantier P0.2 : les droits d'exploitant exigent une adresse prouvée (lien de confirmation).
+    lien_admin = ((j_admin or {}).get("emailVerification") or {}).get("devLink")
+    if not lien_admin:
+        _st, renvoi = call("POST", "/auth/resend-verification", t_admin)
+        lien_admin = (renvoi or {}).get("devLink")
+    if lien_admin:
+        call("POST", "/auth/verify-email", body={"token": lien_admin.split("token=")[-1]})
+    st_moi, moi = call("GET", "/auth/me", t_admin)
+    check("l'exploitant a prouvé son adresse : ses droits sont ouverts", st_moi == 200 and ((moi or {}).get("user") or {}).get("isAdmin") is True)
     t_patron, rid, _ = inscription(f"hors-site-{int(time.time())}@resto.fr", "Chez Awa Hors Site")
     check("restaurant de test créé", bool(t_patron and rid))
     if not (t_admin and t_patron):

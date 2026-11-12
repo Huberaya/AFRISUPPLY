@@ -1,6 +1,7 @@
 // =============================================================
 // Client base de données
 //  - Production / staging : Neon serverless (DATABASE_URL=postgresql://…neon.tech…)
+//  - Prévisualisation Vercel : PREVIEW_DATABASE_URL uniquement (voir `getDatabaseUrl`)
 //  - Local sans DATABASE_URL : PGlite (Postgres WASM embarqué, fichier ./.pglite)
 // Les deux exposent la même API Drizzle → aucun code métier ne change.
 // =============================================================
@@ -12,9 +13,46 @@ export type Db = PgliteDatabase<typeof schema>;
 
 let _db: Db | null = null;
 
-export function getDatabaseUrl(): string | undefined {
-  const url = process.env.DATABASE_URL?.trim();
-  return url && url.length > 0 ? url : undefined;
+const clean = (v: string | undefined) => { const s = v?.trim(); return s && s.length > 0 ? s : undefined; };
+
+/** Vrai dans une fonction ou un build Vercel (quel que soit l'environnement). */
+export const onVercel = (env: NodeJS.ProcessEnv = process.env) => !!env.VERCEL || !!env.VERCEL_ENV;
+
+/**
+ * Adresse de la base à utiliser dans l'environnement courant.
+ *
+ * Chantier P0.4 — cloisonnement des environnements : une prévisualisation Vercel ne lit JAMAIS
+ * `DATABASE_URL`. Cette variable porte la base de production et Vercel propose par défaut de
+ * l'exposer à tous les environnements : une branche de travail se brancherait alors sur les données
+ * réelles sans que personne ne l'ait décidé. Une prévisualisation n'utilise donc que
+ * `PREVIEW_DATABASE_URL` (une base ou une branche Neon dédiée), et rien si elle est absente.
+ * Garde supplémentaire : si les deux variables portent la même adresse, la prévisualisation est refusée.
+ */
+export function getDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.VERCEL_ENV === 'preview') {
+    const preview = clean(env.PREVIEW_DATABASE_URL);
+    if (preview && preview === clean(env.DATABASE_URL)) return undefined;
+    return preview;
+  }
+  return clean(env.DATABASE_URL);
+}
+
+/** Pourquoi aucune base n'est disponible (message destiné à l'exploitant, sans secret). */
+export function databaseUnavailableReason(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (getDatabaseUrl(env)) return null;
+  if (env.VERCEL_ENV === 'preview') {
+    return clean(env.PREVIEW_DATABASE_URL)
+      ? 'PREVIEW_DATABASE_URL est identique à DATABASE_URL : une prévisualisation ne doit pas utiliser la base de production.'
+      : 'PREVIEW_DATABASE_URL est absent : cette prévisualisation n\'a pas de base dédiée (DATABASE_URL est volontairement ignoré hors production).';
+  }
+  if (onVercel(env)) return 'DATABASE_URL est absent : aucune base n\'est configurée pour ce déploiement.';
+  return null; // poste local : PGlite prend le relais
+}
+
+/** Levée quand le déploiement n'a pas de base utilisable : l'API répond 503, jamais une base de repli. */
+export class DatabaseUnavailableError extends Error {
+  readonly code = 'database_unavailable';
+  constructor(reason: string) { super(reason); this.name = 'DatabaseUnavailableError'; }
 }
 
 export function isNeon(): boolean {
@@ -35,6 +73,9 @@ export async function getDb(): Promise<Db> {
     _db = drizzle(pool, { schema }) as unknown as Db;
     console.log('[db] Neon connecté');
   } else {
+    // Sur Vercel, il n'existe pas de base locale : sans adresse valide on s'arrête net.
+    const reason = databaseUnavailableReason();
+    if (reason) throw new DatabaseUnavailableError(reason);
     const { PGlite } = await import('@electric-sql/pglite');
     const { drizzle } = await import('drizzle-orm/pglite');
     const dataDir = process.env.PGLITE_DIR ?? './.pglite';

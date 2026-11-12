@@ -11,26 +11,25 @@ import { normalizePhone, sendMessage, smsConfig, smsStats } from '../lib/sms.js'
 import { mailerConfig, sendMail, mailStats } from '../lib/mailer.js';
 import { notifyAllRestaurants } from '../lib/notify.js';
 import { recordJobRun } from '../lib/job-runs.js';
+import { cronSecretCheck } from '../lib/security.js';
 
 export const jobsRoutes = new Hono<Env>();
 
 /** Cron externe : POST (GitHub Actions/crontab) ou GET (Vercel Cron) /api/jobs/daily.
  *  Secret accepté via X-Cron-Secret, Authorization: Bearer <CRON_SECRET> (convention Vercel) ou ?secret=. */
+const cronCheck = (c: Context<Env>) => cronSecretCheck({ cron: c.req.header('x-cron-secret'), authorization: c.req.header('authorization') }, c.req.query('secret'));
+
 const runDaily = async (c: Context<Env>) => {
-  const secret = process.env.CRON_SECRET;
-  const auth = c.req.header('authorization');
-  const given = c.req.header('x-cron-secret') ?? (auth?.startsWith('Bearer ') ? auth.slice(7) : undefined) ?? c.req.query('secret');
-  if (!secret) return c.json({ error: 'CRON_SECRET non configuré' }, 503);
-  if (given !== secret) return c.json({ error: 'Secret cron invalide' }, 401);
+  const check = cronCheck(c);
+  if (check === 'absent') return c.json({ error: 'CRON_SECRET non configuré' }, 503);
+  if (check !== 'ok') return c.json({ error: 'Secret cron invalide' }, 401);
   const dryRun = c.req.query('dryRun') === '1';
   return c.json(await runDailyForAll({ dryRun }));
 };
 jobsRoutes.post('/jobs/daily', runDaily);
 /** Chantier 18 : rappel aux grossistes qui n'ont pas répondu (> REMINDER_HOURS, défaut 4 h). Vercel Cron toutes les heures. */
 const runReminders = async (c: Context<Env>) => {
-  const secret = process.env.CRON_SECRET; const auth = c.req.header('authorization');
-  const given = c.req.header('x-cron-secret') ?? (auth?.startsWith('Bearer ') ? auth.slice(7) : undefined) ?? c.req.query('secret');
-  if (!secret || given !== secret) return c.json({ error: 'Secret cron invalide' }, 401);
+  if (cronCheck(c) !== 'ok') return c.json({ error: 'Secret cron invalide' }, 401);
   // Chantier 6 : la même passe horaire relance les grossistes ET envoie les alertes urgentes en attente.
   const reminders = await remindPendingVendorOrders();
   const notifications = await notifyAllRestaurants();
@@ -39,9 +38,7 @@ const runReminders = async (c: Context<Env>) => {
 
 /** Alertes urgentes seules (rupture, écart de livraison, surfacturation) — cron dédié possible. */
 const runNotify = async (c: Context<Env>) => {
-  const secret = process.env.CRON_SECRET; const auth = c.req.header('authorization');
-  const given = c.req.header('x-cron-secret') ?? (auth?.startsWith('Bearer ') ? auth.slice(7) : undefined) ?? c.req.query('secret');
-  if (!secret || given !== secret) return c.json({ error: 'Secret cron invalide' }, 401);
+  if (cronCheck(c) !== 'ok') return c.json({ error: 'Secret cron invalide' }, 401);
   return c.json(await notifyAllRestaurants());
 };
 jobsRoutes.get('/jobs/reminders', runReminders); jobsRoutes.post('/jobs/reminders', runReminders);

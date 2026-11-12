@@ -6,6 +6,9 @@
 #      avec le serveur web de développement (certains scripts lisent les sources web servies par Vite).
 #
 # Une erreur volontairement introduite (type, lint, test, ou bundle non régénéré) fait échouer la CI.
+#
+# Aucune étape de ce fichier ne se connecte à un service réel (ni base Neon, ni Clerk, ni Stripe) :
+# la base est une base PostgreSQL embarquée, créée pour l'exécution.
 name: CI
 
 on:
@@ -46,6 +49,10 @@ jobs:
         run: npm run build
       - name: Le bundle serverless committé correspond-il aux sources ?
         run: npm run check:bundle
+      # Chantier P0.4/P0.5 : les tests exercent les sources ; la production exécute le bundle, depuis la
+      # racine du dépôt. On le charge tel quel et on vérifie qu'il démarre et répond (base embarquée).
+      - name: Le bundle serverless démarre-t-il et répond-il correctement ?
+        run: npm run check:bundle:run
 
   verifications:
     name: Vérifications de bout en bout (API réelle)

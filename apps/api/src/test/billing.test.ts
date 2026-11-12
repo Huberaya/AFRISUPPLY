@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { runMigrations, getDb, restaurants, commissions, vendors } from '@afrisupply/db';
 import { accessState, verifyStripeSignature, sweepTrials } from '../lib/billing.js';
 import { app } from '../app.js';
+import { confirmerAdresse } from './aide-comptes.js';
 
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://billing'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr';
 process.env.BILLING_ENFORCE = 'true'; process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test'; delete process.env.STRIPE_SECRET_KEY; process.env.VENDOR_AUTO_APPROVE = 'true';
@@ -17,7 +18,7 @@ const reg = async (email: string, restaurantName: string) => { const r = await c
 const sign = (body: string, t = Math.floor(Date.now() / 1000)) => `t=${t},v1=${createHmac('sha256', 'whsec_test').update(`${t}.${body}`).digest('hex')}`;
 
 let R: { h: Record<string, string>; rid: string }; let ADM: Record<string, string>;
-beforeAll(async () => { await runMigrations(); R = await reg('r@resto.fr', 'Resto'); ADM = (await reg('admin@afrisupply.fr', 'Admin')).h; }, 60_000);
+beforeAll(async () => { await runMigrations(); R = await reg('r@resto.fr', 'Resto'); ADM = (await reg('admin@afrisupply.fr', 'Admin')).h; await confirmerAdresse('admin@afrisupply.fr'); }, 60_000);
 
 describe('accessState', () => {
   const d = (n: number) => new Date(Date.now() + n * 86_400_000);

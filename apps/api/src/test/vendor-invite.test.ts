@@ -2,11 +2,12 @@ process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.e
 import { describe, it, expect, beforeAll } from 'vitest';
 import { runMigrations } from '@afrisupply/db';
 import { app } from '../app.js';
+import { confirmerAdresse } from './aide-comptes.js';
 type Json = Record<string, any>;
 const call = async (m: string, p: string, body?: unknown, h: Record<string, string> = {}) => { const r = await app.request(p, { method: m, headers: { 'content-type': 'application/json', ...h }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, json: (await r.json().catch(() => ({}))) as Json }; };
 const reg = async (email: string, name: string) => { const r = await call('POST', '/api/auth/register', { email, password: 'Plantain-Yassa-42', fullName: 'Test', restaurantName: name, city: 'Nantes' }); return { h: { Authorization: `Bearer ${r.json.token}` } }; };
 let ADM: Record<string, string>; let pid: string;
-beforeAll(async () => { await runMigrations(); ADM = (await reg('admin@afrisupply.fr', 'Admin')).h; const p = await call('POST', '/api/admin/prospects', { kind: 'fournisseur', name: 'Exofoods Rungis', city: 'Rungis', phone: '0146870000', contactName: 'M. Diallo' }, ADM); pid = p.json.prospect?.id ?? p.json.id; }, 60_000);
+beforeAll(async () => { await runMigrations(); ADM = (await reg('admin@afrisupply.fr', 'Admin')).h; await confirmerAdresse('admin@afrisupply.fr'); const p = await call('POST', '/api/admin/prospects', { kind: 'fournisseur', name: 'Exofoods Rungis', city: 'Rungis', phone: '0146870000', contactName: 'M. Diallo' }, ADM); pid = p.json.prospect?.id ?? p.json.id; }, 60_000);
 
 describe('invitation fournisseur (chantier 14)', () => {
   let url: string;

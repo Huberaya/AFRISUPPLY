@@ -59,8 +59,9 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: 'Mon compte',
     items: [
-      { to: '/app/profil', icon: User, label: 'Mon profil utilisateur', hint: 'compte Clerk, sécurité, 2FA' },
-      { to: '/app/demarrer', icon: Rocket, label: 'Configurer ma carte', hint: 'menu, produits, fournisseurs' },
+      { to: '/app/profil', icon: User, label: 'Mon profil utilisateur', hint: 'identité, adresse e-mail, sécurité' },
+      // Appliquer une carte type crée des recettes : même règle que le serveur (responsable).
+      { to: '/app/demarrer', icon: Rocket, label: 'Configurer ma carte', hint: 'menu, produits, fournisseurs', minRole: 'manager' },
       { to: '/app/etablissements', icon: Building2, label: 'Mes établissements', hint: 'gérer plusieurs restaurants' },
       { to: '/app/equipe', icon: Users, label: 'Équipe & sécurité', hint: 'membres, rôles, mot de passe' },
       { to: '/app/parametres', icon: SettingsIcon, label: 'Paramètres', hint: 'alertes, seuils, envois', minRole: 'manager' },
@@ -205,7 +206,7 @@ export default function AppLayout() {
         <Link to="/app/profil" onClick={() => setOpen(false)} className="block group">
           <p className="text-sm font-semibold text-white truncate group-hover:text-brand-400 transition">{user?.fullName || 'Mon profil'}</p>
           <p className="text-xs text-stone-500 truncate">{user?.email}</p>
-          <p className="text-[11px] text-brand-400 mt-0.5 flex items-center gap-1 font-medium">Gérer mon profil Clerk →</p>
+          <p className="text-[11px] text-brand-400 mt-0.5 flex items-center gap-1 font-medium">Gérer mon profil →</p>
         </Link>
         <button onClick={async () => { await logout(); nav('/connexion'); }} className="mt-3 flex items-center gap-2 text-xs text-stone-400 hover:text-white"><LogOut size={14} /> Se déconnecter</button>
       </div>
@@ -247,7 +248,7 @@ export default function AppLayout() {
             <Link
               to="/app/profil"
               className="rounded-xl p-2 text-stone-700 hover:bg-stone-100 touch-manipulation"
-              aria-label="Mon profil Clerk"
+              aria-label="Mon profil"
               title="Mon profil & sécurité"
             >
               <User size={18} />

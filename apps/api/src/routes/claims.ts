@@ -5,7 +5,7 @@ import { syncSequenceToMax } from '../lib/reference.js';
 import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb, claims, orders, orderLines, products, deliveryDiscrepancies, deliveries, vendors, vendorMembers, restaurants, restaurantMembers, users, alerts } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { sendMessage } from '../lib/sms.js';
 import { logOrderEvent } from '../lib/order-events.js';
@@ -15,7 +15,6 @@ const APP_URL = () => process.env.APP_URL ?? 'http://localhost:5173';
 const n = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
 const KIND: Record<string, string> = { manquant: 'Manquant', abime: 'Abîmé / casse', erreur_produit: 'Erreur de produit', qualite: 'Qualité / DLC', autre: 'Autre' };
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 
 // Numéro de litige `LIT-AAAA-NNNN` : même rattrapage de séquence que les commandes et les factures
 // (une base restaurée contient déjà des LIT-… et la séquence repartirait de 1).
@@ -42,6 +41,10 @@ const publicClaim = (c: typeof claims.$inferSelect) => ({ ...c, photo: undefined
 // ---------------- Restaurant ----------------
 export const claimRoutes = new Hono<Env>();
 claimRoutes.use('/claims', requireAuth, requireRestaurant); claimRoutes.use('/claims/*', requireAuth, requireRestaurant);
+// Chantier P0.2 — ouvrir, accepter ou escalader un litige engage le restaurant auprès de son grossiste :
+// responsable requis (l'écran « Écarts & réclamations » lui est déjà réservé).
+claimRoutes.on(['POST'], '/claims', requireMinRole('manager'));
+claimRoutes.on(['POST'], '/claims/:id/close', requireMinRole('manager'));
 
 claimRoutes.get('/claims', async (c) => {
   const db = await getDb(); const rid = c.get('restaurantId');
@@ -134,8 +137,8 @@ vendorClaimRoutes.post('/vendor/claims/:id/respond', async (c) => {
 
 // ---------------- Admin : arbitrage ----------------
 export const adminClaimRoutes = new Hono<Env>();
-adminClaimRoutes.use('/admin/claims/*', requireAuth, async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
-adminClaimRoutes.use('/admin/claims', requireAuth, async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+adminClaimRoutes.use('/admin/claims/*', requireAuth, async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+adminClaimRoutes.use('/admin/claims', requireAuth, async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
 adminClaimRoutes.get('/admin/claims', async (c) => {
   const db = await getDb();
   const rows = await db.select({ cl: claims, restaurantName: restaurants.name, vendorName: vendors.name, reference: orders.reference }).from(claims).innerJoin(restaurants, eq(restaurants.id, claims.restaurantId)).innerJoin(vendors, eq(vendors.id, claims.vendorId)).innerJoin(orders, eq(orders.id, claims.orderId)).orderBy(desc(claims.createdAt)).limit(300);

@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb, vendorReviews, orders, vendors, restaurants, vendorMembers } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { logOrderEvent } from '../lib/order-events.js';
 import { reliabilityFor, emptyReliability } from '../lib/reliability.js';
 
@@ -20,6 +20,8 @@ publicReviewRoutes.get('/public/vendors/:id/reviews', async (c) => {
 // ---- restaurant ----
 export const reviewRoutes = new Hono<Env>();
 reviewRoutes.use('/reviews', requireAuth, requireRestaurant); reviewRoutes.use('/reviews/*', requireAuth, requireRestaurant); reviewRoutes.use('/orders/:id/review', requireAuth, requireRestaurant);
+// Chantier P0.2 — un avis est une prise de position publique du restaurant sur son grossiste : responsable requis.
+reviewRoutes.on(['POST'], '/orders/:id/review', requireMinRole('manager'));
 reviewRoutes.get('/reviews/pending', async (c) => {
   const db = await getDb(); const rid = c.get('restaurantId');
   const rows = await db.select({ id: orders.id, reference: orders.reference, deliveredAt: sql<string | null>`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt})`, status: orders.status, vendorName: vendors.name, vendorId: vendors.id, reviewed: vendorReviews.id }).from(orders).innerJoin(vendors, eq(vendors.id, orders.vendorId)).leftJoin(vendorReviews, eq(vendorReviews.orderId, orders.id)).where(and(eq(orders.restaurantId, rid))).orderBy(desc(sql`coalesce(${orders.deliveredAt}, ${orders.vendorDeliveredAt}, ${orders.createdAt})`)).limit(100);

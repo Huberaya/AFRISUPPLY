@@ -168,6 +168,13 @@ try:
     st, adm, _ = call(API, "POST", "/auth/register", body={"email": "admin@afrisupply.fr", "password": "Plantain-Yassa-42", "fullName": "Admin", "restaurantName": "Admin AFS", "city": "Nantes"})
     ADMIN_TOK = adm["token"] if st == 201 else None
     check("comptes de test créés (restaurant, voisin, admin)", bool(TOK and TOK2 and ADMIN_TOK), f"admin HTTP {st}")
+    # Chantier P0.2 : s'inscrire avec une adresse de ADMIN_EMAILS ne suffit plus — l'exploitant doit
+    # prouver son adresse. On suit le vrai parcours : le lien de confirmation reçu à l'inscription.
+    st_av, _avant, _ = call(API, "GET", "/admin/billing", ADMIN_TOK)
+    lien_admin = ((adm or {}).get("emailVerification") or {}).get("devLink", "")
+    st_v, _v, _ = call(API, "POST", "/auth/verify-email", body={"token": lien_admin.split("token=")[-1]})
+    st_ap, _apres, _ = call(API, "GET", "/admin/billing", ADMIN_TOK)
+    check("droits d'exploitant : refusés tant que l'adresse n'est pas confirmée (403), ouverts ensuite", st_av == 403 and st_v == 200 and st_ap == 200, f"avant {st_av}, confirmation {st_v}, après {st_ap}")
 
     st, bl, _ = call(API, "GET", "/billing", TOK, rid=RID)
     check("l'écran d'abonnement expose prix réel, sièges et état du guichet", st == 200 and bl.get("stripe") is True and bl.get("seats") == 5 and bl.get("price", {}).get("list") == 89, json.dumps(bl.get("price"), ensure_ascii=False))
