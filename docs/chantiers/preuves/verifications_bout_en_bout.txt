@@ -43,4 +43,6 @@ Intégration continue (GitHub Actions, demande de fusion n° 1) — mêmes 13 sc
   45fc754  exécution 43252514046  Qualité : réussi (2 min 56 s) · Bout en bout : réussi (14 min 51 s)
   2bf98b2  exécution 43256024698  Qualité : réussi (2 min 26 s) · Bout en bout : réussi (14 min 39 s)
   dc0d382  exécution 43276393451  Qualité : réussi (1 min 52 s) · Bout en bout : réussi (14 min 45 s)
+  c2b843f  exécution 43283984008  Qualité : réussi (2 min 34 s) · Bout en bout : réussi (14 min 56 s) · Navigateur : réussi (1 min 15 s, 72/72)
 Ce sont les premières exécutions réussies de l'intégration continue depuis le 2026-09-23.
+Durées lues sur GitHub (heure de début et de fin de chaque tâche).

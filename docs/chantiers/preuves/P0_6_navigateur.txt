@@ -19,6 +19,13 @@ Rejouer :
 En intégration continue : tâche « Parcours dans un navigateur » (.github/workflows/ci.yml), avec le
 Chrome de la machine ; le rapport et les captures d'écran sont joints à chaque exécution.
 
+Première exécution sur GitHub (machine neuve, autre navigateur que celui de l'agent) :
+  commit c2b843f, exécution 43283984008, tâche « Parcours dans un navigateur » : réussie en 1 min 15 s
+  journal de la tâche : « Appels à l'API vus par le navigateur : 215 (dont 0 en erreur 5xx) »
+                        « BILAN NAVIGATEUR : 72/72 vérifications réussies »
+  pièce jointe « parcours-navigateur » : 21 fichiers (rapport et captures d'écran)
+L'application y tourne sous Node 20, comme les autres tâches ; seul l'outil de pilotage utilise Node 22.
+
 
 1. DÉFAUT TROUVÉ PAR CE PARCOURS — fenêtre « Nouveau fournisseur » hors de l'écran
 --------------------------------------------------------------------------------------------

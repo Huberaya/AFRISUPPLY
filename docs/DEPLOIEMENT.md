@@ -40,7 +40,7 @@ Les autres variables (même tableau, colonne « Portée » = Production ; à dup
 
 3. **Deploy**. Vérifier `https://<projet>.vercel.app/api/health` → `{"ok":true,"db":"neon"}`, puis le site `/` et la connexion démo sur `/app`.
 4. Onglet **Cron Jobs** : `/api/jobs/daily` à `30 4 * * *` (UTC) apparaît ; bouton *Run* pour tester. Les logs sont dans *Logs* → fonction `api/index`.
-5. **Région des fonctions = région de la base.** Par défaut les fonctions tournent en `iad1` (États-Unis). Avec une base Neon en Europe, chaque requête SQL coûte un aller-retour transatlantique (mesuré : ~96 ms au lieu de 1 à 5 ms). Régler *Settings → Functions → Function Region* (ou `"regions": ["fra1"]` dans `vercel.json`) sur la région de la base, puis vérifier `GET /api/status` → `checks.database.colocated: true` et `latencyMs` < 10.
+5. **Région des fonctions = région de la base.** Par défaut les fonctions tournent en `iad1` (États-Unis). Avec une base Neon en Europe, chaque requête SQL coûte un aller-retour transatlantique (mesuré : ~96 ms au lieu de 1 à 5 ms). Le dépôt fixe la région dans `vercel.json` (`"regions": ["fra1"]`, Francfort — la région de la base annoncée par les mentions légales) ; si la base est ailleurs, changer cette ligne (elle l'emporte sur *Settings → Functions → Function Region*), puis vérifier `GET /api/status` → `checks.database.colocated: true` et `latencyMs` < 10.
 
 ## 3. Migrations
 Règle (chantier P0.4, `scripts/deploy-migrate.mjs`) :

@@ -59,18 +59,33 @@ Conséquences mesurées (`preuves/P0_4_passe_quotidienne.txt`) :
 La branche de correction découpe la passe en tranches et la reprend : elle se terminera même avec
 cette latence. Mais la cause de fond se règle ici, en une ligne.
 
-| Si V11 montre… | Région de fonctions à choisir |
+**Ce réglage est déjà dans la branche, et il attend une confirmation.** Depuis le commit `c2b843f`,
+`vercel.json` contient `"regions": ["fra1"]` : au déploiement de la branche, les fonctions passeront
+de la Virginie à Francfort. L'agent a fait ce choix **sans avoir lu la configuration réelle**, sur deux
+indices concordants :
+
+- la page « Mentions légales » du site publie une base Neon à Francfort (région `eu-central-1`) et des
+  serveurs dans l'Union européenne — ce que la région actuelle, `iad1`, contredit ;
+- 96 ms par requête depuis la Virginie est la durée d'un aller-retour entre les États-Unis et l'Europe.
+
+Le point V11 tranche. **À lire avant la fusion** ; une ligne suffit en retour.
+
+| Si V11 montre… | Alors |
 |---|---|
-| `eu-central-1` (Francfort) | `fra1` |
-| `eu-west-2` (Londres) | `lhr1` |
-| `us-east-1` | `iad1` (déjà le cas : chercher la cause ailleurs) |
-| `us-east-2` | `cle1` |
+| `eu-central-1` (Francfort) | Rien à changer : `fra1` est la bonne région |
+| `eu-west-2` (Londres) | L'agent remplace `fra1` par `lhr1` (une ligne) avant la fusion |
+| `us-east-1` (Virginie) | L'agent retire la ligne (`iad1` est alors la bonne région, et les 96 ms ont une autre cause, à chercher) ; les mentions légales sont à corriger |
+| `us-east-2` (Ohio) | L'agent remplace par `cle1` ; les mentions légales sont à corriger |
+| autre chose | Le signaler tel quel : l'agent choisit la région voisine |
 
-Deux façons de faire, au choix (une seule suffit) :
+Si V11 ne peut pas être lu avant la fusion : le réglage ne change pas le fonctionnement de
+l'application, seulement sa vitesse. Si la base n'était pas en Europe, les écrans seraient plus lents
+qu'aujourd'hui, et cela se lirait aussitôt (paragraphe suivant). Le retour en arrière tient en une ligne.
 
-1. dans le dépôt : ajouter `"regions": ["fra1"]` à `vercel.json` — l'agent le fait dans la branche dès
-   que la région de la base est confirmée (V11), et le changement passe par la demande de fusion ;
-2. dans Vercel : Project → Settings → Functions → Function Region.
+Pour séparer ce changement du déploiement de correction, deux possibilités : demander à l'agent de
+retirer la ligne de la branche, puis régler la région plus tard dans Vercel (Project → Settings →
+Functions → Function Region) ; ou la laisser. Tant que la ligne est dans `vercel.json`, c'est elle qui
+s'applique, pas le réglage du tableau de bord.
 
 Après le déploiement suivant, la branche de correction rend le résultat lisible sans aucun accès :
 `GET /api/status` → `checks.database.latencyMs` (un aller-retour, connexion déjà ouverte) et
@@ -101,6 +116,9 @@ dans Vercel — à copier de Vercel vers GitHub directement, sans passer par une
 | Une prévisualisation n'utilise que `PREVIEW_DATABASE_URL` | Tant qu'elle n'existe pas, l'API de prévisualisation répond 503 (le site statique s'affiche) | Créer la base de prévisualisation (fiche NEON-02), puis poser la variable en portée Preview |
 | Sans `VITE_CLERK_PUBLISHABLE_KEY` au build, la connexion Clerk n'est plus proposée | Si la production comptait sur la clé de test écrite dans le code, le bouton Clerk disparaît | V4 et fiche CLERK-01 |
 | Déconnexion = révocation des sessions du compte | Se déconnecter sur un appareil déconnecte les autres appareils du même compte | Décision de produit à confirmer |
+| Les fonctions s'exécutent à Francfort (`fra1`) au lieu de la Virginie (`iad1`) | Rapide si la base est à Francfort, comme le site l'annonce ; plus lent qu'aujourd'hui si elle est ailleurs | V11 |
+| Une seule passe quotidienne par jour ; elle se poursuit d'elle-même par tranches | Un second déclenchement le même jour répond « déjà faite » ; `?force=1` la relance | — |
+| Invitations : 20 par heure et par restaurant ; noms de restaurant, de personne et de grossiste limités à 80 caractères, sans chevron ni adresse web | Ne touche que les nouvelles saisies ; les noms existants ne sont pas modifiés | — |
 
 ## Opérations — réglages (uniquement après décision explicite)
 
@@ -109,8 +127,8 @@ dans Vercel — à copier de Vercel vers GitHub directement, sans passer par une
 2. Créer, en portée **Preview** uniquement : `PREVIEW_DATABASE_URL` (base dédiée, fiche NEON-02),
    `MIGRATE_ON_BUILD=apply` (le build de prévisualisation aligne alors SA base, jamais celle de
    production), un `JWT_SECRET` différent de celui de la production, `APP_URL` si l'on veut tester Clerk.
-3. Si la région des fonctions n'est pas celle de la base : la rapprocher (voir « La région des
-   fonctions » ci-dessus).
+3. Région des fonctions : rien à régler dans Vercel si V11 confirme `eu-central-1` (la branche s'en
+   charge). Sinon, le dire à l'agent avant la fusion (voir « La région des fonctions » ci-dessus).
 4. Sauvegardes : sur la plateforme, le disque d'une fonction disparaît avec elle. Sans les variables
    `BACKUP_S3_*` (V12), **aucune sauvegarde applicative n'est conservée** — la page de statut de la
    production indique aujourd'hui « 0 fichier ». La seule protection des données est alors celle de
@@ -121,8 +139,12 @@ dans Vercel — à copier de Vercel vers GitHub directement, sans passer par une
 
 - Retirer une variable de la portée Production par erreur arrête le service au déploiement suivant.
   Ne modifier que la portée **Preview** dans le point 1.
-- Changer la région des fonctions s'applique au déploiement suivant : à faire en dehors d'un
-  déploiement de correction, et à vérifier par `GET /api/status` (`checks.database.latencyMs`).
+- Le changement de région voyage avec le déploiement de correction (il est dans la branche). C'est un
+  choix : la demande de fusion contient déjà tous les chantiers, et les mesures de la passe quotidienne
+  n'ont de sens que dans la région définitive. Contrepartie : si un ralentissement apparaît après le
+  déploiement, la région est le premier suspect — à lire dans `GET /api/status`
+  (`checks.database.colocated`, `checks.database.latencyMs`). Pour l'éviter, faire retirer la ligne
+  avant la fusion.
 
 ## Opérations interdites
 

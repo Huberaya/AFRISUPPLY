@@ -19,7 +19,7 @@ le serveur web doit donc tourner aussi. Les variables `AFS_API` et `AFS_WEB` per
 ## Exécution
 
 ```bash
-npm run verifs:e2e                 # les 12 scripts d'affilée (~30 min : pauses anti-limitation de débit)
+npm run verifs:e2e                 # les 13 scripts d'affilée (~15 min)
 AFS_PAUSE=0 npm run verifs:e2e     # sans pauses (comptes de test déjà espacés)
 python3 scripts/verifications/chantier9_verif.py   # un seul script
 ```
@@ -44,4 +44,26 @@ Le lanceur sort en **erreur** si un script échoue.
 | `chantier12_verif.py` | Exploitation : export réel des données du restaurant, **restauration prouvée dans une base neuve**, détection d'altération, refus d'écraser une base non vide, rotation des fichiers, supervision des tâches (cron muet détecté), journal d'audit + CSV, canal de support unique |
 | `chantier11_verif.py` | Expérience réelle : plus aucune boîte de dialogue du navigateur, confirmations accessibles, notifications, menu par tâche, recherche d'écran, parcours « Rupture → Commander → Recevoir », erreurs avec « Réessayer » — et les écrans du parcours répondent sur l'API |
 
-Dernier relevé complet : **507 vérifications**, 12 scripts sur 12 (voir le rapport de fin de chantier 12).
+Dernier relevé complet : **535 vérifications**, 13 scripts sur 13 (12 novembre 2026 —
+`docs/chantiers/preuves/verifications_bout_en_bout.txt`).
+
+Les scripts 6, 9 et 12 appellent la passe quotidienne avec `?force=1` : sans cela, une passe déjà faite
+dans la journée répond « déjà faite » et ne refait rien (chantier P0.4).
+
+## Et dans un vrai navigateur
+
+Ces scripts parlent à l'API. Le parcours d'un client **dans un navigateur** (site construit, clics,
+formulaires, fenêtres) est vérifié à part : `scripts/navigateur/parcours.mjs`, 72 vérifications,
+`npm run verifs:navigateur`, tâche « navigateur » de l'intégration continue.
+
+```bash
+npm run build -w apps/web
+PGLITE_DIR=/tmp/afs-pglite-nav SEED_DEMO=true JWT_SECRET=dev-secret-local-dev-secret-local-0001 \
+  CRON_SECRET=dev-cron MAIL_OUTBOX_DIR=/tmp/afs-boite-nav npm run start -w apps/api &
+(cd apps/web && API_URL=http://localhost:8787 npx vite preview --port 3100 --strictPort) &
+npm --prefix scripts/navigateur ci        # une fois (Node 22 ; ajoute un Chromium si la machine n'a pas de Chrome)
+AFS_OUTBOX=/tmp/afs-boite-nav npm run verifs:navigateur
+```
+
+Rapport et captures d'écran : `scripts/navigateur/resultats/` (non versionnés). Ce que le parcours couvre
+et ce qu'il ne couvre pas encore : `docs/chantiers/P0_6_PARCOURS.md`.
