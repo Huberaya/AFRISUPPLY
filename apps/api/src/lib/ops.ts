@@ -66,10 +66,14 @@ export function clientIp(c: Context): string {
   return xff ?? c.req.header('x-real-ip') ?? 'local';
 }
 
-export function rateLimit(opts: { windowMs: number; max: number; key?: (c: Context) => string }): MiddlewareHandler {
+/**
+ * Limite de débit. Le compteur est tenu par adresse cliente, sauf `parAdresse: false` : le compteur est
+ * alors celui de la clé seule (un restaurant, par exemple) et changer d'adresse ne le remet pas à zéro.
+ */
+export function rateLimit(opts: { windowMs: number; max: number; key?: (c: Context) => string; parAdresse?: boolean }): MiddlewareHandler {
   return async (c, next) => {
-    const ip = clientIp(c);
-    const k = `${opts.key ? opts.key(c) : c.req.path}:${ip}`;
+    const base = opts.key ? opts.key(c) : c.req.path;
+    const k = opts.parAdresse === false ? base : `${base}:${clientIp(c)}`;
     let n: number; let resetMs: number;
     try {
       ({ n, resetMs } = await bumpCounter(k, opts.windowMs));

@@ -61,7 +61,7 @@ const ROLE_LABEL: Record<string, string> = { owner: 'Propriétaire', manager: 'R
 // Chantier P0.5 — chaque invitation fait partir un e-mail vers une adresse choisie par le compte. Le
 // plafond d'utilisateurs de l'offre ne freine pas les envois (on peut retirer puis réinviter) : on
 // borne donc les invitations elles-mêmes, par restaurant.
-const freinInvitations = rateLimit({ windowMs: 60 * 60_000, max: 20, key: (c) => `invitations:${(c as unknown as { get: (k: string) => string }).get('restaurantId')}` });
+const freinInvitations = rateLimit({ windowMs: 60 * 60_000, max: 20, parAdresse: false, key: (c) => `invitations:${(c as unknown as { get: (k: string) => string }).get('restaurantId')}` });
 
 /** Invitation d'un membre par e-mail (propriétaire). */
 memberRoutes.post('/members', requireMinRole('owner'), freinInvitations, async (c) => {

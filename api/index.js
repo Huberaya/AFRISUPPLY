@@ -3247,8 +3247,8 @@ function clientIp(c) {
 }
 function rateLimit(opts) {
   return async (c, next) => {
-    const ip = clientIp(c);
-    const k = `${opts.key ? opts.key(c) : c.req.path}:${ip}`;
+    const base = opts.key ? opts.key(c) : c.req.path;
+    const k = opts.parAdresse === false ? base : `${base}:${clientIp(c)}`;
     let n18;
     let resetMs;
     try {
@@ -13039,7 +13039,7 @@ memberRoutes.get("/members", async (c) => {
   });
 });
 var ROLE_LABEL = { owner: "Propri\xE9taire", manager: "Responsable", staff: "\xC9quipe (quotidien)" };
-var freinInvitations = rateLimit({ windowMs: 60 * 6e4, max: 20, key: (c) => `invitations:${c.get("restaurantId")}` });
+var freinInvitations = rateLimit({ windowMs: 60 * 6e4, max: 20, parAdresse: false, key: (c) => `invitations:${c.get("restaurantId")}` });
 memberRoutes.post("/members", requireMinRole("owner"), freinInvitations, async (c) => {
   const body3 = z19.object({
     email: z19.string().email(),

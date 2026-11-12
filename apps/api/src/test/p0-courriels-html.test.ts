@@ -131,14 +131,16 @@ describe('e-mails réellement écrits : un nom piégé arrive inoffensif', () =>
     expect(recus[0]).toContain('&lt;a href=');
   });
 
-  it('les invitations sont freinées : au-delà de 20 par heure et par restaurant, 429 (et aucun e-mail de plus)', async () => {
+  it('les invitations sont freinées : au-delà de 20 par heure et par restaurant, quelle que soit l’adresse cliente, 429 (et aucun e-mail de plus)', async () => {
     await _resetRateLimits();
     const r = await appel('POST', '/api/auth/register', { email: 'expediteur@resto.test', password: 'Plantain-Yassa-42', fullName: 'Expéditeur En Série', restaurantName: 'Chez Série', city: 'Nantes' });
     const h1 = { authorization: `Bearer ${r.json.token}`, 'x-restaurant-id': r.json.restaurant.id };
     const codes: number[] = [];
     for (let i = 0; i < 23; i++) {
-      // inviter puis retirer : le plafond d'utilisateurs de l'offre ne freine pas ces envois
-      const inv = await appel('POST', '/api/members', { email: `serie-${i}@victime.test`, role: 'staff' }, h1);
+      // inviter puis retirer : le plafond d'utilisateurs de l'offre ne freine pas ces envois.
+      // Chaque invitation arrive d'une adresse cliente différente : le compteur est celui du restaurant,
+      // changer d'adresse ne le remet pas à zéro.
+      const inv = await appel('POST', '/api/members', { email: `serie-${i}@victime.test`, role: 'staff' }, { ...h1, 'x-forwarded-for': `203.0.113.${i + 1}` });
       codes.push(inv.status);
       if (inv.status === 201) {
         const membres = await appel('GET', '/api/members', undefined, h1);
