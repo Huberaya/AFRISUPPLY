@@ -4063,14 +4063,17 @@ async function jobHealth() {
   const runs = await db.select().from(jobRuns).orderBy(desc2(jobRuns.startedAt)).limit(400);
   const out = {};
   const surveilles = jobsSurveilles();
+  const enCours = (r) => r.status === "running" && Date.now() - new Date(r.startedAt).getTime() < RUNNING_GRACE_MS;
   for (const job of Object.keys(surveilles)) {
-    const last = runs.find((r) => r.job === job) ?? null;
+    const last = runs.find((r) => r.job === job && !enCours(r)) ?? null;
     const hoursAgo = last ? (Date.now() - new Date(last.finishedAt).getTime()) / 36e5 : null;
     const state = !last ? "never" : last.status !== "ok" ? "degraded" : hoursAgo > surveilles[job] ? "stale" : "ok";
+    const s = last?.summary ?? null;
+    const coupee = last?.status === "running" ? `Passe interrompue : d\xE9marr\xE9e le ${new Date(last.startedAt).toISOString()}, arr\xEAt\xE9e apr\xE8s ${Math.round(last.durationMs / 1e3)} s \xE0 l'\xE9tape \xAB ${s?.etape ?? "inconnue"} \xBB (${s?.traites ?? "?"} restaurant(s) trait\xE9(s) sur ${s?.restaurants ?? "?"}). Dur\xE9e maximale d'ex\xE9cution probablement d\xE9pass\xE9e.` : null;
     out[job] = {
       state,
       maxHours: surveilles[job],
-      lastRun: last ? { status: last.status, finishedAt: new Date(last.finishedAt).toISOString(), durationMs: last.durationMs, hoursAgo: Math.round(hoursAgo * 10) / 10, summary: last.summary ?? null, error: last.error ?? null } : null
+      lastRun: last ? { status: last.status === "running" ? "interrompue" : last.status, finishedAt: new Date(last.finishedAt).toISOString(), durationMs: last.durationMs, hoursAgo: Math.round(hoursAgo * 10) / 10, summary: last.summary ?? null, error: coupee ?? last.error ?? null } : null
     };
   }
   return out;
@@ -4097,7 +4100,7 @@ async function watchdog(opts = { self: "unknown" }) {
   }
   return { checked: Object.keys(jobs).length, late: raised };
 }
-var SUPPORT, seuil, JOB_MAX_HOURS;
+var SUPPORT, seuil, JOB_MAX_HOURS, RUNNING_GRACE_MS;
 var init_ops_health = __esm({
   "apps/api/src/lib/ops-health.ts"() {
     "use strict";
@@ -4126,6 +4129,7 @@ var init_ops_health = __esm({
       // Chantier 13 : la copie hors site est supervisée comme les autres — si elle cesse, on le sait.
       "offsite-backup": seuil("offsite-backup", 30)
     };
+    RUNNING_GRACE_MS = 5 * 6e4;
   }
 });
 
@@ -8748,11 +8752,28 @@ async function runDailyForAll(opts = {}) {
   const all = await db.select({ id: restaurants.id }).from(restaurants);
   const results = [];
   const startedAt = /* @__PURE__ */ new Date();
+  let runId = null;
+  const avancement = async (etape, done) => {
+    if (opts.dryRun) return;
+    const now = /* @__PURE__ */ new Date();
+    const valeurs = { finishedAt: now, durationMs: now.getTime() - startedAt.getTime(), summary: { enCours: true, etape, restaurants: all.length, traites: done } };
+    try {
+      if (!runId) {
+        const [row] = await db.insert(jobRuns).values({ job: "daily", status: "running", startedAt, ...valeurs }).returning({ id: jobRuns.id });
+        runId = row.id;
+      } else await db.update(jobRuns).set(valeurs).where(eq25(jobRuns.id, runId));
+    } catch (e) {
+      console.error("[jobs] job_runs (avancement)", e.message);
+    }
+  };
+  await avancement("restaurants", 0);
   for (const r of all) {
     const { preview: _p, ...res } = await runDailyForRestaurant(r.id, opts);
     void _p;
     results.push(res);
+    await avancement("restaurants", results.length);
   }
+  await avancement("facturation, relances, sauvegardes", results.length);
   const errors2 = results.filter((r) => r.digest === "error");
   const summary = { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), dryRun: !!opts.dryRun, count: results.length, sent: results.filter((r) => r.digest === "sent").length, errors: errors2.length, results };
   let billing = {};
@@ -8851,8 +8872,10 @@ L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY
   }
   const finishedAt = /* @__PURE__ */ new Date();
   if (!opts.dryRun) {
+    const final = { status: errors2.length === 0 ? "ok" : errors2.length === results.length ? "error" : "partial", finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors2.map((e) => `${e.name}: ${e.error}`).join(" | ") || null };
     try {
-      await db.insert(jobRuns).values({ job: "daily", status: errors2.length === 0 ? "ok" : errors2.length === results.length ? "error" : "partial", startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors2.map((e) => `${e.name}: ${e.error}`).join(" | ") || null });
+      const mises = runId ? await db.update(jobRuns).set(final).where(eq25(jobRuns.id, runId)).returning({ id: jobRuns.id }) : [];
+      if (!mises.length) await db.insert(jobRuns).values({ job: "daily", startedAt, ...final });
     } catch (e) {
       console.error("[jobs] job_runs", e);
     }

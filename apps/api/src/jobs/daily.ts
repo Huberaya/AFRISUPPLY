@@ -179,7 +179,26 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
   const db = await getDb();
   const all = await db.select({ id: restaurants.id }).from(restaurants);
   const results: DailyResult[] = []; const startedAt = new Date();
-  for (const r of all) { const { preview: _p, ...res } = await runDailyForRestaurant(r.id, opts); void _p; results.push(res); }
+  // Chantier P0.4 — la passe laisse une trace DÈS SON DÉMARRAGE, puis l'avance après chaque restaurant.
+  // Avant, la seule trace était écrite tout à la fin : une passe coupée en route (durée maximale d'une
+  // fonction, panne) ne laissait rien, et la supervision ne pouvait dire ni qu'elle avait démarré ni où
+  // elle s'était arrêtée. La même ligne est complétée en fin de passe (un passage = une ligne).
+  let runId: string | null = null;
+  const avancement = async (etape: string, done: number) => {
+    if (opts.dryRun) return;
+    const now = new Date();
+    const valeurs = { finishedAt: now, durationMs: now.getTime() - startedAt.getTime(), summary: { enCours: true, etape, restaurants: all.length, traites: done } };
+    try {
+      if (!runId) { const [row] = await db.insert(jobRuns).values({ job: 'daily', status: 'running', startedAt, ...valeurs }).returning({ id: jobRuns.id }); runId = row.id; }
+      else await db.update(jobRuns).set(valeurs).where(eq(jobRuns.id, runId));
+    } catch (e) { console.error('[jobs] job_runs (avancement)', (e as Error).message); }
+  };
+  await avancement('restaurants', 0);
+  for (const r of all) {
+    const { preview: _p, ...res } = await runDailyForRestaurant(r.id, opts); void _p; results.push(res);
+    await avancement('restaurants', results.length);
+  }
+  await avancement('facturation, relances, sauvegardes', results.length);
   const errors = results.filter((r) => r.digest === 'error');
   const summary = { ranAt: (opts.now ?? new Date()).toISOString(), dryRun: !!opts.dryRun, count: results.length, sent: results.filter((r) => r.digest === 'sent').length, errors: errors.length, results };
   // Chantier 6 : essais expirés + relances J-7/J-3/J-1 ; factures de commission le 1er du mois pour le mois précédent.
@@ -250,7 +269,12 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date } = {}
   // une sauvegarde ratée.
   const finishedAt = new Date();
   if (!opts.dryRun) {
-    try { await db.insert(jobRuns).values({ job: 'daily', status: errors.length === 0 ? 'ok' : errors.length === results.length ? 'error' : 'partial', startedAt, finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors.map((e) => `${e.name}: ${e.error}`).join(' | ') || null }); } catch (e) { console.error('[jobs] job_runs', e); }
+    const final = { status: errors.length === 0 ? 'ok' : errors.length === results.length ? 'error' : 'partial', finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors.map((e) => `${e.name}: ${e.error}`).join(' | ') || null };
+    try {
+      // La ligne ouverte au démarrage reçoit le résultat ; à défaut (ouverture impossible), on l'écrit maintenant.
+      const mises = runId ? await db.update(jobRuns).set(final).where(eq(jobRuns.id, runId)).returning({ id: jobRuns.id }) : [];
+      if (!mises.length) await db.insert(jobRuns).values({ job: 'daily', startedAt, ...final });
+    } catch (e) { console.error('[jobs] job_runs', e); }
   }
   return summary;
 }

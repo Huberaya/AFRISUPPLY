@@ -73,19 +73,32 @@ export function jobsSurveilles(): Record<string, number> {
   return Object.fromEntries(Object.entries(JOB_MAX_HOURS).filter(([job]) => job !== 'offsite-backup' || offsiteConfigured()));
 }
 
+/**
+ * Une passe encore « en cours » au-delà de ce délai n'est plus en cours : elle a été coupée
+ * (durée maximale d'une fonction serverless : 60 s sur l'offre actuelle ; marge large pour un serveur autonome).
+ */
+export const RUNNING_GRACE_MS = 5 * 60_000;
+
 /** Santé de chaque job supervisé, calculée à partir des passages réellement enregistrés (job_runs). */
 export async function jobHealth(): Promise<Record<string, JobHealth>> {
   const db = await getDb();
   const runs = await db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(400);
   const out: Record<string, JobHealth> = {};
   const surveilles = jobsSurveilles();
+  const enCours = (r: (typeof runs)[number]) => r.status === 'running' && Date.now() - new Date(r.startedAt).getTime() < RUNNING_GRACE_MS;
   for (const job of Object.keys(surveilles)) {
-    const last = runs.find((r) => r.job === job) ?? null;
+    // Une passe réellement en cours ne dit encore rien : on juge sur le dernier passage achevé (ou coupé).
+    const last = runs.find((r) => r.job === job && !enCours(r)) ?? null;
     const hoursAgo = last ? (Date.now() - new Date(last.finishedAt).getTime()) / 3_600_000 : null;
     const state: JobState = !last ? 'never' : last.status !== 'ok' ? 'degraded' : hoursAgo! > surveilles[job] ? 'stale' : 'ok';
+    // Passe démarrée mais jamais achevée : on dit où elle s'est arrêtée (chantier P0.4).
+    const s = (last?.summary ?? null) as { etape?: string; restaurants?: number; traites?: number } | null;
+    const coupee = last?.status === 'running'
+      ? `Passe interrompue : démarrée le ${new Date(last.startedAt).toISOString()}, arrêtée après ${Math.round(last.durationMs / 1000)} s à l'étape « ${s?.etape ?? 'inconnue'} » (${s?.traites ?? '?'} restaurant(s) traité(s) sur ${s?.restaurants ?? '?'}). Durée maximale d'exécution probablement dépassée.`
+      : null;
     out[job] = {
       state, maxHours: surveilles[job],
-      lastRun: last ? { status: last.status, finishedAt: new Date(last.finishedAt).toISOString(), durationMs: last.durationMs, hoursAgo: Math.round(hoursAgo! * 10) / 10, summary: last.summary ?? null, error: last.error ?? null } : null,
+      lastRun: last ? { status: last.status === 'running' ? 'interrompue' : last.status, finishedAt: new Date(last.finishedAt).toISOString(), durationMs: last.durationMs, hoursAgo: Math.round(hoursAgo! * 10) / 10, summary: last.summary ?? null, error: coupee ?? last.error ?? null } : null,
     };
   }
   return out;
