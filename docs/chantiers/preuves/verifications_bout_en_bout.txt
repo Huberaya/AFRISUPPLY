@@ -1,0 +1,21 @@
+Vérifications de bout en bout — 13 scripts contre une API réellement démarrée (base PostgreSQL embarquée, faux stockage S3)
+Arbre de travail de la branche arena/326bcc8c-afrisupply, après corrections P0.2 à P0.5 (zod 4.6.7, hono 4.13.18, @hono/node-server 2.1.8)
+Début 2026-11-12T15:21:34Z — fin 2026-11-12T15:35:27Z — code de sortie 0
+
+chantier11_verif             === Chantier 11 — 40/40 vérifications réussies ===
+chantier12_verif             === Chantier 12 — 71/71 vérifications réussies ===
+chantier13_verif             CHANTIER 13 — 24/24 vérifications réussies
+chantier1_verif              RÉSULTAT CHANTIER 1 : 23/23 vérifications en direct OK
+chantier2_verif              === 41/41 vérifications réussies ===
+chantier3_verif              === 26/26 vérifications réussies ===
+chantier4_verif              RÉSULTAT : 51/51 vérifications OK
+chantier5_verif              RÉSULTAT CHANTIER 5 : 42/42 vérifications OK
+chantier6_verif              === Résultat : 44/44 vérifications passées ===
+chantier7_verif              === Chantier 7 — 47/47 vérifications réussies ===
+chantier8_verif              === Chantier 8 — 36/36 vérifications réussies ===
+chantier9_verif              === Chantier 9 — 40/40 vérifications réussies ===
+scenario_tests               BILAN : 49/49 OK, 0 KO
+
+TOTAL : 534/534 vérifications · 13/13 scripts OK
+Référence avant corrections (commit 15c8b81, 2026-11-12 09:22–09:36Z) : 530/530.
+Écart : +4 vérifications ajoutées (les droits d'exploitant exigent une adresse confirmée : scripts 7, 8, 12 et 13).

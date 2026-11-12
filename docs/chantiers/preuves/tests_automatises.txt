@@ -1,0 +1,22 @@
+TESTS AUTOMATISÉS — arbre de travail de la branche arena/326bcc8c-afrisupply, 2026-11-12
+
+npm run lint       : code de sortie 0 (avant : 1, deux erreurs)
+npm run typecheck  : code de sortie 0
+npm test           : code de sortie 0
+  packages/db      :   5 tests réussis sur 5   (1 fichier)
+  apps/api         : 595 tests réussis sur 595 (43 fichiers)
+  apps/web         :  80 tests réussis sur 80  (21 fichiers)
+  total            : 680 réussis, 0 échoué     (avant : 518 = 5 + 433 + 80)
+npm run build      : code de sortie 0
+npm run check:bundle, check:bundle:run : code de sortie 0
+npm audit --omit=dev : 0 vulnérabilité (avant : 4 — 1 critique, 1 haute, 2 modérées)
+
+Tests ajoutés dans apps/api/src/test (164 ; les 2 anciens tests de clerk-sync, qui validaient le défaut, sont remplacés) :
+  clerk-sync.test.ts          21  défaut critique : attaque d'origine, variantes, connexions légitimes
+  p0-cloisonnement.test.ts    22  deux restaurants et deux grossistes réels, balayage de toutes les routes à paramètre
+  p0-roles.test.ts            79  matrice des rôles : chaque route d'écriture classée et vérifiée pour trois rôles
+  p0-api-robustesse.test.ts   20  401 sans session, JSON mal formé, corps vide, taille, défauts route par route
+  p0-config.test.ts           22  secret de session, garde de configuration, prévisualisation, migrations
+
+Tous ces tests s'exécutent sur une base PostgreSQL embarquée ; Clerk y est simulé (faux-clerk.ts).
+Ils prouvent le code. Ils ne prouvent ni la configuration de Vercel, ni l'état de la base Neon, ni l'instance Clerk réelle.

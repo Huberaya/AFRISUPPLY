@@ -1,0 +1,59 @@
+DÉFAUT CRITIQUE — POST /api/auth/clerk-sync : même sonde, avant et après correction
+Sonde : celle de l'audit P0.1 (sonde_clerk_sync), inchangée. Base PostgreSQL embarquée, aucun service réel.
+AVANT : commit 15c8b81 (exécution du 2026-11-12, audit). APRÈS : branche arena/326bcc8c-afrisupply (exécution du 2026-11-12).
+
+════ mode « sans-cle » — AVANT ════
+mode : sans-cle
+la victime crée un fournisseur                                   201
+1. appelant sans compte, adresse e-mail de la victime            {"status":200,"jetonRecu":true,"memeIdentifiantQueLaVictime":true}
+2. profil lu avec ce jeton                                       {"status":200,"email":"victime@exemple.test","roles":["owner"]}
+3. fournisseurs de la victime                                    {"status":200,"noms":["Fournisseur confidentiel de la victime"]}
+4. même appel avec une adresse de ADMIN_EMAILS                   {"status":200,"isAdmin":true}
+5. tableau de bord, exploitation, journal d'audit avec ce jeton  [200,200,200]
+6. témoin : mêmes pages sans jeton                               [401,401,401]
+6. témoin : mêmes pages avec un compte ordinaire                 [403,403,403]
+7. 25 appels consécutifs                                         {"reponses200":25,"autres":[]}
+effet de bord sur le compte visé                                 {"identifiantClerkRemplace":"user_rafale_24","adresseMarqueeVerifiee":true}
+
+════ mode « sans-cle » — APRÈS ════
+mode : sans-cle
+la victime crée un fournisseur                                   201
+1. appelant sans compte, adresse e-mail de la victime            {"status":401,"jetonRecu":false,"memeIdentifiantQueLaVictime":false}
+2. profil lu avec ce jeton                                       {"status":401}
+3. fournisseurs de la victime                                    {"status":401,"noms":[]}
+4. même appel avec une adresse de ADMIN_EMAILS                   {"status":401}
+5. tableau de bord, exploitation, journal d'audit avec ce jeton  [401,401,401]
+6. témoin : mêmes pages sans jeton                               [401,401,401]
+6. témoin : mêmes pages avec un compte ordinaire                 [403,403,403]
+7. 25 appels consécutifs                                         {"reponses200":0,"autres":[401,401,401,401,401,401,401,401,401,401,401,401,401,401,401,401,401,401,429,429,429,429,429,429,429]}
+effet de bord sur le compte visé                                 {"identifiantClerkRemplace":null,"adresseMarqueeVerifiee":false}
+
+════ mode « avec-cle » — AVANT ════
+mode : avec-cle
+la victime crée un fournisseur                                   201
+1. appelant sans compte, adresse e-mail de la victime            {"status":200,"jetonRecu":true,"memeIdentifiantQueLaVictime":true}
+2. profil lu avec ce jeton                                       {"status":200,"email":"victime@exemple.test","roles":["owner"]}
+3. fournisseurs de la victime                                    {"status":200,"noms":["Fournisseur confidentiel de la victime"]}
+4. même appel avec une adresse de ADMIN_EMAILS                   {"status":200,"isAdmin":true}
+5. tableau de bord, exploitation, journal d'audit avec ce jeton  [200,200,200]
+6. témoin : mêmes pages sans jeton                               [401,401,401]
+6. témoin : mêmes pages avec un compte ordinaire                 [403,403,403]
+7. 25 appels consécutifs                                         {"reponses200":25,"autres":[]}
+effet de bord sur le compte visé                                 {"identifiantClerkRemplace":"user_rafale_24","adresseMarqueeVerifiee":true}
+
+════ mode « avec-cle » — APRÈS ════
+mode : avec-cle
+la victime crée un fournisseur                                   201
+1. appelant sans compte, adresse e-mail de la victime            {"status":401,"jetonRecu":false,"memeIdentifiantQueLaVictime":false}
+2. profil lu avec ce jeton                                       {"status":401}
+3. fournisseurs de la victime                                    {"status":401,"noms":[]}
+4. même appel avec une adresse de ADMIN_EMAILS                   {"status":401}
+5. tableau de bord, exploitation, journal d'audit avec ce jeton  [401,401,401]
+6. témoin : mêmes pages sans jeton                               [401,401,401]
+6. témoin : mêmes pages avec un compte ordinaire                 [403,403,403]
+7. 25 appels consécutifs                                         {"reponses200":0,"autres":[401,401,401,401,401,401,401,401,401,401,401,401,401,401,401,401,401,401,429,429,429,429,429,429,429]}
+effet de bord sur le compte visé                                 {"identifiantClerkRemplace":null,"adresseMarqueeVerifiee":false}
+
+Lecture : avant, l'appel 1 renvoie 200 avec un jeton pour le compte de la victime, l'appel 4 donne les droits d'exploitant,
+25 appels sur 25 sont acceptés et le compte visé est modifié. Après : 401 partout, aucun jeton, 0 appel accepté sur 25
+(la limite de débit s'ajoute au refus à partir du 19e appel), compte visé inchangé.
