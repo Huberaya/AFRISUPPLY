@@ -40,6 +40,7 @@ Les autres variables (même tableau, colonne « Portée » = Production ; à dup
 
 3. **Deploy**. Vérifier `https://<projet>.vercel.app/api/health` → `{"ok":true,"db":"neon"}`, puis le site `/` et la connexion démo sur `/app`.
 4. Onglet **Cron Jobs** : `/api/jobs/daily` à `30 4 * * *` (UTC) apparaît ; bouton *Run* pour tester. Les logs sont dans *Logs* → fonction `api/index`.
+5. **Région des fonctions = région de la base.** Par défaut les fonctions tournent en `iad1` (États-Unis). Avec une base Neon en Europe, chaque requête SQL coûte un aller-retour transatlantique (mesuré : ~96 ms au lieu de 1 à 5 ms). Régler *Settings → Functions → Function Region* (ou `"regions": ["fra1"]` dans `vercel.json`) sur la région de la base, puis vérifier `GET /api/status` → `checks.database.colocated: true` et `latencyMs` < 10.
 
 ## 3. Migrations
 Règle (chantier P0.4, `scripts/deploy-migrate.mjs`) :
@@ -61,8 +62,11 @@ L'état réel de la base se lit aussi sans console : `GET /api/status` → `chec
 (`a_jour`, `en_retard`, `en_avance`, `divergente`, `non_initialisee`, avec le nombre de migrations attendues et appliquées).
 
 ## 4. Limites Vercel à connaître
-- Fonction : 60 s max (Hobby) / 300 s (Pro) — le job quotidien prend ~8 s par restaurant : OK jusqu'à ~6 restaurants en Hobby, passer en Pro ou appeler `?restaurantId=` par restaurant au-delà.
+- Fonction : 60 s max (`vercel.json`). Avec des fonctions loin de la base, la passe quotidienne prend ~8 à 11 s par restaurant : elle ne tenait donc plus dans une invocation au-delà de 5 ou 6 restaurants, et s'arrêtait sans trace (constaté en production : aucune passe complète entre le 2026-09-23 et le chantier P0.4).
+- **Passe quotidienne par tranches (chantier P0.4).** Une invocation travaille 35 s (`DAILY_BUDGET_MS`), écrit où elle en est, puis l'API se rappelle elle-même pour la suite ; chaque restaurant n'est traité qu'une fois par jour. Un second appel le même jour répond `alreadyComplete` sans rien refaire ; `?force=1` relance volontairement une passe. Filets si la suite ne part pas : le cron des rappels (14:00 UTC) reprend une passe inachevée, et le workflow GitHub « Daily digest » (secrets `API_URL` et `CRON_SECRET`) rappelle la route jusqu'à la fin.
+- Lire l'état d'une passe : `GET /api/status` (`checks.jobs.daily` : `ok`, ou `degraded` avec « interrompue » / « incomplete ») ; détail par restaurant et par étape dans `GET /api/status/jobs` (secret des tâches planifiées) et dans l'écran « Exploitation ».
 - Cron Hobby : précision « dans l'heure » ; Pro : à la minute.
+- Sauvegardes : le disque d'une fonction est effacé avec elle. Sans `BACKUP_S3_*`, aucune sauvegarde applicative n'est conservée (voir `docs/SAUVEGARDE_HORS_SITE.md`).
 - Le mode « mail fichier » (`.outbox/`) n'écrit pas sur Vercel (système en lecture seule) → configurer Resend.
 
 ## 5. Checklist mise en prod

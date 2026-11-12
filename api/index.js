@@ -955,6 +955,23 @@ function databaseUnavailableReason(env = process.env) {
 function isNeon() {
   return !!getDatabaseUrl();
 }
+function databaseRegion(env = process.env) {
+  const url = getDatabaseUrl(env);
+  if (!url) return null;
+  try {
+    const m = /\.([a-z0-9-]+)\.(aws|azure)\.neon\.tech$/i.exec(new URL(url).hostname);
+    return m ? { provider: m[2].toLowerCase(), region: m[1].toLowerCase() } : null;
+  } catch {
+    return null;
+  }
+}
+function regionCheck(env = process.env) {
+  const fonction = env.VERCEL_REGION?.trim() || null;
+  const r = databaseRegion(env);
+  const base = r ? `${r.provider}/${r.region}` : null;
+  const conseillee = base ? FONCTIONS_PROCHES[base] ?? null : null;
+  return { fonction, base, conseillee, voisines: fonction && conseillee ? fonction === conseillee : null };
+}
 async function getDb() {
   if (_db) return _db;
   const url = getDatabaseUrl();
@@ -983,7 +1000,7 @@ async function openDatabase(dataDir) {
   const { drizzle } = await import("drizzle-orm/pglite");
   return drizzle(new PGlite(dataDir), { schema: schema_exports });
 }
-var _db, clean, onVercel, DatabaseUnavailableError;
+var _db, clean, onVercel, DatabaseUnavailableError, FONCTIONS_PROCHES;
 var init_client = __esm({
   "packages/db/src/client.ts"() {
     "use strict";
@@ -1000,6 +1017,19 @@ var init_client = __esm({
         super(reason);
         this.name = "DatabaseUnavailableError";
       }
+    };
+    FONCTIONS_PROCHES = {
+      "aws/us-east-1": "iad1",
+      "aws/us-east-2": "cle1",
+      "aws/us-west-2": "pdx1",
+      "aws/eu-central-1": "fra1",
+      "aws/eu-west-2": "lhr1",
+      "aws/ap-southeast-1": "sin1",
+      "aws/ap-southeast-2": "syd1",
+      "aws/sa-east-1": "gru1",
+      "azure/eastus2": "iad1",
+      "azure/westus3": "pdx1",
+      "azure/germanywestcentral": "fra1"
     };
   }
 });
@@ -2300,6 +2330,7 @@ __export(src_exports, {
   claims: () => claims,
   commissionInvoices: () => commissionInvoices,
   commissions: () => commissions,
+  databaseRegion: () => databaseRegion,
   databaseUnavailableReason: () => databaseUnavailableReason,
   defaultThresholds: () => defaultThresholds,
   deliveries: () => deliveries,
@@ -2352,6 +2383,7 @@ __export(src_exports, {
   recipes: () => recipes,
   recipesRelations: () => recipesRelations,
   recurringOrders: () => recurringOrders,
+  regionCheck: () => regionCheck,
   reorderRules: () => reorderRules,
   resolveMigrationsFolder: () => resolveMigrationsFolder,
   restaurantMembers: () => restaurantMembers,
@@ -2598,7 +2630,7 @@ async function stripe(method, path6, params = {}, opts = {}) {
   const headers = { Authorization: `Bearer ${key}`, "Stripe-Version": "2024-06-20" };
   if (method !== "GET") headers["content-type"] = "application/x-www-form-urlencoded";
   if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
-  const res = await fetch(url, { method, headers, body: method === "GET" ? void 0 : body3 });
+  const res = await fetch(url, { method, headers, body: method === "GET" ? void 0 : body3, signal: AbortSignal.timeout(2e4) });
   const json = await res.json();
   if (!res.ok) throw new Error(`Stripe ${res.status}: ${json.error?.message ?? "erreur"}`);
   return json;
@@ -2911,6 +2943,10 @@ function checkSecureConfig(env = process.env) {
   if (prod && !env.RESEND_API_KEY?.trim()) warnings2.push("RESEND_API_KEY absent : les e-mails (r\xE9initialisation de mot de passe incluse) ne partiront pas.");
   if (prod && !env.ALLOWED_ORIGINS?.trim() && !env.APP_URL?.trim()) warnings2.push("ALLOWED_ORIGINS/APP_URL non d\xE9finis : aucune origine tierce ne pourra appeler l\u2019API (le site sur le m\xEAme domaine fonctionne).");
   if (env.BILLING_ENFORCE === "false" && env.STRIPE_SECRET_KEY?.trim()) warnings2.push("BILLING_ENFORCE=false : la facturation Stripe est configur\xE9e mais non appliqu\xE9e.");
+  const regions = regionCheck(env);
+  if (regions.voisines === false) {
+    warnings2.push(`Les fonctions s'ex\xE9cutent en \xAB ${regions.fonction} \xBB alors que la base est en \xAB ${regions.base} \xBB : chaque requ\xEAte SQL traverse la distance entre les deux r\xE9gions. R\xE9gion de fonctions conseill\xE9e : \xAB ${regions.conseillee} \xBB (vercel.json \u2192 "regions", ou R\xE9glages du projet \u2192 Functions \u2192 Function Region).`);
+  }
   const clerkSecret = env.CLERK_SECRET_KEY?.trim();
   const clerkPublic = (env.VITE_CLERK_PUBLISHABLE_KEY ?? env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ?? env.CLERK_PUBLISHABLE_KEY)?.trim();
   if (prod && clerkPublic && !clerkSecret) warnings2.push("Cl\xE9 publique Clerk pr\xE9sente mais CLERK_SECRET_KEY absent : la connexion Clerk affich\xE9e par le site sera refus\xE9e par le serveur.");
@@ -3775,6 +3811,11 @@ function expliquer(status, corps, cfg) {
   if (status >= 500) return `le service distant est en incident (HTTP ${status})${fin}`;
   return `le service a r\xE9pondu HTTP ${status}${fin} : ${corps.slice(0, 180)}`;
 }
+function offsiteTimeoutMs(voulu, env = process.env) {
+  const regle = Number(env.OFFSITE_TIMEOUT_MS);
+  const plafond = Number.isFinite(regle) && regle > 0 ? regle : env.VERCEL ? 12e3 : voulu;
+  return Math.min(voulu, plafond);
+}
 async function appel(cfg, method, key, opts = {}) {
   const body3 = opts.body ?? Buffer.alloc(0);
   const query = opts.query ?? [];
@@ -3787,7 +3828,7 @@ async function appel(cfg, method, key, opts = {}) {
         method,
         headers: { ...headers, ...body3.length ? { "content-type": "application/octet-stream" } : {} },
         body: body3.length ? new Uint8Array(body3) : void 0,
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 6e4)
+        signal: AbortSignal.timeout(offsiteTimeoutMs(opts.timeoutMs ?? 6e4))
       });
       const buf = Buffer.from(await res.arrayBuffer());
       if (res.ok) return { ok: true, status: res.status, body: buf };
@@ -4063,17 +4104,24 @@ async function jobHealth() {
   const runs = await db.select().from(jobRuns).orderBy(desc2(jobRuns.startedAt)).limit(400);
   const out = {};
   const surveilles = jobsSurveilles();
-  const enCours = (r) => r.status === "running" && Date.now() - new Date(r.startedAt).getTime() < RUNNING_GRACE_MS;
+  const enCours = (r) => r.status === "running" && Date.now() - new Date(r.finishedAt).getTime() < RUNNING_GRACE_MS;
   for (const job of Object.keys(surveilles)) {
     const last = runs.find((r) => r.job === job && !enCours(r)) ?? null;
+    const vivante = last ? null : runs.find((r) => r.job === job && enCours(r)) ?? null;
+    if (vivante) {
+      out[job] = { state: "ok", maxHours: surveilles[job], lastRun: { status: "running", finishedAt: new Date(vivante.finishedAt).toISOString(), durationMs: vivante.durationMs, hoursAgo: 0, summary: vivante.summary ?? null, error: null } };
+      continue;
+    }
     const hoursAgo = last ? (Date.now() - new Date(last.finishedAt).getTime()) / 36e5 : null;
     const state = !last ? "never" : last.status !== "ok" ? "degraded" : hoursAgo > surveilles[job] ? "stale" : "ok";
     const s = last?.summary ?? null;
-    const coupee = last?.status === "running" ? `Passe interrompue : d\xE9marr\xE9e le ${new Date(last.startedAt).toISOString()}, arr\xEAt\xE9e apr\xE8s ${Math.round(last.durationMs / 1e3)} s \xE0 l'\xE9tape \xAB ${s?.etape ?? "inconnue"} \xBB (${s?.traites ?? "?"} restaurant(s) trait\xE9(s) sur ${s?.restaurants ?? "?"}). Dur\xE9e maximale d'ex\xE9cution probablement d\xE9pass\xE9e.` : null;
+    const arretee = last?.status === "running" ? s?.bailJusqua ? "interrompue" : "incomplete" : null;
+    const ou = `\xE0 l'\xE9tape \xAB ${s?.etape ?? "inconnue"} \xBB (${s?.traites ?? "?"} restaurant(s) trait\xE9(s) sur ${s?.restaurants ?? "?"}${s?.tranches && s.tranches > 1 ? `, ${s.tranches} tranches` : ""})`;
+    const motif = !last || !arretee ? null : arretee === "interrompue" ? `Passe interrompue : d\xE9marr\xE9e le ${new Date(last.startedAt).toISOString()}, arr\xEAt\xE9e apr\xE8s ${Math.round(last.durationMs / 1e3)} s de travail ${ou}${s?.enCoursPour ? `, pendant le traitement de \xAB ${s.enCoursPour} \xBB` : ""}. Dur\xE9e maximale d'ex\xE9cution probablement d\xE9pass\xE9e. Elle sera reprise au prochain d\xE9clenchement.` : `Passe incompl\xE8te : d\xE9marr\xE9e le ${new Date(last.startedAt).toISOString()}, suspendue apr\xE8s ${Math.round(last.durationMs / 1e3)} s de travail ${ou}, et pas encore reprise. Rappeler /api/jobs/daily la termine.`;
     out[job] = {
       state,
       maxHours: surveilles[job],
-      lastRun: last ? { status: last.status === "running" ? "interrompue" : last.status, finishedAt: new Date(last.finishedAt).toISOString(), durationMs: last.durationMs, hoursAgo: Math.round(hoursAgo * 10) / 10, summary: last.summary ?? null, error: coupee ?? last.error ?? null } : null
+      lastRun: last ? { status: arretee ?? last.status, finishedAt: new Date(last.finishedAt).toISOString(), durationMs: last.durationMs, hoursAgo: Math.round(hoursAgo * 10) / 10, summary: last.summary ?? null, error: motif ?? last.error ?? null } : null
     };
   }
   return out;
@@ -5910,6 +5958,8 @@ async function llmRephrase(question, facts, draft) {
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.LLM_API_KEY}` },
+      signal: AbortSignal.timeout(2e4),
+      // chantier P0.4 : au-delà, la réponse calculée sans LLM est renvoyée (voir le `catch`)
       body: JSON.stringify({ model, temperature: 0.2, max_tokens: 400, messages: [
         { role: "system", content: "Tu es l'assistant achats d'un restaurant africain. R\xE9ponds en fran\xE7ais, de fa\xE7on concise et concr\xE8te, en tutoyant. Tu ne peux utiliser QUE les faits fournis : n'invente aucun chiffre, prix, fournisseur ou produit. Si les faits ne suffisent pas, dis-le." },
         { role: "user", content: `Question : ${question}
@@ -8596,6 +8646,7 @@ var init_marketplace = __esm({
 });
 
 // apps/api/src/jobs/daily.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
 import { and as and23, desc as desc9, eq as eq25, gte as gte9, inArray as inArray14, sql as sql21 } from "drizzle-orm";
 async function buildDigestForRestaurant(rid2, opts = {}) {
   const db = await getDb();
@@ -8747,142 +8798,359 @@ async function runDailyForRestaurant(rid2, opts = {}) {
     return { ...base, digest: "error", error: e.message };
   }
 }
+async function prendreLaPasse(jour, jeton, force) {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    await tx.execute(sql21`select pg_advisory_xact_lock(${VERROU_PASSE})`);
+    const [row] = await tx.select().from(jobRuns).where(and23(eq25(jobRuns.job, "daily"), sql21`${jobRuns.summary}->>'jour' = ${jour}`)).orderBy(desc9(jobRuns.startedAt)).limit(1);
+    const j = row?.summary ?? null;
+    const bail = () => new Date(Date.now() + dailyLeaseMs()).toISOString();
+    if (row?.status === "running") {
+      if (j?.bailJusqua && new Date(j.bailJusqua).getTime() > Date.now()) return { mode: "occupee", row };
+      if (!force) {
+        const coupures = { ...j?.coupures ?? {} };
+        if (j?.enCoursPour) coupures[j.enCoursPour] = (coupures[j.enCoursPour] ?? 0) + 1;
+        const journal2 = { ...journalNeuf(jour), ...j, jour, enCours: true, jeton, bailJusqua: bail(), tranches: (j?.tranches ?? 1) + 1, coupures, enCoursPour: null };
+        await tx.update(jobRuns).set({ finishedAt: /* @__PURE__ */ new Date(), summary: journal2 }).where(eq25(jobRuns.id, row.id));
+        return { mode: "reprise", id: row.id, startedAt: new Date(row.startedAt), journal: journal2 };
+      }
+    } else if (row && !force) return { mode: "deja-faite", row };
+    const journal = { ...journalNeuf(jour), jeton, bailJusqua: bail() };
+    const startedAt = /* @__PURE__ */ new Date();
+    const [cree] = await tx.insert(jobRuns).values({ job: "daily", status: "running", startedAt, finishedAt: startedAt, durationMs: 0, summary: journal }).returning({ id: jobRuns.id });
+    return { mode: "nouvelle", id: cree.id, startedAt, journal };
+  });
+}
+async function dailyPending(now = /* @__PURE__ */ new Date()) {
+  const db = await getDb();
+  const jour = now.toISOString().slice(0, 10);
+  const [row] = await db.select().from(jobRuns).where(and23(eq25(jobRuns.job, "daily"), sql21`${jobRuns.summary}->>'jour' = ${jour}`)).orderBy(desc9(jobRuns.startedAt)).limit(1);
+  if (!row) return "absente";
+  if (row.status !== "running") return "faite";
+  const bail = row.summary?.bailJusqua;
+  return bail && new Date(bail).getTime() > Date.now() ? "en-cours" : "a-reprendre";
+}
 async function runDailyForAll(opts = {}) {
   const db = await getDb();
-  const all = await db.select({ id: restaurants.id }).from(restaurants);
-  const results = [];
-  const startedAt = /* @__PURE__ */ new Date();
-  let runId = null;
-  const avancement = async (etape, done) => {
-    if (opts.dryRun) return;
-    const now = /* @__PURE__ */ new Date();
-    const valeurs = { finishedAt: now, durationMs: now.getTime() - startedAt.getTime(), summary: { enCours: true, etape, restaurants: all.length, traites: done } };
-    try {
-      if (!runId) {
-        const [row] = await db.insert(jobRuns).values({ job: "daily", status: "running", startedAt, ...valeurs }).returning({ id: jobRuns.id });
-        runId = row.id;
-      } else await db.update(jobRuns).set(valeurs).where(eq25(jobRuns.id, runId));
-    } catch (e) {
-      console.error("[jobs] job_runs (avancement)", e.message);
-    }
-  };
-  await avancement("restaurants", 0);
-  for (const r of all) {
-    const { preview: _p, ...res } = await runDailyForRestaurant(r.id, opts);
-    void _p;
-    results.push(res);
-    await avancement("restaurants", results.length);
+  const now = opts.now ?? /* @__PURE__ */ new Date();
+  const jour = now.toISOString().slice(0, 10);
+  const debut = Date.now();
+  const budget = opts.budgetMs ?? dailyBudgetMs();
+  let progres = false;
+  let dessaisie = false;
+  const horsBudget = () => progres && Date.now() - debut >= budget;
+  const jeton = randomUUID2();
+  const prise = opts.dryRun ? { mode: "nouvelle", id: "", startedAt: /* @__PURE__ */ new Date(), journal: { ...journalNeuf(jour), jeton } } : await prendreLaPasse(jour, jeton, !!opts.force);
+  if (!("journal" in prise)) {
+    const s = prise.row.summary ?? {};
+    const faits = s.results ?? [];
+    const occupee = prise.mode === "occupee";
+    return {
+      ...occupee ? {} : s,
+      ranAt: String(s.ranAt ?? new Date(prise.row.startedAt).toISOString()),
+      dryRun: false,
+      count: faits.length,
+      sent: faits.filter((r) => r.digest === "sent").length,
+      errors: faits.filter((r) => r.digest === "error").length,
+      results: faits,
+      jour,
+      complete: !occupee,
+      restaurants: Number(s.restaurants ?? faits.length),
+      tranches: Number(s.tranches ?? 1),
+      remaining: occupee ? { restaurants: Math.max(0, Number(s.restaurants ?? 0) - faits.length), etapes: ETAPES_PASSE.filter((e) => !(e in (s.etapes ?? {}))) } : { restaurants: 0, etapes: [] },
+      resumed: false,
+      progressed: false,
+      status: prise.row.status,
+      ...occupee ? { runningElsewhere: true } : { alreadyComplete: true }
+    };
   }
-  await avancement("facturation, relances, sauvegardes", results.length);
-  const errors2 = results.filter((r) => r.digest === "error");
-  const summary = { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), dryRun: !!opts.dryRun, count: results.length, sent: results.filter((r) => r.digest === "sent").length, errors: errors2.length, results };
-  let billing = {};
-  try {
-    const now = opts.now ?? /* @__PURE__ */ new Date();
-    const sw = await sweepTrials(now);
-    if (!opts.dryRun) for (const r of sw.reminders) {
-      const recips = await recipientsFor2(r.id);
-      for (const { email: to } of recips) await sendMail({ to, subject: r.daysLeft === 1 ? `Dernier jour d'essai AFRISUPPLY pour ${r.name}` : `Plus que ${r.daysLeft} jours d'essai AFRISUPPLY`, text: `Bonjour,
+  const j = prise.journal;
+  const travailAvant = j.travailMs ?? 0;
+  const startedAt = prise.startedAt;
+  const all = await db.select({ id: restaurants.id, name: restaurants.name }).from(restaurants);
+  j.restaurants = all.length;
+  const complets = /* @__PURE__ */ new Map();
+  const sauver = async (o = {}) => {
+    j.travailMs = travailAvant + (Date.now() - debut);
+    if (opts.dryRun) return true;
+    j.bailJusqua = o.final || o.relacher ? null : new Date(Date.now() + dailyLeaseMs()).toISOString();
+    const lignes = await db.update(jobRuns).set({ finishedAt: /* @__PURE__ */ new Date(), durationMs: j.travailMs, ...o.final ?? { summary: j } }).where(and23(eq25(jobRuns.id, prise.id), sql21`${jobRuns.summary}->>'jeton' = ${jeton}`)).returning({ id: jobRuns.id });
+    if (!lignes.length) dessaisie = true;
+    return lignes.length > 0;
+  };
+  const resume = (complete) => {
+    const errors2 = j.results.filter((r) => r.digest === "error");
+    const s = {
+      ranAt: now.toISOString(),
+      dryRun: !!opts.dryRun,
+      count: j.results.length,
+      sent: j.results.filter((r) => r.digest === "sent").length,
+      errors: errors2.length,
+      results: j.results.map((r) => ({ ...r, ...complets.get(r.restaurantId) ?? {} })),
+      jour,
+      complete,
+      restaurants: all.length,
+      tranches: j.tranches,
+      remaining: { restaurants: all.filter((r) => !j.results.some((x) => x.restaurantId === r.id)).length, etapes: ETAPES_PASSE.filter((e) => !(e in j.etapes)) },
+      resumed: prise.mode === "reprise",
+      progressed: progres
+    };
+    for (const [k, v] of Object.entries(j.etapes)) if (v !== null && v !== void 0) s[k] = v;
+    if (j.ecartes.length) s.ecartes = j.ecartes;
+    if (dessaisie) {
+      s.complete = false;
+      s.runningElsewhere = true;
+    }
+    return s;
+  };
+  const suspendre = async () => {
+    j.enCoursPour = null;
+    await sauver({ relacher: true });
+    return resume(false);
+  };
+  const ecarter = (cle, quoi) => {
+    if (!j.ecartes.includes(cle)) j.ecartes.push(cle);
+    void captureException(new Error(`passe quotidienne : ${quoi} \xE9cart\xE9(e) apr\xE8s ${MAX_COUPURES} interruptions`), { route: "/api/jobs/daily", extra: { unite: cle } });
+    return `${quoi} \xE9cart\xE9(e) de la passe : son traitement l'a interrompue ${MAX_COUPURES} fois`;
+  };
+  const restants = all.filter((r) => !j.results.some((x) => x.restaurantId === r.id)).sort((a, b) => (j.coupures[a.id] ?? 0) - (j.coupures[b.id] ?? 0));
+  for (const r of restants) {
+    if ((j.coupures[r.id] ?? 0) >= MAX_COUPURES) {
+      j.results.push({ restaurantId: r.id, name: r.name, alerts: 0, autoReorder: 0, digest: "error", error: ecarter(r.id, "restaurant") });
+      j.traites = j.results.length;
+      progres = true;
+      if (!await sauver()) return resume(false);
+      continue;
+    }
+    if (horsBudget()) return suspendre();
+    j.etape = "restaurants";
+    j.enCoursPour = r.id;
+    if (!await sauver()) return resume(false);
+    const t = Date.now();
+    let res;
+    try {
+      const { preview: _p, ...x } = await runDailyForRestaurant(r.id, { dryRun: opts.dryRun, now: opts.now });
+      void _p;
+      res = x;
+    } catch (e) {
+      res = { restaurantId: r.id, name: r.name, alerts: 0, autoReorder: 0, digest: "error", recipients: [], error: e.message };
+    }
+    complets.set(r.id, res);
+    j.results.push({ restaurantId: r.id, name: res.name, digest: res.digest, alerts: res.alerts, autoReorder: res.autoReorder, error: res.error, ms: Date.now() - t });
+    j.traites = j.results.length;
+    j.enCoursPour = null;
+    progres = true;
+    if (res.digest === "error") void captureException(new Error(`daily digest failed: ${res.error}`), { route: "/api/jobs/daily", restaurantId: r.id });
+    if (!await sauver()) return resume(false);
+  }
+  const etape = async (nom, fn) => {
+    if (nom in j.etapes) return "faite";
+    const cle = `etape:${nom}`;
+    if ((j.coupures[cle] ?? 0) >= MAX_COUPURES) {
+      j.etapes[nom] = { error: ecarter(cle, `\xE9tape \xAB ${nom} \xBB`) };
+      progres = true;
+      return await sauver() ? "faite" : "dessaisie";
+    }
+    if (horsBudget()) return "budget";
+    j.etape = nom;
+    j.enCoursPour = cle;
+    if (!await sauver()) return "dessaisie";
+    const t = Date.now();
+    let v;
+    try {
+      v = await fn();
+    } catch (e) {
+      v = { error: e.message };
+      void captureException(e, { route: `/api/jobs/daily#${nom}` });
+    }
+    j.etapes[nom] = v === void 0 ? null : v;
+    j.durees[nom] = Date.now() - t;
+    j.enCoursPour = null;
+    progres = true;
+    return await sauver() ? "faite" : "dessaisie";
+  };
+  const enchainer = async (nom, fn) => {
+    const r = await etape(nom, fn);
+    return r === "faite" ? null : r === "budget" ? await suspendre() : resume(false);
+  };
+  let arret;
+  if (arret = await enchainer("billing", async () => {
+    try {
+      const sw = await sweepTrials(now);
+      if (!opts.dryRun) for (const r of sw.reminders) {
+        const recips = await recipientsFor2(r.id);
+        for (const { email: to } of recips) await sendMail({ to, subject: r.daysLeft === 1 ? `Dernier jour d'essai AFRISUPPLY pour ${r.name}` : `Plus que ${r.daysLeft} jours d'essai AFRISUPPLY`, text: `Bonjour,
 
 Votre essai gratuit AFRISUPPLY pour ${r.name} se termine dans ${r.daysLeft} jour(s). Pour garder votre stock, vos fournisseurs et vos alertes, choisissez une formule ici : ${APP_URL3()}/app/abonnement
 
 Besoin d'aide ? R\xE9pondez simplement \xE0 cet e-mail.
 
 L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY pour <b>${r.name}</b> se termine dans <b>${r.daysLeft} jour(s)</b>.</p><p>Pour garder votre stock, vos fournisseurs et vos alertes : <a href="${APP_URL3()}/app/abonnement">choisir ma formule</a>.</p><p>Besoin d'aide ? R\xE9pondez simplement \xE0 cet e-mail.</p><p>L'\xE9quipe AFRISUPPLY</p>`, tags: { type: "trial-reminder" } });
-    }
-    billing = { trialsExpired: sw.expired.length, reminders: sw.reminders.length, enforced: billingEnforced() };
-    if (now.getUTCDate() === 1) {
-      const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
-      const inv = await invoiceCommissions(prev.toISOString().slice(0, 7), { dryRun: opts.dryRun });
-      billing.commissionInvoices = inv.invoices.length;
-    }
-  } catch (e) {
-    billing = { error: String(e) };
-    void captureException(e, { route: "/api/jobs/daily#billing" });
-  }
-  summary.billing = billing;
-  try {
-    const now = opts.now ?? /* @__PURE__ */ new Date();
-    const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-    if (now.getUTCDay() === 1 && admins.length && !opts.dryRun) {
-      const rep = await buildWeeklyPilotReport(now);
-      for (const to of admins) await sendMail({ to, subject: `\u{1F4CA} Pilotes AFRISUPPLY \u2014 ${rep.pilots} restaurants, semaine du ${now.toLocaleDateString("fr-FR")}`, text: rep.text, html: rep.html, tags: { type: "pilot-report" } });
-      summary.pilotReport = rep.pilots;
-    }
-  } catch (e) {
-    void captureException(e, { route: "/api/jobs/daily#pilots" });
-  }
-  for (const e of errors2) void captureException(new Error(`daily digest failed: ${e.error}`), { route: "/api/jobs/daily", restaurantId: e.restaurantId });
-  try {
-    if (!opts.dryRun) summary.recurring = (await runRecurringOrders(opts.now)).results.length;
-  } catch (e) {
-    await captureException(e, { route: "jobs/recurring" });
-  }
-  try {
-    summary.reminders = opts.dryRun ? "skipped" : (await remindPendingVendorOrders({ now: opts.now })).reminded;
-  } catch (e) {
-    await captureException(e, { route: "jobs/reminders" });
-  }
-  try {
-    if (!opts.dryRun) summary.payments = (await remindPayments(opts.now)).reminded;
-  } catch (e) {
-    await captureException(e, { route: "jobs/payments" });
-  }
-  try {
-    if (!opts.dryRun) {
-      const b = await backupAllRestaurants();
-      summary.backup = { written: b.written.length, errors: b.errors.length, removed: b.removed.length, keep: b.keep, dir: b.dir, files: b.written.map((w) => ({ name: w.name, rows: w.rows, sizeBytes: w.sizeBytes })) };
-      if (b.errors.length) void captureException(new Error(`Backup \xE9chou\xE9e : ${b.errors.map((e) => e.error).join(" | ")}`), { route: "jobs/backup" });
-      await recordJobRun({
-        job: "backup",
-        startedAt,
-        status: statusFrom(b.written.length, b.errors.length),
-        summary: { count: b.written.length, keep: b.keep, dir: b.dir, removed: b.removed.length, bytes: b.written.reduce((a, w) => a + w.sizeBytes, 0) },
-        error: b.errors.length ? b.errors.map((e) => e.error).join(" | ") : null
-      });
-      const horsSite = await offsiteSweep();
-      const hs = summary.offsite = {
-        configured: horsSite.configured,
-        uploaded: horsSite.uploaded.length,
-        failed: horsSite.failed.length,
-        removed: horsSite.removed.length,
-        objects: horsSite.objects,
-        bytes: horsSite.bytes,
-        endpoint: horsSite.endpoint,
-        bucket: horsSite.bucket,
-        error: horsSite.error ?? null
-      };
-      if (!horsSite.configured) hs.pourquoi = offsiteConfig().why;
-      await recordJobRun({
-        job: "offsite-backup",
-        startedAt,
-        status: horsSite.configured ? statusFrom(horsSite.uploaded.length, horsSite.failed.length) : "partial",
-        summary: { uploaded: horsSite.uploaded.length, failed: horsSite.failed.length, removed: horsSite.removed.length, objects: horsSite.objects, bytes: horsSite.bytes, endpoint: horsSite.endpoint },
-        error: horsSite.configured ? horsSite.error ?? null : "sauvegarde hors site non configur\xE9e"
-      });
-    } else summary.backup = "skipped";
-  } catch (e) {
-    summary.backup = { error: e.message };
-    void captureException(e, { route: "jobs/backup" });
-  }
-  try {
-    summary.watchdog = await watchdog({ self: "daily", now: opts.now });
-  } catch (e) {
-    void captureException(e, { route: "jobs/watchdog" });
-  }
-  const finishedAt = /* @__PURE__ */ new Date();
-  if (!opts.dryRun) {
-    const final = { status: errors2.length === 0 ? "ok" : errors2.length === results.length ? "error" : "partial", finishedAt, durationMs: finishedAt.getTime() - startedAt.getTime(), summary: { ...summary, results: results.map((r) => ({ name: r.name, digest: r.digest, alerts: r.alerts, autoReorder: r.autoReorder, error: r.error })) }, error: errors2.map((e) => `${e.name}: ${e.error}`).join(" | ") || null };
-    try {
-      const mises = runId ? await db.update(jobRuns).set(final).where(eq25(jobRuns.id, runId)).returning({ id: jobRuns.id }) : [];
-      if (!mises.length) await db.insert(jobRuns).values({ job: "daily", startedAt, ...final });
+      }
+      const billing = { trialsExpired: sw.expired.length, reminders: sw.reminders.length, enforced: billingEnforced() };
+      if (now.getUTCDate() === 1) {
+        const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
+        const inv = await invoiceCommissions(prev.toISOString().slice(0, 7), { dryRun: opts.dryRun });
+        billing.commissionInvoices = inv.invoices.length;
+      }
+      return billing;
     } catch (e) {
-      console.error("[jobs] job_runs", e);
+      void captureException(e, { route: "/api/jobs/daily#billing" });
+      return { error: String(e) };
+    }
+  })) return arret;
+  if (arret = await enchainer("pilotReport", async () => {
+    try {
+      const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      if (now.getUTCDay() === 1 && admins.length && !opts.dryRun) {
+        const rep = await buildWeeklyPilotReport(now);
+        for (const to of admins) await sendMail({ to, subject: `\u{1F4CA} Pilotes AFRISUPPLY \u2014 ${rep.pilots} restaurants, semaine du ${now.toLocaleDateString("fr-FR")}`, text: rep.text, html: rep.html, tags: { type: "pilot-report" } });
+        return rep.pilots;
+      }
+    } catch (e) {
+      void captureException(e, { route: "/api/jobs/daily#pilots" });
+    }
+    return null;
+  })) return arret;
+  if (arret = await enchainer("recurring", async () => {
+    try {
+      if (!opts.dryRun) return (await runRecurringOrders(opts.now)).results.length;
+    } catch (e) {
+      await captureException(e, { route: "jobs/recurring" });
+    }
+    return null;
+  })) return arret;
+  if (arret = await enchainer("reminders", async () => {
+    try {
+      return opts.dryRun ? "skipped" : (await remindPendingVendorOrders({ now: opts.now })).reminded;
+    } catch (e) {
+      await captureException(e, { route: "jobs/reminders" });
+    }
+    return null;
+  })) return arret;
+  if (arret = await enchainer("payments", async () => {
+    try {
+      if (!opts.dryRun) return (await remindPayments(opts.now)).reminded;
+    } catch (e) {
+      await captureException(e, { route: "jobs/payments" });
+    }
+    return null;
+  })) return arret;
+  if (!("backup" in j.etapes)) {
+    if (opts.dryRun) j.etapes.backup = "skipped";
+    else {
+      const horsSiteActif = offsiteConfig().configured;
+      for (const r of all) {
+        if (j.sauvegardes[r.id]) continue;
+        const cle = `sauvegarde:${r.id}`;
+        if ((j.coupures[cle] ?? 0) >= MAX_COUPURES) {
+          j.sauvegardes[r.id] = { error: ecarter(cle, "sauvegarde") };
+          progres = true;
+          if (!await sauver()) return resume(false);
+          continue;
+        }
+        if (horsBudget()) return suspendre();
+        j.etape = "backup";
+        j.enCoursPour = cle;
+        if (!await sauver()) return resume(false);
+        const s = {};
+        try {
+          const b = await backupAllRestaurants({ restaurantId: r.id });
+          const w = b.written[0];
+          if (w) {
+            s.name = w.name;
+            s.rows = w.rows;
+            s.sizeBytes = w.sizeBytes;
+          }
+          s.removed = b.removed.length;
+          if (b.errors.length) s.error = b.errors.map((e) => e.error).join(" | ");
+          if (w && horsSiteActif) {
+            const envoi = await offsiteSweep({ names: [w.name], prune: false });
+            s.envoyes = envoi.uploaded.length;
+            s.echecs = envoi.failed;
+          }
+        } catch (e) {
+          s.error = e.message;
+        }
+        j.sauvegardes[r.id] = s;
+        j.enCoursPour = null;
+        progres = true;
+        if (!await sauver()) return resume(false);
+      }
+      if (arret = await enchainer("backup", async () => {
+        const dir = backupDir();
+        const keep = retentionDays();
+        const faites = Object.values(j.sauvegardes);
+        const ecrites = faites.filter((s) => s.name);
+        const enEchec = faites.filter((s) => s.error);
+        if (enEchec.length) void captureException(new Error(`Backup \xE9chou\xE9e : ${enEchec.map((e) => e.error).join(" | ")}`), { route: "jobs/backup" });
+        await recordJobRun({
+          job: "backup",
+          startedAt,
+          status: statusFrom(ecrites.length, enEchec.length),
+          summary: { count: ecrites.length, keep, dir, removed: faites.reduce((a, s) => a + (s.removed ?? 0), 0), bytes: ecrites.reduce((a, s) => a + (s.sizeBytes ?? 0), 0) },
+          error: enEchec.length ? enEchec.map((e) => e.error).join(" | ") : null
+        });
+        const cfg = offsiteConfig();
+        const envoyes = faites.reduce((a, s) => a + (s.envoyes ?? 0), 0);
+        const echecs = faites.flatMap((s) => s.echecs ?? []);
+        const hs = { configured: cfg.configured, uploaded: envoyes, failed: echecs.length, removed: 0, objects: 0, bytes: 0, endpoint: cfg.configured ? new URL(cfg.endpoint).host : null, bucket: cfg.configured ? cfg.bucket : null, error: null };
+        if (cfg.configured) {
+          try {
+            const elague = await pruneOffsite();
+            hs.removed = elague.removed.length;
+            const liste = await listObjects(cfg);
+            hs.objects = liste.objects.length;
+            hs.bytes = liste.objects.reduce((a, o) => a + o.bytes, 0);
+            hs.error = echecs.length ? `${echecs.length} envoi(s) en \xE9chec` : !liste.ok ? liste.error ?? "inventaire distant impossible" : envoyes === 0 ? "rien \xE0 envoyer" : null;
+          } catch (e) {
+            hs.error = e.message;
+          }
+        } else {
+          hs.error = cfg.why;
+          hs.pourquoi = cfg.why;
+        }
+        await recordJobRun({
+          job: "offsite-backup",
+          startedAt,
+          status: cfg.configured ? statusFrom(envoyes, echecs.length) : "partial",
+          summary: { uploaded: envoyes, failed: echecs.length, removed: hs.removed, objects: hs.objects, bytes: hs.bytes, endpoint: hs.endpoint },
+          error: cfg.configured ? hs.error ?? null : "sauvegarde hors site non configur\xE9e"
+        });
+        j.etapes.offsite = hs;
+        return { written: ecrites.length, errors: enEchec.length, removed: faites.reduce((a, s) => a + (s.removed ?? 0), 0), keep, dir, files: ecrites.map((s) => ({ name: s.name, rows: s.rows, sizeBytes: s.sizeBytes })) };
+      })) return arret;
     }
   }
-  return summary;
+  if (arret = await enchainer("watchdog", async () => {
+    try {
+      return await watchdog({ self: "daily", now: opts.now });
+    } catch (e) {
+      void captureException(e, { route: "jobs/watchdog" });
+    }
+    return null;
+  })) return arret;
+  const fin = resume(true);
+  if (!opts.dryRun) {
+    const errors2 = j.results.filter((r) => r.digest === "error");
+    const status = errors2.length === 0 ? j.ecartes.length ? "partial" : "ok" : errors2.length === j.results.length ? "error" : "partial";
+    const { results: _r, complete: _c, resumed: _re, progressed: _p, remaining: _rem, ...aGarder } = fin;
+    void _r;
+    void _c;
+    void _re;
+    void _p;
+    void _rem;
+    const ok = await sauver({ final: {
+      status,
+      error: errors2.map((e) => `${e.name}: ${e.error}`).join(" | ") || null,
+      summary: { ...aGarder, results: j.results, travailMs: j.travailMs, durees: j.durees, ...Object.keys(j.coupures).length ? { coupures: j.coupures } : {} }
+    } });
+    if (!ok) return resume(false);
+    fin.status = status;
+  }
+  return fin;
 }
-var n10, APP_URL3, recipientsFor2, SALES_GAP_DAYS;
+var n10, APP_URL3, recipientsFor2, SALES_GAP_DAYS, positif, FUNCTION_MAX_MS, dailyBudgetMs, dailyLeaseMs, MAX_COUPURES, ETAPES_PASSE, VERROU_PASSE, journalNeuf;
 var init_daily = __esm({
   "apps/api/src/jobs/daily.ts"() {
     "use strict";
@@ -8910,6 +9178,17 @@ var init_daily = __esm({
     APP_URL3 = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     recipientsFor2 = (rid2, settingsRecipients) => recipientsFor(rid2, settingsRecipients);
     SALES_GAP_DAYS = () => Math.max(1, Number(process.env.SALES_GAP_DAYS ?? 3));
+    positif = (v) => {
+      const x = Number(v);
+      return v !== void 0 && v.trim() !== "" && Number.isFinite(x) && x > 0 ? x : null;
+    };
+    FUNCTION_MAX_MS = 6e4;
+    dailyBudgetMs = () => positif(process.env.DAILY_BUDGET_MS) ?? (process.env.VERCEL ? 35e3 : Number.POSITIVE_INFINITY);
+    dailyLeaseMs = () => positif(process.env.DAILY_LEASE_MS) ?? (process.env.VERCEL ? FUNCTION_MAX_MS + 15e3 : 6e5);
+    MAX_COUPURES = 2;
+    ETAPES_PASSE = ["billing", "pilotReport", "recurring", "reminders", "payments", "backup", "watchdog"];
+    VERROU_PASSE = 4207001;
+    journalNeuf = (jour) => ({ jour, enCours: true, etape: "restaurants", restaurants: 0, traites: 0, tranches: 1, jeton: null, bailJusqua: null, travailMs: 0, enCoursPour: null, coupures: {}, ecartes: [], results: [], sauvegardes: {}, etapes: {}, durees: {} });
   }
 });
 
@@ -9018,6 +9297,26 @@ function client(s) {
   if (!cached || cached.key !== key) cached = { key, client: createClerkClient({ secretKey: s.secretKey, publishableKey: s.publishableKey, ...s.apiUrl ? { apiUrl: s.apiUrl } : {} }) };
   return cached.client;
 }
+var clerkTimeoutMs = (env = process.env) => {
+  const v = Number(env.CLERK_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 8e3;
+};
+var DelaiDepasse = class extends Error {
+  constructor() {
+    super("le service d'identit\xE9 n'a pas r\xE9pondu dans le d\xE9lai imparti");
+    this.name = "DelaiDepasse";
+  }
+};
+var avecDelai = (p, ms) => new Promise((ok, ko) => {
+  const t = setTimeout(() => ko(new DelaiDepasse()), ms);
+  p.then((v) => {
+    clearTimeout(t);
+    ok(v);
+  }, (e) => {
+    clearTimeout(t);
+    ko(e);
+  });
+});
 var SERVER_SIDE_REASONS = /^(jwk-remote-failed-to-load|jwk-remote-invalid|jwk-failed-to-resolve|jwk-local-missing|secret-key-invalid)$/;
 async function verifyClerkSessionToken(token, env = process.env) {
   const s = clerkSettings(env);
@@ -9026,9 +9325,9 @@ async function verifyClerkSessionToken(token, env = process.env) {
   if (!parties.length) throw new ClerkAuthError(503, "clerk_misconfigured", "La connexion par Clerk est mal configur\xE9e (aucune origine autoris\xE9e : APP_URL ou CLERK_AUTHORIZED_PARTIES).");
   let payload;
   try {
-    payload = await verifyToken2(token, { secretKey: s.secretKey, jwtKey: s.jwtKey, authorizedParties: parties, clockSkewInMs: 5e3, ...s.apiUrl ? { apiUrl: s.apiUrl } : {} });
+    payload = await avecDelai(verifyToken2(token, { secretKey: s.secretKey, jwtKey: s.jwtKey, authorizedParties: parties, clockSkewInMs: 5e3, ...s.apiUrl ? { apiUrl: s.apiUrl } : {} }), clerkTimeoutMs(env));
   } catch (e) {
-    const reason = String(e.reason ?? "");
+    const reason = e instanceof DelaiDepasse ? "jwk-remote-failed-to-load" : String(e.reason ?? "");
     if (SERVER_SIDE_REASONS.test(reason)) {
       console.error("[clerk] v\xE9rification du jeton impossible c\xF4t\xE9 serveur :", reason);
       throw new ClerkAuthError(503, "clerk_unreachable", "Le service d'identit\xE9 est momentan\xE9ment indisponible. R\xE9essayez dans un instant.");
@@ -9049,7 +9348,7 @@ async function fetchClerkIdentity(clerkId, env = process.env) {
   if (!s.enabled) throw new ClerkAuthError(503, "clerk_not_configured", "La connexion par Clerk n'est pas configur\xE9e sur ce serveur.");
   let u;
   try {
-    u = await client(s).users.getUser(clerkId);
+    u = await avecDelai(client(s).users.getUser(clerkId), clerkTimeoutMs(env));
   } catch (e) {
     const status = Number(e.status ?? 0);
     if (status === 404) throw new ClerkAuthError(401, "clerk_user_unknown", "Compte Clerk introuvable : reconnectez-vous.");
@@ -10593,7 +10892,8 @@ async function extractCatalogFromImage(imageDataUrl) {
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.LLM_API_KEY}` },
-      signal: AbortSignal.timeout(6e4),
+      signal: AbortSignal.timeout(5e4),
+      // chantier P0.4 : sous la durée maximale d'une fonction (60 s), pour que l'erreur prévue soit réellement renvoyée
       body: JSON.stringify({ model, temperature: 0, max_tokens: 4e3, response_format: { type: "json_object" }, messages: [{ role: "system", content: CATALOG_PROMPT }, { role: "user", content: [{ type: "text", text: "Voici le tarif." }, { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } }] }] })
     });
     if (!res.ok) return { ok: false, error: `LLM HTTP ${res.status}` };
@@ -12377,19 +12677,58 @@ import { z as z16 } from "zod";
 import { eq as eq34 } from "drizzle-orm";
 var jobsRoutes = new Hono18();
 var cronCheck = (c) => cronSecretCheck({ cron: c.req.header("x-cron-secret"), authorization: c.req.header("authorization") }, c.req.query("secret"));
+var maxTranches = () => {
+  const v = Number(process.env.DAILY_MAX_TRANCHES);
+  return Number.isFinite(v) && v > 0 ? v : 40;
+};
+function selfUrl(env = process.env) {
+  const net = (u) => {
+    const v = u?.trim().replace(/\/+$/, "");
+    return v && /^https?:\/\//.test(v) ? v : null;
+  };
+  const explicite = net(env.JOBS_SELF_URL);
+  if (explicite) return explicite;
+  if (env.VERCEL || env.VERCEL_ENV) return env.VERCEL_ENV === "production" && env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ? `https://${env.VERCEL_PROJECT_PRODUCTION_URL.trim()}` : null;
+  return net(env.AFS_SELF_URL);
+}
+var ATTENTE_DEPART_MS = 1500;
+async function poursuivreLaPasse(res) {
+  if (res.complete || res.dryRun) return void 0;
+  if (res.runningElsewhere) return "non lanc\xE9e : une autre invocation travaille d\xE9j\xE0 sur la passe";
+  if (!res.progressed) return "non lanc\xE9e : cette tranche n'a rien fait avancer";
+  if (res.tranches >= maxTranches()) return `non lanc\xE9e : ${res.tranches} tranches d\xE9j\xE0 encha\xEEn\xE9es (maximum ${maxTranches()})`;
+  const base = selfUrl();
+  const secret = process.env.CRON_SECRET;
+  if (!base || !secret) return "non lanc\xE9e : l'API ne conna\xEEt pas sa propre adresse (JOBS_SELF_URL) \u2014 rappeler /api/jobs/daily pour continuer";
+  const envoi = fetch(`${base}/api/jobs/daily`, { method: "POST", headers: { "x-cron-secret": secret, "x-afs-suite": String(res.tranches + 1) }, signal: AbortSignal.timeout(FUNCTION_MAX_MS + 3e4) }).then((r) => r.ok ? "lanc\xE9e" : `refus\xE9e par l'API (HTTP ${r.status})`, (e) => `\xE9chec de l'appel (${e.name === "TimeoutError" ? "aucune r\xE9ponse" : e.message})`);
+  return Promise.race([envoi, new Promise((ok) => setTimeout(() => ok("lanc\xE9e"), ATTENTE_DEPART_MS))]);
+}
 var runDaily = async (c) => {
   const check = cronCheck(c);
   if (check === "absent") return c.json({ error: "CRON_SECRET non configur\xE9" }, 503);
   if (check !== "ok") return c.json({ error: "Secret cron invalide" }, 401);
   const dryRun = c.req.query("dryRun") === "1";
-  return c.json(await runDailyForAll({ dryRun }));
+  const res = await runDailyForAll({ dryRun, force: c.req.query("force") === "1" });
+  const continuation = await poursuivreLaPasse(res);
+  return c.json(continuation ? { ...res, continuation } : res);
 };
 jobsRoutes.post("/jobs/daily", runDaily);
 var runReminders = async (c) => {
   if (cronCheck(c) !== "ok") return c.json({ error: "Secret cron invalide" }, 401);
+  const debut = Date.now();
   const reminders = await remindPendingVendorOrders();
   const notifications2 = await notifyAllRestaurants();
-  return c.json({ ...reminders, notifications: notifications2 });
+  let daily;
+  try {
+    if (await dailyPending() === "a-reprendre") {
+      const reste = dailyBudgetMs() - (Date.now() - debut);
+      const res = await runDailyForAll({ budgetMs: Math.max(reste, 5e3) });
+      daily = { reprise: true, complete: res.complete, restaurants: res.restaurants, traites: res.count, remaining: res.remaining, tranches: res.tranches, continuation: await poursuivreLaPasse(res) };
+    }
+  } catch (e) {
+    daily = { reprise: true, error: e.message };
+  }
+  return c.json({ ...reminders, notifications: notifications2, ...daily ? { daily } : {} });
 };
 var runNotify = async (c) => {
   if (cronCheck(c) !== "ok") return c.json({ error: "Secret cron invalide" }, 401);
@@ -13047,7 +13386,6 @@ async function schemaStatus() {
   return value;
 }
 statusRoutes.get("/status", async (c) => {
-  const t0 = Date.now();
   let dbOk = false;
   let dbMs = 0;
   let jobs = {};
@@ -13061,8 +13399,10 @@ statusRoutes.get("/status", async (c) => {
   try {
     const db = await getDb();
     await db.execute(sql33`select 1`);
-    dbMs = Date.now() - t0;
     dbOk = true;
+    const t1 = Date.now();
+    await db.execute(sql33`select 1`);
+    dbMs = Date.now() - t1;
     jobs = publicJobHealth(await jobHealth());
     const st = await backupStorageStats();
     backup = { lastAt: st.last?.createdAt ?? null, ageHours: st.last ? Math.round((Date.now() - new Date(st.last.createdAt).getTime()) / 36e5 * 10) / 10 : null, files: st.files, keep: st.keep };
@@ -13079,7 +13419,8 @@ statusRoutes.get("/status", async (c) => {
     ...buildInfo(),
     checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
     checks: {
-      database: { ok: dbOk, latencyMs: dbMs },
+      // `colocated` : les fonctions tournent-elles dans la région de la base ? (null : impossible à dire)
+      database: { ok: dbOk, latencyMs: dbMs, colocated: regionCheck().voisines },
       // État des migrations constaté dans la base (et non supposé d'après le dépôt).
       schema: { ok: !schemaBehind && schema.state !== "inconnu", ...schema },
       jobs,
@@ -13153,6 +13494,7 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
   const t0 = Date.now();
   await db.execute(sql34`select 1`);
   const dbMs = Date.now() - t0;
+  const regions = regionCheck();
   const mc = mailerConfig();
   const sc = smsConfig();
   const problems = [
@@ -13167,7 +13509,9 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
     ...storage.ephemere ? [String(storage.note ?? "Sauvegardes locales sur un disque \xE9ph\xE9m\xE8re : seule la copie hors site est durable.")] : [],
     ...horsSite.configured && horsSite.lastUploadAt && (Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 36e5 > 36 ? [`Aucune copie hors site depuis ${Math.round((Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 36e5)} h : la copie externe ne se fait plus.`] : [],
     ...mc.transport !== "resend" ? [`Envoi d'e-mails en mode \xAB ${mc.transport} \xBB : aucun e-mail ne part vers l'ext\xE9rieur.`] : [],
-    ...sentryEnabled() ? [] : ["Suivi d'erreurs (Sentry) non configur\xE9 : les incidents ne sont visibles que dans les journaux du serveur."]
+    ...sentryEnabled() ? [] : ["Suivi d'erreurs (Sentry) non configur\xE9 : les incidents ne sont visibles que dans les journaux du serveur."],
+    // Chantier P0.4 : fonctions loin de la base — chaque requête SQL paie la distance (mesurée ci-dessous).
+    ...regions.voisines === false ? [`Fonctions en \xAB ${regions.fonction} \xBB, base en \xAB ${regions.base} \xBB : ${dbMs} ms par requ\xEAte SQL. R\xE9gion de fonctions conseill\xE9e : \xAB ${regions.conseillee} \xBB.`] : []
   ];
   return c.json({
     ok: problems.length === 0,
@@ -13182,7 +13526,8 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
       sms: { configured: sc.enabled, whatsapp: sc.whatsapp, stats: smsStats() },
       errorTracking: { configured: sentryEnabled() }
     },
-    database: { latencyMs: dbMs, engine: process.env.DATABASE_URL ? "neon" : "pglite-local" },
+    // `engine` dit la base RÉELLEMENT utilisée (une prévisualisation ignore DATABASE_URL) ; `regions` dit si les fonctions en sont proches.
+    database: { latencyMs: dbMs, engine: isNeon() ? "neon" : onVercel() ? "aucune" : "pglite-local", regions },
     build: buildInfo(),
     adminAlerts: alerts2,
     support: { email: SUPPORT.email(), hours: SUPPORT.hours, responseTime: SUPPORT.responseTime, phone: SUPPORT.phone() }

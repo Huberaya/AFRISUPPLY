@@ -67,6 +67,18 @@ function client(s: ReturnType<typeof clerkSettings>): ClerkClient {
   return cached.client;
 }
 
+/**
+ * Délai maximal accordé au service d'identité (chantier P0.4). La bibliothèque Clerk n'en fixe pas :
+ * si Clerk ne répond pas, la connexion resterait suspendue jusqu'à la durée maximale de la fonction
+ * (60 s). Au-delà du délai, on répond 503 « momentanément indisponible » — et aucune session n'est ouverte.
+ */
+export const clerkTimeoutMs = (env: NodeJS.ProcessEnv = process.env) => { const v = Number(env.CLERK_TIMEOUT_MS); return Number.isFinite(v) && v > 0 ? v : 8_000; };
+class DelaiDepasse extends Error { constructor() { super('le service d\'identité n\'a pas répondu dans le délai imparti'); this.name = 'DelaiDepasse'; } }
+const avecDelai = <T>(p: Promise<T>, ms: number): Promise<T> => new Promise<T>((ok, ko) => {
+  const t = setTimeout(() => ko(new DelaiDepasse()), ms);
+  p.then((v) => { clearTimeout(t); ok(v); }, (e) => { clearTimeout(t); ko(e); });
+});
+
 /** Motifs d'échec qui viennent du serveur ou du réseau (clé absente, Clerk injoignable), pas du jeton. */
 const SERVER_SIDE_REASONS = /^(jwk-remote-failed-to-load|jwk-remote-invalid|jwk-failed-to-resolve|jwk-local-missing|secret-key-invalid)$/;
 
@@ -82,9 +94,9 @@ export async function verifyClerkSessionToken(token: string, env: NodeJS.Process
 
   let payload: Awaited<ReturnType<typeof verifyToken>>;
   try {
-    payload = await verifyToken(token, { secretKey: s.secretKey, jwtKey: s.jwtKey, authorizedParties: parties, clockSkewInMs: 5_000, ...(s.apiUrl ? { apiUrl: s.apiUrl } : {}) });
+    payload = await avecDelai(verifyToken(token, { secretKey: s.secretKey, jwtKey: s.jwtKey, authorizedParties: parties, clockSkewInMs: 5_000, ...(s.apiUrl ? { apiUrl: s.apiUrl } : {}) }), clerkTimeoutMs(env));
   } catch (e) {
-    const reason = String((e as { reason?: string }).reason ?? '');
+    const reason = e instanceof DelaiDepasse ? 'jwk-remote-failed-to-load' : String((e as { reason?: string }).reason ?? '');
     if (SERVER_SIDE_REASONS.test(reason)) {
       console.error('[clerk] vérification du jeton impossible côté serveur :', reason);
       throw new ClerkAuthError(503, 'clerk_unreachable', 'Le service d\'identité est momentanément indisponible. Réessayez dans un instant.');
@@ -109,7 +121,7 @@ export async function fetchClerkIdentity(clerkId: string, env: NodeJS.ProcessEnv
   if (!s.enabled) throw new ClerkAuthError(503, 'clerk_not_configured', 'La connexion par Clerk n\'est pas configurée sur ce serveur.');
   let u: Awaited<ReturnType<ClerkClient['users']['getUser']>>;
   try {
-    u = await client(s).users.getUser(clerkId);
+    u = await avecDelai(client(s).users.getUser(clerkId), clerkTimeoutMs(env));
   } catch (e) {
     const status = Number((e as { status?: number }).status ?? 0);
     if (status === 404) throw new ClerkAuthError(401, 'clerk_user_unknown', 'Compte Clerk introuvable : reconnectez-vous.');

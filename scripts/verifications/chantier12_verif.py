@@ -259,7 +259,8 @@ check("la surveillance croisée s'exécute et dit combien de tâches elle a rega
       st == 200 and (wd1 or {}).get("checked") == len(attendus),
       f"HTTP {st} · {len((wd1 or {}).get('late') or [])} en problème sur {len(attendus)} supervisée(s)")
 
-st, cron, _ = call("GET", "/jobs/daily", headers={"X-Cron-Secret": CRON})
+# « force=1 » : une passe par jour sinon (chantier P0.4) — ici on veut la voir tourner maintenant.
+st, cron, _ = call("GET", "/jobs/daily?force=1", headers={"X-Cron-Secret": CRON})
 check("le job quotidien réel tourne (digest, essais, relances, sauvegarde)",
       st == 200 and (cron or {}).get("count", 0) >= 1, f"HTTP {st} · {(cron or {}).get('count')} restaurant(s)")
 check("il écrit réellement les sauvegardes (pas seulement le bloc « digest »)",

@@ -10,7 +10,7 @@
 // =============================================================
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { getDatabaseUrl, databaseUnavailableReason } from '@afrisupply/db';
+import { getDatabaseUrl, databaseUnavailableReason, regionCheck } from '@afrisupply/db';
 
 const DEV_SECRETS = new Set([
   'dev-secret-change-me-in-production', 'dev-secret-local', 'test-secret', 'secret', 'changeme',
@@ -68,6 +68,14 @@ export function checkSecureConfig(env: NodeJS.ProcessEnv = process.env): ConfigC
   if (prod && !env.RESEND_API_KEY?.trim()) warnings.push('RESEND_API_KEY absent : les e-mails (réinitialisation de mot de passe incluse) ne partiront pas.');
   if (prod && !env.ALLOWED_ORIGINS?.trim() && !env.APP_URL?.trim()) warnings.push('ALLOWED_ORIGINS/APP_URL non définis : aucune origine tierce ne pourra appeler l’API (le site sur le même domaine fonctionne).');
   if (env.BILLING_ENFORCE === 'false' && env.STRIPE_SECRET_KEY?.trim()) warnings.push('BILLING_ENFORCE=false : la facturation Stripe est configurée mais non appliquée.');
+
+  // Chantier P0.4 : fonctions loin de la base → chaque requête SQL paie un aller-retour entre deux
+  // régions. Constaté en production : ~96 ms par requête, des écrans lents et une passe quotidienne
+  // qui ne tient plus dans la durée d'une fonction.
+  const regions = regionCheck(env);
+  if (regions.voisines === false) {
+    warnings.push(`Les fonctions s'exécutent en « ${regions.fonction} » alors que la base est en « ${regions.base} » : chaque requête SQL traverse la distance entre les deux régions. Région de fonctions conseillée : « ${regions.conseillee} » (vercel.json → "regions", ou Réglages du projet → Functions → Function Region).`);
+  }
 
   // Clerk (chantier P0.2) : la connexion Clerk n'est acceptée que si le serveur peut la vérifier.
   const clerkSecret = env.CLERK_SECRET_KEY?.trim();

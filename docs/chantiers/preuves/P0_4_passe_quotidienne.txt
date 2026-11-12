@@ -1,0 +1,169 @@
+P0.4 — PASSE QUOTIDIENNE : MESURES, CORRECTION, PREUVES
+========================================================
+Relevés du 2026-11-12. Aucune écriture en production : lectures de la page de statut publique,
+essais sur poste de travail (base PostgreSQL embarquée, envois d'e-mails écrits sur disque).
+
+Ce document distingue trois niveaux :
+  [MESURÉ EN PRODUCTION]   lu sur https://afrisupply-api-zeta.vercel.app (code 15c8b81, non corrigé)
+  [PROUVÉ EN LOCAL]        exécuté sur le code de la branche, résultat reproductible
+  [NON VÉRIFIÉ]            dépend d'un accès que l'agent n'a pas (journaux Vercel, console Neon)
+
+
+1. CE QUE DIT LA PRODUCTION                                            [MESURÉ EN PRODUCTION]
+--------------------------------------------------------------------------------------------
+GET /api/health, 17:43:46Z   commit 15c8b81 · env production · region iad1 · db neon
+GET /api/status, quatre lectures entre 17:43:48Z et 17:43:59Z :
+
+  database.latencyMs        1019 (première lecture : ouverture de connexion), puis 96, 96, 96
+  jobs.daily                degraded · dernier passage « partial » · terminé 2026-09-23T05:21:16Z · 15 217 ms
+  jobs.reminders            ok · terminé 2026-11-12T14:42:11Z · 1 665 ms
+  jobs.alerts-notify        degraded · dernier passage « error » · terminé 2026-11-12T14:42:30Z · 19 601 ms
+  jobs.backup               stale · dernier passage « ok » · terminé 2026-10-05T07:17:13Z · 2 860 ms
+  backups                   0 fichier · ok:false
+  mail                      transport resend · expéditeur « onboarding@resend.dev »
+  sms, errorTracking        non configurés
+  cron.configured           true
+
+Lecture de ces chiffres :
+  a. La tâche des rappels est passée aujourd'hui (14:42Z pour un horaire déclaré à 14:00 : la plateforme
+     déclenche dans l'heure). Le secret des tâches planifiées est donc accepté et les crons tournent.
+  b. La passe quotidienne, elle, n'a laissé AUCUNE trace depuis 50 jours. Le code en production n'écrit
+     sa trace qu'à la toute fin de la passe : une passe coupée avant la fin ne laisse rien.
+  c. Une requête SQL coûte environ 96 ms, de façon stable. C'est le temps d'un aller-retour entre deux
+     continents : les fonctions tournent en « iad1 » (côte est des États-Unis), la base est ailleurs
+     — très probablement en Europe. Dans une même région, ce chiffre serait de 1 à 5 ms.
+  d. L'envoi des alertes urgentes a duré 19,6 s aujourd'hui, et il est en erreur.
+
+
+2. COMBIEN DE REQUÊTES SQL FAIT LA PASSE                                   [PROUVÉ EN LOCAL]
+--------------------------------------------------------------------------------------------
+Sonde : compteur posé sur le client de la base, restaurant de démonstration du dépôt.
+  traitement d'un restaurant (alertes, réassort, mail du matin)     80 requêtes
+  passe complète pour ce seul restaurant (étapes globales, sauvegarde comprises)   118 requêtes
+  soit environ 35 requêtes pour la sauvegarde d'un restaurant
+
+Avec la latence mesurée en production (96 ms) :
+  un restaurant           80 × 96 ms  ≈  7,7 s   (+ l'envoi des e-mails)
+  sa sauvegarde           35 × 96 ms  ≈  3,4 s
+  total par restaurant                ≈ 11 s
+  durée maximale d'une fonction (vercel.json)   60 s  →  5 restaurants au plus par invocation
+
+Conclusion : dès que la base contient plus de cinq restaurants environ, la passe ne peut plus se
+terminer dans une seule invocation. Elle est coupée par la plateforme, sans trace et sans reprise.
+C'est cohérent avec les relevés du point 1 (15 s pour la passe du 23 septembre, 19,6 s aujourd'hui pour
+une étape bien plus légère).
+
+[NON VÉRIFIÉ] La preuve directe est dans les journaux de la plateforme (invocation de 04:30 UTC : durée,
+code de réponse, « Task timed out ») et dans la console Neon (région, nombre de restaurants) : fiches
+VERCEL-01 (V10, V11) et NEON-01 (Q12, Q13). L'agent n'y a pas accès.
+
+
+3. CE QUI A ÉTÉ CORRIGÉ
+--------------------------------------------------------------------------------------------
+apps/api/src/jobs/daily.ts, apps/api/src/routes/jobs.ts, apps/api/src/lib/ops-health.ts,
+.github/workflows/cron-daily.yml
+
+  1. Une passe par jour. Un second déclenchement le même jour ne refait rien ; « force=1 » relance.
+  2. Budget de temps par invocation (35 s sur la plateforme, pour une fonction de 60 s). À l'épuisement
+     du budget, la passe rend la main proprement ; l'invocation suivante reprend où elle s'est arrêtée.
+  3. Journal de la passe dans sa ligne job_runs (aucune table nouvelle, aucune migration) : restaurants
+     traités, étapes faites, unité en cours — écrit avant et après chaque unité de travail.
+  4. Un seul ouvrier à la fois : prise de la passe sérialisée, bail renouvelé à chaque écriture, jeton
+     qui arrête une invocation dessaisie.
+  5. Une unité (restaurant, sauvegarde, étape) qui fait tomber la passe deux fois est écartée et
+     signalée ; les autres restaurants reçoivent leur mail.
+  6. Enchaînement : quand une tranche rend la main sans avoir fini, l'API se rappelle elle-même pour
+     lancer la suivante. Filets : le cron des rappels reprend une passe inachevée ; le workflow GitHub
+     « Daily digest » rappelle la route jusqu'à la fin de la passe (s'il est configuré).
+  7. Sauvegarde : une unité par restaurant, la copie hors site dans la même unité que le fichier (le
+     disque d'une fonction disparaît avec elle).
+  8. Supervision : /api/status distingue « en cours », « interrompue » (coupée en plein travail),
+     « incomplète » (suspendue, pas reprise) et « achevée », avec l'étape et le nombre de restaurants.
+
+Garantie d'envoi : « au moins une fois ». Si une invocation est coupée après l'envoi du mail d'un
+restaurant mais avant l'écriture du journal, ce restaurant, et lui seul, est retraité à la reprise.
+
+Défaut trouvé en passant et corrigé : le workflow « Daily digest » écrivait la réponse complète de
+l'API (noms des restaurants, adresses des destinataires) dans son journal — public, le dépôt l'étant.
+Il n'écrit plus que des compteurs. (Il n'a jamais abouti : 50 échecs sur 50, secrets absents.)
+
+
+4. ESSAIS SUR UN SERVEUR RÉEL                                              [PROUVÉ EN LOCAL]
+--------------------------------------------------------------------------------------------
+Serveur autonome démarré comme en exploitation (npm run start), base neuve, restaurant de
+démonstration + 3 restaurants inscrits par l'API. DAILY_BUDGET_MS=1 : chaque invocation ne fait
+qu'UNE unité de travail — le découpage le plus sévère possible.
+
+4.1 Enchaînement par l'API elle-même — UN seul appel du planificateur
+    (GET /api/jobs/daily, Authorization: Bearer …, comme le cron de la plateforme)
+
+    17:40:23.522  appel
+    réponse : {"complete":false,"count":1,"restaurants":4,"tranches":1,
+               "remaining":{"restaurants":3,"etapes":["billing","pilotReport","recurring","reminders",
+               "payments","backup","watchdog"]},"continuation":"lancée"}
+    17:40:24.466  /api/status/jobs → daily : ok · tranches=15 · traités=4
+
+    journal du serveur : 1 GET /api/jobs/daily puis 14 POST /api/jobs/daily (les suites), tous 200
+    mails du matin déposés : 1 pour chacun des 4 destinataires
+    lignes job_runs « daily » : 1  {"status":"ok","durationMs":815,"tranches":15,"count":4,"sent":4,"backup":4}
+
+4.2 Sans enchaînement (adresse propre inconnue de l'API) — le workflow de secours termine la passe
+    Script du workflow exécuté tel quel (extrait du fichier YAML, identique à ce que lit un analyseur YAML).
+
+    appel 1 : incomplète — 1/4 restaurant(s), 1 tranche(s), suite : non lancée : l'API ne connaît pas sa propre adresse (JOBS_SELF_URL) — rappeler /api/jobs/daily pour continuer
+    appel 2 : incomplète — 2/4 restaurant(s), 2 tranche(s), …
+    appel 3 : incomplète — 3/4 restaurant(s), 3 tranche(s), …
+    appel 4 : incomplète — 4/4 restaurant(s), 4 tranche(s), …
+    appels 5 à 14 : incomplète — 4/4 restaurant(s), 5 à 14 tranche(s), …   (étapes globales, sauvegardes)
+    appel 15 : achevée — 4/4 restaurant(s), 15 tranche(s)
+    Passe du 2026-11-12 : 4 mail(s) du matin envoyé(s) pour 4 restaurant(s) — {"sent":4}
+    code de sortie 0 · durée 29,9 s
+
+    mails du matin déposés : 1 pour chacun des 4 destinataires
+    ligne job_runs : {"status":"ok","durationMs":891,"tranches":15,"count":4,"sent":4,"restaurants":4,
+                      "backup":{"written":4,"errors":0},"offsite":{"configured":false}}
+
+4.3 Second passage du déclencheur le même jour
+    appel 1 : achevée — 4/4 restaurant(s), 15 tranche(s), déjà faite avant cet appel
+    mails du matin : toujours 1 par destinataire (aucun nouvel envoi)
+    /api/status → daily ok · reminders ok · backup ok
+
+4.4 Workflow sans secrets (son état actuel sur GitHub)
+    ::notice title=Déclencheur de secours non configuré::Secrets API_URL et CRON_SECRET absents : rien n'est lancé. …
+    code de sortie 0
+
+
+5. TESTS AUTOMATISÉS                                                       [PROUVÉ EN LOCAL]
+--------------------------------------------------------------------------------------------
+apps/api/src/test/p0-passe-quotidienne.test.ts — 22 tests (vraie base, vrais envois sur disque,
+et un vrai serveur HTTP pour l'enchaînement). Rejouer :
+  cd apps/api && npx vitest run src/test/p0-passe-quotidienne.test.ts
+
+Les tests détectent-ils une régression ? Chaque règle a été retirée du code, une à la fois, et la
+suite relancée :
+
+  règle retirée                                              tests en échec
+  une passe achevée n'est pas refaite                        3
+  jeton (une invocation dessaisie s'arrête)                  1
+  reprise sans retraiter les restaurants déjà faits          5
+  bail (une passe tenue n'est pas reprise)                   1
+  budget de temps                                            3
+  écarter une unité après deux coupures                      2
+  compter la coupure à la reprise                            3
+  relâcher le bail à la suspension                           4
+
+Avec le code intact : 22 réussis sur 22.
+
+
+6. CE QUI RESTE À PROUVER SUR LA PLATEFORME                                    [NON VÉRIFIÉ]
+--------------------------------------------------------------------------------------------
+  - Que la passe se termine réellement en production : après déploiement, /api/status doit montrer
+    daily « ok » le lendemain matin, et /api/status/jobs le nombre de tranches et les durées par
+    restaurant (champ « ms » de chaque résultat).
+  - Que l'appel de l'API à elle-même aboutit sur la plateforme (il utilise le domaine de production
+    fourni par la plateforme, VERCEL_PROJECT_PRODUCTION_URL). S'il n'aboutit pas, la réponse de la
+    première tranche le dit (champ « continuation »), et les deux filets prennent le relais : le cron des
+    rappels (14:00 UTC) et le workflow GitHub (s'il est configuré).
+  - La cause de fond — fonctions loin de la base — se corrige par un réglage (région des fonctions) :
+    fiche VERCEL-01, point V11. Avec des fonctions dans la région de la base, la passe entière de dix
+    restaurants tient en quelques secondes, et chaque écran de l'application gagne autant.

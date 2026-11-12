@@ -1,22 +1,81 @@
-# Déclenche le job « Votre matin AFRISUPPLY » chaque jour à 6h30 (Paris), plus les relances horaires.
+# Passe quotidienne — déclencheur de secours, et garant de sa fin.
 #
-# Deux déclencheurs existent : les crons Vercel (`vercel.json`, mêmes horaires, dans la plateforme) et ce
-# workflow — utile si l'API tourne ailleurs qu'en fonctions Vercel (Railway, Fly.io, Render).
-# Secrets à créer : API_URL (ex. https://api.afrisupply.fr) et CRON_SECRET (identique à l'env de l'API).
+# Le déclencheur principal est le cron de la plateforme (vercel.json → /api/jobs/daily, 04:30 UTC).
+# Ce workflow appelle la même route un quart d'heure plus tard et la RAPPELLE jusqu'à ce que la passe
+# du jour soit achevée :
+#   - la passe est déjà faite        → l'API répond « alreadyComplete », rien n'est refait (une passe par jour) ;
+#   - elle est incomplète ou absente → ce workflow la termine, tranche par tranche (chantier P0.4) ;
+#   - elle ne se termine pas         → le workflow échoue, et GitHub prévient le propriétaire du dépôt.
+#
+# Secrets à créer (Settings → Secrets and variables → Actions) :
+#   API_URL      adresse publique de l'API, sans barre finale (ex. https://app.exemple.fr)
+#   CRON_SECRET  même valeur que la variable CRON_SECRET de l'API
+# Sans ces secrets, le workflow ne lance rien et le dit. Il n'échoue pas : un déclencheur facultatif
+# non configuré n'est pas une panne, et un échec quotidien sans cause réelle habitue à ne plus les lire.
+#
+# Confidentialité : la réponse de l'API (noms de restaurants, adresses des destinataires) n'est JAMAIS
+# écrite dans le journal du workflow — seulement des compteurs. Les journaux d'un dépôt public sont publics.
 name: Daily digest
 on:
   schedule:
-    - cron: '30 4 * * *'   # 04:30 UTC = 06:30 Paris (été) / 05:30 (hiver) — ajuster si besoin
+    - cron: '45 4 * * *'   # 04:45 UTC = 05:45 (hiver) / 06:45 (été) à Paris
   workflow_dispatch: {}
+concurrency:
+  group: passe-quotidienne
+  cancel-in-progress: false
+permissions: {}
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Déclencher le job quotidien
+      - name: Passe quotidienne, jusqu'à son terme
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -sS -f -X POST "${{ secrets.API_URL }}/api/jobs/daily" \
-            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" | tee result.json
-      - name: Résumé (et échec si le job a échoué)
-        run: |
-          node -e "const r=require('./result.json');console.log(`${r.sent}/${r.count} digests envoyés`);for(const x of r.results)console.log('-',x.name,x.digest,x.error??'')"
-          node -e "const r=require('./result.json');const ko=(r.results??[]).filter(x=>x.error||x.digest==='error');if(ko.length){console.error('Échec pour :',ko.map(x=>x.name).join(', '));process.exit(1)}"
+          set -u
+          if [ -z "${API_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::notice title=Déclencheur de secours non configuré::Secrets API_URL et CRON_SECRET absents : rien n'est lancé. Le cron de la plateforme reste le seul déclencheur de la passe quotidienne."
+            exit 0
+          fi
+          cat > lire.cjs <<'EOF'
+          // Lit la réponse de l'API et n'en sort que des compteurs (aucun nom, aucune adresse).
+          const r = require('./result.json');
+          const mode = process.argv[2];
+          const etat = r.complete === false ? (r.runningElsewhere ? 'occupee' : 'incomplete') : 'complete';
+          if (mode === 'etat') { console.log(etat); process.exit(0); }
+          const total = r.restaurants ?? r.count ?? 0;
+          if (mode === 'ligne') {
+            console.log(`${etat === 'complete' ? 'achevée' : etat === 'occupee' ? 'une autre invocation travaille' : 'incomplète'} — ${r.count ?? 0}/${total} restaurant(s), ${r.tranches ?? 1} tranche(s)${r.alreadyComplete ? ', déjà faite avant cet appel' : ''}${r.continuation ? `, suite : ${r.continuation}` : ''}`);
+            process.exit(0);
+          }
+          // bilan final
+          if (etat !== 'complete') { console.log("::error::La passe quotidienne n'est pas achevée après tous les appels."); process.exit(1); }
+          const res = r.results ?? [];
+          const parEtat = {};
+          for (const x of res) parEtat[x.digest] = (parEtat[x.digest] ?? 0) + 1;
+          console.log(`Passe du ${r.jour ?? '?'} : ${r.sent ?? 0} mail(s) du matin envoyé(s) pour ${r.count ?? 0} restaurant(s) — ${JSON.stringify(parEtat)}`);
+          const ko = res.filter((x) => x.error || x.digest === 'error').length;
+          if (ko) { console.log(`::error::${ko} restaurant(s) en échec — détail dans le back-office (Exploitation) et dans /api/status/jobs.`); process.exit(1); }
+          EOF
+          url="${API_URL%/}/api/jobs/daily"
+          echecs=0
+          for i in $(seq 1 60); do
+            code=$(curl -sS -o result.json -w '%{http_code}' --max-time 120 -X POST "$url" -H "X-Cron-Secret: $CRON_SECRET" || true)
+            if [ "$code" != "200" ]; then
+              echecs=$((echecs + 1))
+              echo "appel $i : HTTP ${code:-aucune réponse}"
+              if [ "$echecs" -ge 5 ]; then
+                echo "::error::La passe quotidienne ne répond pas : 5 appels en échec (dernier code HTTP ${code:-aucun}). Vérifier API_URL, CRON_SECRET et l'état de l'API (/api/health)."
+                exit 1
+              fi
+              sleep 20
+              continue
+            fi
+            echo "appel $i : $(node lire.cjs ligne)"
+            etat=$(node lire.cjs etat)
+            if [ "$etat" = "complete" ]; then break; fi
+            if [ "$etat" = "occupee" ]; then sleep 20; else sleep 2; fi
+          done
+          node lire.cjs bilan

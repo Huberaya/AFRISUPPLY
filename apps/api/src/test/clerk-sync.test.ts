@@ -50,7 +50,7 @@ const activerClerk = () => { process.env.CLERK_SECRET_KEY = 'sk_test_cle_du_faux
 
 beforeAll(async () => { await runMigrations(); clerk = await demarrerFauxClerk(); }, 60_000);
 afterAll(async () => { await clerk.fermer(); });
-beforeEach(async () => { activerClerk(); clerk.panne(false); await _resetRateLimits(); });
+beforeEach(async () => { activerClerk(); clerk.panne(false); clerk.silence(false); delete process.env.CLERK_TIMEOUT_MS; await _resetRateLimits(); });
 
 describe('1. L’attaque d’origine et ses variantes échouent', () => {
   beforeAll(async () => { await inscrire('victime@resto.test', 'Awa Victime'); });
@@ -152,6 +152,20 @@ describe('1. L’attaque d’origine et ses variantes échouent', () => {
     expect(r.cookie).toBeNull();
     expect(await compte('panne@resto.test')).toBeUndefined();
   });
+
+  it('si Clerk accepte la connexion mais ne répond jamais, la requête n’attend pas indéfiniment : 503 dans le délai, aucune session', async () => {
+    clerk.ajouter({ id: 'user_silence', email: 'silence@resto.test' });
+    clerk.silence(true);
+    process.env.CLERK_TIMEOUT_MS = '400';
+    const debut = Date.now();
+    const r = await sync({ jeton: await clerk.jeton('user_silence') });
+    const duree = Date.now() - debut;
+    expect(r.status).toBe(503);
+    expect(r.json.code).toBe('clerk_unreachable');
+    expect(r.cookie).toBeNull();
+    expect(duree).toBeLessThan(3_000);              // sans délai maximal, cet appel ne reviendrait pas
+    expect(await compte('silence@resto.test')).toBeUndefined();
+  }, 15_000);
 
   it('un identifiant Clerk inconnu de l’annuaire est refusé', async () => {
     const r = await sync({ jeton: await clerk.jeton('user_inconnu_de_clerk'), corps: { email: 'victime@resto.test' } });

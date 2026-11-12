@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { SignJWT } from 'jose';
-import { runMigrations, getDb, getDatabaseUrl, databaseUnavailableReason, migrationStatus, describeMigrationStatus } from '@afrisupply/db';
+import { runMigrations, getDb, getDatabaseUrl, databaseUnavailableReason, migrationStatus, describeMigrationStatus, databaseRegion, regionCheck } from '@afrisupply/db';
 import { app } from '../app.js';
 import { checkSecureConfig, configGateState, jwtSecretProblem, sameSecret, cronSecretCheck } from '../lib/security.js';
 import { signToken, verifyToken, UnsafeConfigError } from '../lib/auth.js';
@@ -271,4 +271,56 @@ describe('4. Migrations : contrôlées, jamais appliquées par surprise', () => 
     expect(r.status).toBe(3);
     expect(r.stdout).toMatch(/base non initialisée : aucune des 29 migrations/);
   }, 60_000);
+});
+
+describe('5. Les fonctions tournent-elles près de la base ?', () => {
+  // Mesuré en production le 2026-11-12 (page de statut publique) : fonctions en « iad1 », ~96 ms par
+  // requête SQL. Ce contrôle rend la cause lisible — sans jamais montrer l'adresse de la base.
+  const NEON = 'postgresql://app:MOT-DE-PASSE-SECRET@ep-calme-riviere-a1b2c3d4-pooler.eu-central-1.aws.neon.tech/afrisupply?sslmode=require';
+
+  it('la région de la base se lit dans le nom d’hôte — et rien d’autre n’en sort', () => {
+    expect(databaseRegion({ DATABASE_URL: NEON })).toEqual({ provider: 'aws', region: 'eu-central-1' });
+    expect(databaseRegion({ DATABASE_URL: 'postgresql://u:p@ep-x-123.us-east-2.aws.neon.tech/db' })).toEqual({ provider: 'aws', region: 'us-east-2' });
+    expect(databaseRegion({ DATABASE_URL: 'postgresql://u:p@ep-x-123.germanywestcentral.azure.neon.tech/db' })).toEqual({ provider: 'azure', region: 'germanywestcentral' });
+    // autre hébergeur, adresse illisible, adresse absente : on ne devine pas
+    expect(databaseRegion({ DATABASE_URL: 'postgresql://u:p@db.exemple.fr:5432/db' })).toBeNull();
+    expect(databaseRegion({ DATABASE_URL: 'pas une adresse' })).toBeNull();
+    expect(databaseRegion({})).toBeNull();
+    expect(JSON.stringify(databaseRegion({ DATABASE_URL: NEON }))).not.toMatch(/MOT-DE-PASSE|ep-calme|app:/);
+  });
+
+  it('fonctions outre-Atlantique, base en Europe : éloignées, avec la région conseillée', () => {
+    expect(regionCheck({ VERCEL_REGION: 'iad1', DATABASE_URL: NEON })).toEqual({ fonction: 'iad1', base: 'aws/eu-central-1', conseillee: 'fra1', voisines: false });
+    expect(regionCheck({ VERCEL_REGION: 'fra1', DATABASE_URL: NEON }).voisines).toBe(true);
+    // hors plateforme, ou région de base inconnue : on ne conclut pas
+    expect(regionCheck({ DATABASE_URL: NEON }).voisines).toBeNull();
+    expect(regionCheck({ VERCEL_REGION: 'iad1', DATABASE_URL: 'postgresql://u:p@db.exemple.fr/db' }).voisines).toBeNull();
+    expect(regionCheck({ VERCEL_REGION: 'iad1' })).toEqual({ fonction: 'iad1', base: null, conseillee: null, voisines: null });
+  });
+
+  it('une prévisualisation est jugée sur SA base (PREVIEW_DATABASE_URL), pas sur celle de production', () => {
+    const preview = 'postgresql://u:p@ep-preview-9.us-east-1.aws.neon.tech/db';
+    expect(regionCheck({ VERCEL_ENV: 'preview', VERCEL_REGION: 'iad1', DATABASE_URL: NEON, PREVIEW_DATABASE_URL: preview })).toEqual({ fonction: 'iad1', base: 'aws/us-east-1', conseillee: 'iad1', voisines: true });
+    expect(regionCheck({ VERCEL_ENV: 'preview', VERCEL_REGION: 'iad1', DATABASE_URL: NEON }).base).toBeNull();
+  });
+
+  it('l’éloignement est un AVERTISSEMENT de configuration (l’API reste en service), sans l’adresse ni le mot de passe', () => {
+    const { errors, warnings } = checkSecureConfig({ ...prod, VERCEL: '1', VERCEL_ENV: 'production', VERCEL_REGION: 'iad1', DATABASE_URL: NEON });
+    expect(errors).toEqual([]);
+    const w = warnings.find((x) => /Région de fonctions conseillée/.test(x));
+    expect(w).toMatch(/« iad1 »/); expect(w).toMatch(/« aws\/eu-central-1 »/); expect(w).toMatch(/« fra1 »/);
+    expect(warnings.join(' ')).not.toMatch(/MOT-DE-PASSE|ep-calme|neon\.tech/);
+    // même région : aucun avertissement
+    const memes = checkSecureConfig({ ...prod, VERCEL: '1', VERCEL_ENV: 'production', VERCEL_REGION: 'fra1', DATABASE_URL: NEON });
+    expect(memes.warnings.some((x) => /Région de fonctions conseillée/.test(x))).toBe(false);
+  });
+
+  it('la page de statut publie la latence d’UN aller-retour et le voisinage (inconnu sur un poste local)', async () => {
+    _resetSchemaCache();
+    const r = await appel('GET', '/api/status');
+    expect(r.json.checks.database.ok).toBe(true);
+    expect(typeof r.json.checks.database.latencyMs).toBe('number');
+    expect(r.json.checks.database.latencyMs).toBeLessThan(200);   // base embarquée : quelques millisecondes, connexion comprise ou non
+    expect(r.json.checks.database.colocated).toBeNull();
+  });
 });

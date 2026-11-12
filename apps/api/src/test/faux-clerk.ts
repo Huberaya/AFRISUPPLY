@@ -25,6 +25,8 @@ export type FauxClerk = {
   jetonForge(sub: string): Promise<string>;
   /** Fait répondre l'API en erreur (503) pour simuler Clerk injoignable. */
   panne(active: boolean): void;
+  /** L'API accepte la connexion mais ne répond plus (service suspendu : le pire cas pour un appelant sans délai). */
+  silence(active: boolean): void;
   /** Nombre d'appels reçus par l'API. */
   appels(): number;
   fermer(): Promise<void>;
@@ -47,11 +49,12 @@ export async function demarrerFauxClerk(): Promise<FauxClerk> {
   const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const autre = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const fiches = new Map<string, FauxUtilisateur>();
-  let enPanne = false; let n = 0;
+  let enPanne = false; let muet = false; let n = 0;
 
   const server = http.createServer((req, res) => {
     n += 1;
     const json = (status: number, body: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    if (muet) return;   // aucune réponse : la requête reste ouverte
     if (enPanne) return json(503, { errors: [{ code: 'service_unavailable', message: 'indisponible' }] });
     if (!String(req.headers.authorization ?? '').startsWith('Bearer sk_')) return json(401, { errors: [{ code: 'authorization_invalid', message: 'clé secrète requise' }] });
     const m = /^\/v1\/users\/([^/?]+)/.exec(req.url ?? '');
@@ -80,7 +83,8 @@ export async function demarrerFauxClerk(): Promise<FauxClerk> {
     jeton: (sub, opts) => signer(privateKey, sub, opts),
     jetonForge: (sub) => signer(autre.privateKey, sub),
     panne: (active) => { enPanne = active; },
+    silence: (active) => { muet = active; },
     appels: () => n,
-    fermer: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    fermer: () => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }),
   };
 }

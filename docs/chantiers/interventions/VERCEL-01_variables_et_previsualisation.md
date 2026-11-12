@@ -39,6 +39,57 @@ Pour lever ce blocage : donner au connecteur un jeton dont la portée couvre l'�
 | V8 | Project → Settings → Domains | Domaines servis par ce projet |
 | V9 | Project → Cron Jobs | Tâches listées et dernier résultat de chacune |
 | V10 | Project → Logs, filtre `/api/jobs/daily`, 7 derniers jours | Code de réponse et durée ; présence de « Task timed out » |
+| V11 | `DATABASE_URL` (Production) : **le nom d'hôte seulement**, entre `@` et `/` | La région qu'il contient (ex. `….eu-central-1.aws.neon.tech` → `eu-central-1`). Ne relever ni l'identifiant ni le mot de passe |
+| V12 | Project → Settings → Environment Variables | Présence de `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY` (copie des sauvegardes hors de la plateforme) |
+| V13 | Project → Settings → General (ou Billing) | Offre de l'équipe (Hobby, Pro) : elle fixe la durée maximale d'une fonction et la fréquence des tâches planifiées |
+
+## La région des fonctions : un réglage, un effet sur toute l'application
+
+Mesuré le 2026-11-12 sur la page de statut publique de la production : fonctions en `iad1` (côte est
+des États-Unis), et **environ 96 ms par requête SQL**, de façon stable. C'est le temps d'un
+aller-retour entre deux continents ; dans une même région, ce chiffre est de 1 à 5 ms.
+
+Conséquences mesurées (`preuves/P0_4_passe_quotidienne.txt`) :
+
+- un écran qui fait quinze requêtes SQL attend une seconde et demie rien que pour la distance ;
+- la passe quotidienne fait environ 115 requêtes par restaurant, soit 11 secondes : au-delà de cinq
+  restaurants elle ne tient plus dans les 60 secondes d'une fonction. Aucune passe complète n'est
+  enregistrée en production depuis le 2026-09-23.
+
+La branche de correction découpe la passe en tranches et la reprend : elle se terminera même avec
+cette latence. Mais la cause de fond se règle ici, en une ligne.
+
+| Si V11 montre… | Région de fonctions à choisir |
+|---|---|
+| `eu-central-1` (Francfort) | `fra1` |
+| `eu-west-2` (Londres) | `lhr1` |
+| `us-east-1` | `iad1` (déjà le cas : chercher la cause ailleurs) |
+| `us-east-2` | `cle1` |
+
+Deux façons de faire, au choix (une seule suffit) :
+
+1. dans le dépôt : ajouter `"regions": ["fra1"]` à `vercel.json` — l'agent le fait dans la branche dès
+   que la région de la base est confirmée (V11), et le changement passe par la demande de fusion ;
+2. dans Vercel : Project → Settings → Functions → Function Region.
+
+Après le déploiement suivant, la branche de correction rend le résultat lisible sans aucun accès :
+`GET /api/status` → `checks.database.latencyMs` (un aller-retour, connexion déjà ouverte) et
+`checks.database.colocated` (`true` quand les fonctions sont dans la région de la base). Tant que les
+régions diffèrent, un avertissement `[config]` le dit dans les journaux de la fonction et dans l'écran
+« Exploitation » du back-office, avec la région conseillée.
+
+## Les tâches planifiées après la fusion
+
+| Déclencheur | Où | Rôle après la fusion |
+|---|---|---|
+| Cron `/api/jobs/daily` (04:30 UTC) | `vercel.json` | Démarre la passe du jour. Si elle ne tient pas dans une invocation, l'API lance elle-même la suite |
+| Cron `/api/jobs/reminders` (14:00 UTC) | `vercel.json` | Rappels aux grossistes, alertes urgentes — et reprise d'une passe du jour restée inachevée |
+| Workflow « Daily digest » (04:45 UTC) | GitHub Actions | Facultatif. Rappelle `/api/jobs/daily` jusqu'à la fin de la passe ; échoue (et GitHub prévient) si elle ne se termine pas. Aujourd'hui non configuré : il ne lance rien et le dit |
+
+Pour activer le workflow (recommandé pendant le pilote : c'est le seul déclencheur qui prévient par
+e-mail quand la passe ne se termine pas) : GitHub → dépôt → Settings → Secrets and variables → Actions
+→ créer `API_URL` (adresse publique du site, sans barre finale) et `CRON_SECRET` (la même valeur que
+dans Vercel — à copier de Vercel vers GitHub directement, sans passer par une conversation).
 
 ## Ce que la branche de correction change, et ce qu'il faut vérifier avant de la fusionner
 
@@ -58,8 +109,13 @@ Pour lever ce blocage : donner au connecteur un jeton dont la portée couvre l'�
 2. Créer, en portée **Preview** uniquement : `PREVIEW_DATABASE_URL` (base dédiée, fiche NEON-02),
    `MIGRATE_ON_BUILD=apply` (le build de prévisualisation aligne alors SA base, jamais celle de
    production), un `JWT_SECRET` différent de celui de la production, `APP_URL` si l'on veut tester Clerk.
-3. Si la région des fonctions n'est pas celle de la base : la rapprocher (une fonction aux États-Unis
-   et une base en Europe ajoutent un aller-retour transatlantique à chaque requête SQL).
+3. Si la région des fonctions n'est pas celle de la base : la rapprocher (voir « La région des
+   fonctions » ci-dessus).
+4. Sauvegardes : sur la plateforme, le disque d'une fonction disparaît avec elle. Sans les variables
+   `BACKUP_S3_*` (V12), **aucune sauvegarde applicative n'est conservée** — la page de statut de la
+   production indique aujourd'hui « 0 fichier ». La seule protection des données est alors celle de
+   Neon (fiche NEON-01, Q13). Pour une copie indépendante : créer un espace de stockage compatible S3
+   et poser les quatre variables en portée Production (procédure : `docs/SAUVEGARDE_HORS_SITE.md`).
 
 ## Risques
 
@@ -76,7 +132,7 @@ Pour lever ce blocage : donner au connecteur un jeton dont la portée couvre l'�
 
 ## Preuves attendues en retour
 
-Le tableau V1 (noms et portées), les réponses V2 à V10. Aucune valeur de variable.
+Le tableau V1 (noms et portées), les réponses V2 à V13. Aucune valeur de variable.
 
 ## Comment le résultat sera vérifié
 
@@ -86,3 +142,7 @@ Le tableau V1 (noms et portées), les réponses V2 à V10. Aucune valeur de vari
   `GET /api/status` → `checks.schema.state`.
 - Production après déploiement : `GET /api/health` → 200 `"config":"ok"` ; `GET /api/status` →
   `checks.schema` = `a_jour`, 29/29.
+- Région : `GET /api/status` → `checks.database.colocated` = `true` et `latencyMs` inférieur à 10.
+- Passe quotidienne, le lendemain matin : `GET /api/status` → `checks.jobs.daily.state` = `ok`,
+  `lastRun.finishedAt` du jour. Le détail (nombre de tranches, durée par restaurant) est dans
+  `GET /api/status/jobs` (secret des tâches planifiées) et dans l'écran « Exploitation ».

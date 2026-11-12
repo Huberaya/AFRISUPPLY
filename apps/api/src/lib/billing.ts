@@ -43,7 +43,8 @@ export async function stripe<T = Record<string, unknown>>(method: 'GET' | 'POST'
   const headers: Record<string, string> = { Authorization: `Bearer ${key}`, 'Stripe-Version': '2024-06-20' };
   if (method !== 'GET') headers['content-type'] = 'application/x-www-form-urlencoded';
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
-  const res = await fetch(url, { method, headers, body: method === 'GET' ? undefined : body });
+  // Chantier P0.4 : délai maximal — sans lui, un prestataire de paiement muet retient la requête jusqu'à la durée maximale de la fonction.
+  const res = await fetch(url, { method, headers, body: method === 'GET' ? undefined : body, signal: AbortSignal.timeout(20_000) });
   const json = await res.json() as T & { error?: { message: string } };
   if (!res.ok) throw new Error(`Stripe ${res.status}: ${json.error?.message ?? 'erreur'}`);
   return json;

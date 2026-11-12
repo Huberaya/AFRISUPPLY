@@ -185,7 +185,8 @@ check("aucune alerte urgente ancienne n'attend un envoi rétroactif", len(pendin
 
 # ---------------------------------------------------------------- G. relance ventes non saisies
 print("\nG. Relance « ventes non saisies depuis 3 jours »")
-st, run = call("GET", f"/jobs/daily?secret={CRON}")
+# « force=1 » : une passe par jour sinon (chantier P0.4) — le compte vient d'être créé, la passe doit tourner maintenant.
+st, run = call("GET", f"/jobs/daily?secret={CRON}&force=1")
 check("le job quotidien s'exécute", st == 200, f"HTTP {st}")
 st, al2 = call("GET", "/alerts", token=tok, rid=rid)
 saisie = [a for a in al2.get("alerts", []) if a.get("kind") == "saisie"]

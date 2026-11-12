@@ -105,7 +105,9 @@ describe('La production serverless ne peut pas écrire dans le projet : le dossi
       expect(backupDir().startsWith(tmpdir())).toBe(true);
       expect(backupDiskEphemere()).toBe(true);
 
-      const run = await runDailyForAll({});
+      // Seconde passe du même jour dans ce fichier : elle est demandée explicitement (« force »), une passe
+      // déjà achevée n'étant plus refaite par un simple second appel (chantier P0.4).
+      const run = await runDailyForAll({ force: true });
       expect(run.count).toBeGreaterThan(0);
       const resume = JSON.stringify((run as Record<string, unknown>).results ?? run);
       expect(resume).not.toMatch(/ENOENT|EROFS|read-only/i);

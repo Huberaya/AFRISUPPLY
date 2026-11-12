@@ -28,6 +28,9 @@ async function main() {
   if (process.env.AUTO_MIGRATE !== 'false') await runMigrations();
   // SEED_DEMO=true : crée le restaurant démo s'il manque ; SEED_DEMO=purge : le supprime et le régénère.
   if (process.env.SEED_DEMO === 'true' || process.env.SEED_DEMO === 'purge') await seedDemo({ force: process.env.SEED_DEMO === 'purge' });
+  // Chantier P0.4 : adresse locale du serveur, pour qu'une passe quotidienne découpée en tranches
+  // (DAILY_BUDGET_MS) puisse lancer elle-même sa suite. Une valeur déjà fournie garde la priorité.
+  process.env.AFS_SELF_URL ??= `http://127.0.0.1:${port}`;
   serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => console.log(`[api] AFRISUPPLY API → http://0.0.0.0:${port}`));
 }
 main().catch((e) => { console.error(e); process.exit(1); });

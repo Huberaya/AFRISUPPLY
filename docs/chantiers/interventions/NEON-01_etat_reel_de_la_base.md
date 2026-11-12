@@ -23,12 +23,20 @@ et un rôle supposé n'est pas le rôle réellement utilisé. Cette fiche sert �
 4. Les traces d'usage de la route critique `clerk-sync` et l'état des liens Clerk déjà posés.
 5. L'état de confirmation des adresses des exploitants (condition de leurs droits après la correction).
 6. La région de la base (pour la comparer à la région des fonctions Vercel).
+7. Le volume que la passe quotidienne doit traiter, et ce qu'elle a réellement laissé comme traces.
+8. La protection des données par Neon lui-même (durée de l'historique restaurable) : aujourd'hui,
+   c'est la **seule** sauvegarde — la page de statut de la production annonce « 0 fichier » de
+   sauvegarde applicative.
 
 ## Vérifications préalables
 
 - Être sur le **projet et la branche de production** dans la console Neon (le nom de la base attendu par l'application est celui de `DATABASE_URL` côté Vercel).
 - Ouvrir l'éditeur SQL. Ne pas utiliser d'autre outil.
 - Noter la **région** affichée par la console pour ce projet (elle ne se lit pas en SQL).
+  Mesuré le 2026-11-12 depuis la production : environ 96 ms par requête SQL, fonctions en `iad1`
+  (États-Unis). La région relevée ici décide de la région des fonctions (fiche VERCEL-01, point V11).
+- Noter, dans la console (elles ne se lisent pas en SQL non plus) : l'**offre** du projet, et la durée
+  de l'**historique restaurable** (Settings → Storage → « History retention », ou l'écran « Restore »).
 
 ## Opérations — à copier telles quelles, dans l'ordre
 
@@ -105,8 +113,26 @@ FROM users WHERE lower(email) = ANY (ARRAY['adresse1@exemple.fr', 'adresse2@exem
 SELECT job, status, count(*) AS passages, max(finished_at) AS dernier FROM job_runs GROUP BY 1, 2 ORDER BY 1, 2;
 SELECT job, status, started_at, duration_ms, left(coalesce(error, ''), 160) AS erreur FROM job_runs ORDER BY started_at DESC LIMIT 30;
 
+-- Q12. Passe quotidienne : ce qu'elle doit traiter, et ses dernières traces
+--      (mesure : environ 115 requêtes SQL par restaurant ; à 96 ms l'une, 11 secondes par restaurant)
+SELECT count(*) AS restaurants,
+       count(*) FILTER (WHERE subscription_status = 'trialing') AS en_essai,
+       count(*) FILTER (WHERE subscription_status = 'active') AS abonnes,
+       count(*) FILTER (WHERE created_at > now() - interval '30 days') AS crees_depuis_30_jours
+FROM restaurants;
+SELECT status, started_at, finished_at, duration_ms,
+       summary->>'count' AS restaurants_traites, summary->>'sent' AS mails_envoyes, summary->>'errors' AS en_erreur,
+       left(coalesce(error, ''), 200) AS erreur
+FROM job_runs WHERE job = 'daily' ORDER BY started_at DESC LIMIT 10;
+
 ROLLBACK;
 ```
+
+Hors SQL, dans la console Neon :
+
+- **Q13.** Offre du projet ; durée de l'historique restaurable ; date du dernier essai de restauration
+  s'il y en a eu un (création d'une branche à partir d'un instant passé). Ne rien créer ni restaurer
+  pendant cette intervention : on relève seulement les réglages.
 
 ## Risques
 
@@ -123,7 +149,8 @@ masquent les adresses e-mail pour l'éviter.
 
 ## Preuves attendues en retour
 
-Pour chaque requête Q1 à Q11 : le tableau de résultat (copie texte ou capture), plus la région du projet.
+Pour chaque requête Q1 à Q12 : le tableau de résultat (copie texte ou capture), plus la région du
+projet, son offre et la durée de l'historique restaurable (Q13).
 Aucune valeur secrète n'est demandée.
 
 ## Comment le résultat sera vérifié et utilisé
@@ -136,6 +163,10 @@ Aucune valeur secrète n'est demandée.
 | Q3/Q4 : aucune RLS, aucune politique | Conforme au dépôt : l'isolation repose sur le code seul | Décision d'architecture (voir ci-dessous) |
 | Q8/Q9 : identifiants suspects ou comptes ouverts par plusieurs identifiants | La route critique a peut-être été utilisée | Fiche d'incident : comptes à vérifier, sessions à révoquer |
 | Q10 : `adresse_confirmee = false` | L'exploitant perdra ses droits au déploiement de la correction | Confirmer son adresse (lien de confirmation) avant ou juste après le déploiement |
+| Région ≠ région des fonctions (`iad1` = côte est des États-Unis) | Chaque requête SQL traverse la distance entre les deux | Régler la région des fonctions (VERCEL-01, V11) |
+| Q12 : plus de 5 restaurants | Avec la latence actuelle, la passe ne tient pas dans une invocation de 60 s — ce qui explique l'absence de trace depuis le 2026-09-23 | La branche de correction découpe et reprend la passe ; la région règle la cause |
+| Q12 : dernières lignes `daily` en `partial`, colonne `erreur` remplie | Des mails du matin sont refusés | Lire le motif dans la colonne `erreur`. Hypothèse à confirmer par ce motif : l'expéditeur d'essai `onboarding@resend.dev` (constaté sur la page de statut) ne délivre, d'après la documentation du prestataire, qu'à l'adresse du titulaire du compte Resend (voir « E-mails » dans le rapport de suivi) |
+| Q13 : historique de quelques heures | Une erreur découverte le lendemain n'est plus rattrapable par Neon | Allonger l'historique (offre), et activer la copie hors site des sauvegardes (VERCEL-01, V12) |
 
 ## Décision d'architecture à instruire avec ChatGPT (RLS)
 

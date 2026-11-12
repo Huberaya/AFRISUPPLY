@@ -4,7 +4,7 @@
 // Sans données métier — et sans chiffre inventé : tout vient de job_runs, du disque des sauvegardes et de la base.
 import { Hono } from 'hono';
 import { desc, sql } from 'drizzle-orm';
-import { getDb, jobRuns, migrationStatus, type MigrationStatus } from '@afrisupply/db';
+import { getDb, jobRuns, migrationStatus, regionCheck, type MigrationStatus } from '@afrisupply/db';
 import { cronSecretCheck } from '../lib/security.js';
 import { buildInfo, sentryEnabled } from '../lib/ops.js';
 import { SUPPORT, jobHealth, publicJobHealth } from '../lib/ops-health.js';
@@ -26,13 +26,16 @@ export async function schemaStatus(): Promise<MigrationStatus> {
 export const _resetSchemaCache = () => { schemaCache = null; };
 
 statusRoutes.get('/status', async (c) => {
-  const t0 = Date.now(); let dbOk = false; let dbMs = 0;
+  let dbOk = false; let dbMs = 0;
   let jobs: Awaited<ReturnType<typeof jobHealth>> = {};
   let backup: { lastAt: string | null; ageHours: number | null; files: number; keep: number } = { lastAt: null, ageHours: null, files: 0, keep: 0 };
   let schema: { state: string; expected: number | null; applied: number | null; pending: number } = { state: 'inconnu', expected: null, applied: null, pending: 0 };
   try { const s = await schemaStatus(); schema = { state: s.state, expected: s.expected, applied: s.applied, pending: s.pending.length }; } catch { /* base injoignable : signalé par `database` ci-dessous */ }
   try {
-    const db = await getDb(); await db.execute(sql`select 1`); dbMs = Date.now() - t0; dbOk = true;
+    // Latence = durée d'UN aller-retour vers la base, connexion déjà ouverte (la première requête ouvre
+    // la connexion : elle n'est pas comptée). C'est le coût payé par CHAQUE requête SQL de l'application.
+    const db = await getDb(); await db.execute(sql`select 1`); dbOk = true;
+    const t1 = Date.now(); await db.execute(sql`select 1`); dbMs = Date.now() - t1;
     // Chantier 12 : la même source de vérité que le back-office (lib/ops-health.ts) — une seule règle
     // de « job en retard », utilisée ici et dans les alertes admin.
     // Vue PUBLIQUE : état et fraîcheur, sans le détail des passages (chemins internes, volumes).
@@ -48,7 +51,8 @@ statusRoutes.get('/status', async (c) => {
   return c.json({
     ok, ...buildInfo(), checkedAt: new Date().toISOString(),
     checks: {
-      database: { ok: dbOk, latencyMs: dbMs },
+      // `colocated` : les fonctions tournent-elles dans la région de la base ? (null : impossible à dire)
+      database: { ok: dbOk, latencyMs: dbMs, colocated: regionCheck().voisines },
       // État des migrations constaté dans la base (et non supposé d'après le dépôt).
       schema: { ok: !schemaBehind && schema.state !== 'inconnu', ...schema },
       jobs,
