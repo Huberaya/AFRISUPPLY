@@ -12,6 +12,7 @@ import { mailerConfig, sendMail, mailStats } from '../lib/mailer.js';
 import { notifyAllRestaurants } from '../lib/notify.js';
 import { recordJobRun } from '../lib/job-runs.js';
 import { cronSecretCheck } from '../lib/security.js';
+import { h, zNomAffiche } from '../lib/html.js';
 
 export const jobsRoutes = new Hono<Env>();
 
@@ -136,7 +137,7 @@ settingsRoutes.get('/settings', async (c) => {
 
 settingsRoutes.put('/settings', async (c) => {
   const body = z.object({
-    name: z.string().min(2).optional(), city: z.string().nullable().optional(), coversPerDay: z.number().int().positive().nullable().optional(),
+    name: zNomAffiche.optional(), city: z.string().nullable().optional(), coversPerDay: z.number().int().positive().nullable().optional(),
     priceIncreaseAlertPct: z.number().min(1).max(50).optional(), forecastHorizonDays: z.number().int().min(3).max(14).optional(),
     autoReorderEnabled: z.boolean().optional(), dailyDigestEnabled: z.boolean().optional(), immediateAlertEmails: z.boolean().optional(), digestRecipients: z.array(z.string().email()).max(10).optional(), closedWeekdays: z.array(z.number().int().min(0).max(6)).optional(), notifyPhone: z.string().max(30).optional(),
     peakMonths: z.array(z.number().int().min(1).max(12)).max(12).optional(), peakCoef: z.number().min(1).max(2).optional(),
@@ -201,7 +202,7 @@ settingsRoutes.post('/settings/test-email', async (c) => {
   const mc = mailerConfig();
   const sentAt = new Date().toLocaleString('fr-FR', { timeZone: 'Europe/Paris' });
   const text = `Bonjour ${user.fullName}, extrait de votre test de notification AFRISUPPLY.\n\nSi vous recevez ce message, les alertes de rupture, les écarts de livraison et le mail du matin arriveront bien dans cette boîte : ${to}.\n\nRestaurant : ${r.name}\nDate du test : ${sentAt}\nType d'envoi : ${mc.transport}\n\nL'équipe AFRISUPPLY`;
-  const html = `<p>Bonjour ${user.fullName},</p><p>Vous avez demandé un <b>test des notifications</b> depuis AFRISUPPLY.</p><p style="padding:10px;background:#f5f5f4;border-radius:8px">Si ce message s'affiche, les alertes de rupture, les écarts de livraison et le mail du matin arriveront bien à <b>${to}</b>.</p><p style="color:#78716c">Restaurant : ${r.name}<br>Date du test : ${sentAt}<br>Type d'envoi : ${mc.transport}</p><p>L'équipe AFRISUPPLY</p>`;
+  const html = h`<p>Bonjour ${user.fullName},</p><p>Vous avez demandé un <b>test des notifications</b> depuis AFRISUPPLY.</p><p style="padding:10px;background:#f5f5f4;border-radius:8px">Si ce message s'affiche, les alertes de rupture, les écarts de livraison et le mail du matin arriveront bien à <b>${to}</b>.</p><p style="color:#78716c">Restaurant : ${r.name}<br>Date du test : ${sentAt}<br>Type d'envoi : ${mc.transport}</p><p>L'équipe AFRISUPPLY</p>`;
   const res = await sendMail({ to, subject: '✅ Test des notifications AFRISUPPLY', text, html, tags: { type: 'mail_test', restaurant: rid } });
   const delivered = res.ok && res.delivered;
   await recordJobRun({

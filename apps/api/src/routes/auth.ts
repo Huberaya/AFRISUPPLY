@@ -10,6 +10,7 @@ import { issuePasswordLink, issueEmailVerification, hashEmailToken } from '../li
 import { sendMail, mailerConfig, mailDeliverable, devLinksAllowed, type MailResult } from '../lib/mailer.js';
 import { audit, clientIp } from '../lib/ops.js';
 import { clerkIdentityFromRequest, ClerkAuthError, type ClerkIdentity } from '../lib/clerk.js';
+import { h, zNomAffiche } from '../lib/html.js';
 
 const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 // Chantier 2 (audit) : la durée du cookie suit celle du jeton (7 j par défaut, au lieu de 30 j).
@@ -42,8 +43,8 @@ const mailStatus = (res: MailResult, link: string, kind: 'verification' | 'reset
 
 authRoutes.post('/register', async (c) => {
   const body = z.object({
-    email: z.string().email(), password: z.string().min(8), fullName: z.string().min(2),
-    restaurantName: z.string().min(2), city: z.string().optional(), coversPerDay: z.number().int().positive().optional(), inviteCode: z.string().max(20).optional(),
+    email: z.string().email(), password: z.string().min(8), fullName: zNomAffiche,
+    restaurantName: zNomAffiche, city: z.string().optional(), coversPerDay: z.number().int().positive().optional(), inviteCode: z.string().max(20).optional(),
   }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
   const d = body.data; const db = await getDb();
@@ -73,7 +74,7 @@ authRoutes.post('/register', async (c) => {
   const mail = await sendMail({
     to: user.email, subject: 'AFRISUPPLY — confirmez votre adresse e-mail',
     text: `Bonjour ${user.fullName.split(' ')[0] || 'chef'},\n\nBienvenue sur AFRISUPPLY. Confirmez votre adresse e-mail en ouvrant ce lien (valable ${TTL_H} heures) : ${link}\n\nTant que l'adresse n'est pas confirmée, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.`,
-    html: `<p>Bonjour ${user.fullName.split(' ')[0] || 'chef'},</p><p>Bienvenue sur AFRISUPPLY. <a href="${link}">Confirmez votre adresse e-mail</a> (lien valable ${TTL_H} heures).</p><p>Tant que l'adresse n'est pas confirmée, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.</p>`,
+    html: h`<p>Bonjour ${user.fullName.split(' ')[0] || 'chef'},</p><p>Bienvenue sur AFRISUPPLY. <a href="${link}">Confirmez votre adresse e-mail</a> (lien valable ${TTL_H} heures).</p><p>Tant que l'adresse n'est pas confirmée, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.</p>`,
     tags: { type: 'email_verification' },
   });
   void audit('email.verification.sent', { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== 'log' } });
@@ -87,7 +88,7 @@ authRoutes.post('/register', async (c) => {
   await sendMail({
     to: user.email, subject: 'AFRISUPPLY — bienvenue ! Votre tableau de bord en 20 minutes',
     text: `Bonjour ${firstName2},\n\nVotre espace « ${d.restaurantName} » est prêt : ${appUrl}/app/demarrer\n\nEn 20 minutes, pas à pas :\n1. Configurez votre carte (vos produits sont déduits des recettes)\n2. Fixez vos seuils : vous serez alerté avant les ruptures\n3. Préparez votre première commande — rien ne part sans vous\n\nUne question ? Répondez à cet e-mail, on répond sous 24 h.\n\nBienvenue à bord,\nL'équipe AFRISUPPLY`,
-    html: `<p>Bonjour ${firstName2},</p><p>Votre espace <b>« ${d.restaurantName} »</b> est prêt.</p><p><a href="${appUrl}/app/demarrer" style="display:inline-block;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Commencer (20 minutes)</a></p><ol><li>Configurez votre carte (vos produits sont déduits des recettes)</li><li>Fixez vos seuils : vous serez alerté avant les ruptures</li><li>Préparez votre première commande — rien ne part sans vous</li></ol><p>Une question ? Répondez à cet e-mail, on répond sous 24 h.</p><p>Bienvenue à bord,<br>L'équipe AFRISUPPLY</p>`,
+    html: h`<p>Bonjour ${firstName2},</p><p>Votre espace <b>« ${d.restaurantName} »</b> est prêt.</p><p><a href="${appUrl}/app/demarrer" style="display:inline-block;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Commencer (20 minutes)</a></p><ol><li>Configurez votre carte (vos produits sont déduits des recettes)</li><li>Fixez vos seuils : vous serez alerté avant les ruptures</li><li>Préparez votre première commande — rien ne part sans vous</li></ol><p>Une question ? Répondez à cet e-mail, on répond sous 24 h.</p><p>Bienvenue à bord,<br>L'équipe AFRISUPPLY</p>`,
     tags: { type: 'welcome' },
   });
   return c.json({
@@ -142,7 +143,7 @@ authRoutes.post('/resend-verification', requireAuth, async (c) => {
   const mail = await sendMail({
     to: user.email, subject: 'AFRISUPPLY — votre lien de confirmation',
     text: `Bonjour ${user.fullName.split(' ')[0] || 'chef'},\n\nVoici un nouveau lien pour confirmer votre adresse (valable ${TTL_H} heures) : ${link}\n\nLes liens précédents ne fonctionnent plus.`,
-    html: `<p>Bonjour ${user.fullName.split(' ')[0] || 'chef'},</p><p><a href="${link}">Confirmer mon adresse e-mail</a> (valable ${TTL_H} heures). Les liens précédents ne fonctionnent plus.</p>`,
+    html: h`<p>Bonjour ${user.fullName.split(' ')[0] || 'chef'},</p><p><a href="${link}">Confirmer mon adresse e-mail</a> (valable ${TTL_H} heures). Les liens précédents ne fonctionnent plus.</p>`,
     tags: { type: 'email_verification' },
   });
   void audit('email.verification.resent', { actorEmail: user.email, target: user.id, meta: { transport: mail.transport } });
@@ -232,7 +233,7 @@ authRoutes.post('/forgot-password', async (c) => {
   const res = await sendMail({
     to: user.email, subject: 'AFRISUPPLY — réinitialiser votre mot de passe',
     text: `Bonjour ${firstName},\n\nVous avez demandé à réinitialiser votre mot de passe AFRISUPPLY.\n\nLien (valable ${RESET_TTL} minutes) : ${link}\n\nSi vous n'êtes pas à l'origine de cette demande, ignorez ce message : votre mot de passe reste inchangé.`,
-    html: `<p>Bonjour ${firstName},</p><p>Vous avez demandé à réinitialiser votre mot de passe AFRISUPPLY.</p><p><a href="${link}">Choisir un nouveau mot de passe</a> (lien valable ${RESET_TTL} minutes).</p><p>Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : votre mot de passe reste inchangé.</p>`,
+    html: h`<p>Bonjour ${firstName},</p><p>Vous avez demandé à réinitialiser votre mot de passe AFRISUPPLY.</p><p><a href="${link}">Choisir un nouveau mot de passe</a> (lien valable ${RESET_TTL} minutes).</p><p>Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : votre mot de passe reste inchangé.</p>`,
     tags: { type: 'password_reset' },
   });
   void audit('password.forgot', { actorEmail: email, target: user.id, meta: { transport: res.transport, sent: res.ok } });

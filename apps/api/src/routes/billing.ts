@@ -17,6 +17,7 @@ import { invoicePdf, emitterComplete } from '../lib/pdf.js';
 import { recordJobRun } from '../lib/job-runs.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
+import { h } from '../lib/html.js';
 
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
 
@@ -82,7 +83,7 @@ async function mailInvoice(invoice: typeof subscriptionInvoices.$inferSelect, re
   const res = await sendMail({
     to, subject: `Votre facture AFRISUPPLY ${invoice.number} — ${eur(ttc)} TTC`,
     text: `Bonjour,\n\nVoici votre facture ${invoice.number} pour ${restaurantName} :\n• Formule ${invoice.plan}${invoice.founder ? ' (tarif pilote fondateur −50 %)' : ''}\n• Période : du ${invoice.periodStart.toLocaleDateString('fr-FR')} au ${invoice.periodEnd.toLocaleDateString('fr-FR')}\n• Montant : ${eur(Number(invoice.amountEur))} HT — ${eur(ttc)} TTC\n\nLa facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.\n\nMerci de votre confiance,\nL'équipe AFRISUPPLY`,
-    html: `<p>Bonjour,</p><p>Voici votre facture <b>${invoice.number}</b> pour <b>${restaurantName}</b> :</p><ul><li>Formule ${invoice.plan}${invoice.founder ? ' (tarif pilote fondateur −50 %)' : ''}</li><li>Période : du ${invoice.periodStart.toLocaleDateString('fr-FR')} au ${invoice.periodEnd.toLocaleDateString('fr-FR')}</li><li>Montant : ${eur(Number(invoice.amountEur))} HT — <b>${eur(ttc)} TTC</b></li></ul><p>La facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.</p><p>Merci de votre confiance,<br>L'équipe AFRISUPPLY</p>`,
+    html: h`<p>Bonjour,</p><p>Voici votre facture <b>${invoice.number}</b> pour <b>${restaurantName}</b> :</p><ul><li>Formule ${invoice.plan}${invoice.founder ? ' (tarif pilote fondateur −50 %)' : ''}</li><li>Période : du ${invoice.periodStart.toLocaleDateString('fr-FR')} au ${invoice.periodEnd.toLocaleDateString('fr-FR')}</li><li>Montant : ${eur(Number(invoice.amountEur))} HT — <b>${eur(ttc)} TTC</b></li></ul><p>La facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.</p><p>Merci de votre confiance,<br>L'équipe AFRISUPPLY</p>`,
     tags: { type: 'subscription_invoice', restaurant: invoice.restaurantId }, attachments: [{ filename: `${invoice.number}.pdf`, content: pdf, contentType: 'application/pdf' }],
   });
   await recordJobRun({
@@ -138,7 +139,7 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
           await sendMail({
             to: owner.email, subject: `AFRISUPPLY — votre abonnement ${applied.plan} est actif 🎉`,
             text: `Bonjour ${first},\n\nC'est confirmé : l'abonnement ${applied.plan} d'AFRISUPPLY est actif pour « ${rr?.name ?? 'votre restaurant'} ».\n\nProchain prélèvement le ${when}. Vous gérez tout (factures, carte, résiliation) depuis l'application : Abonnement.\n\nMerci de nous faire confiance — une question, répondez à cet e-mail.\n\nL'équipe AFRISUPPLY`,
-            html: `<p>Bonjour ${first},</p><p>C'est confirmé : l'abonnement <b>${applied.plan}</b> d'AFRISUPPLY est actif pour <b>« ${rr?.name ?? 'votre restaurant'} »</b>.</p><p>Prochain prélèvement le <b>${when}</b>. Factures, carte et résiliation se gèrent depuis <b>Abonnement</b> dans l'application.</p><p>Merci de nous faire confiance — une question, répondez à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`,
+            html: h`<p>Bonjour ${first},</p><p>C'est confirmé : l'abonnement <b>${applied.plan}</b> d'AFRISUPPLY est actif pour <b>« ${rr?.name ?? 'votre restaurant'} »</b>.</p><p>Prochain prélèvement le <b>${when}</b>. Factures, carte et résiliation se gèrent depuis <b>Abonnement</b> dans l'application.</p><p>Merci de nous faire confiance — une question, répondez à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`,
             tags: { type: 'subscription_active' },
           });
         }
@@ -378,7 +379,7 @@ export async function invoiceCommissions(period: string, opts: { dryRun?: boolea
       to,
       subject: mode === 'prelevement' ? `AFRISUPPLY — commission ${period} : ${eur(amount)} HT (prélevée sur votre carte)` : `AFRISUPPLY — facture de commission ${period} : ${eur(amount)} HT (${eur(ttc)} TTC)`,
       text: `Bonjour,\n\nFacture de commission ${period} pour ${v.name} :\n- ${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}\n- Commission ${Number(v.commissionPct).toFixed(2).replace('.', ',')} % : ${eur(amount)} HT — ${eur(ttc)} TTC\n\n${mode === 'prelevement' ? 'Prélèvement automatique sur la carte enregistrée dans votre espace fournisseur : aucune action de votre part.' : "Règlement sous 15 jours par virement (ou activez le prélèvement automatique dans votre espace fournisseur)."}\n\nLa facture est jointe à ce message (PDF).\n\nMerci de votre confiance,\nL'équipe AFRISUPPLY`,
-      html: `<p>Bonjour,</p><p>Facture de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur(amount)} HT</b> — ${eur(ttc)} TTC</li></ul><p>${mode === 'prelevement' ? 'Prélèvement automatique sur la carte enregistrée : aucune action de votre part.' : 'Règlement sous 15 jours par virement, ou activez le prélèvement automatique dans votre espace fournisseur.'}</p><p>La facture est jointe à ce message (PDF).</p><p>L'équipe AFRISUPPLY</p>`,
+      html: h`<p>Bonjour,</p><p>Facture de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur(amount)} HT</b> — ${eur(ttc)} TTC</li></ul><p>${mode === 'prelevement' ? 'Prélèvement automatique sur la carte enregistrée : aucune action de votre part.' : 'Règlement sous 15 jours par virement, ou activez le prélèvement automatique dans votre espace fournisseur.'}</p><p>La facture est jointe à ce message (PDF).</p><p>L'équipe AFRISUPPLY</p>`,
       tags: { type: 'commission', vendor: v.id }, attachments: [{ filename: `commission-${period}.pdf`, content: pdf, contentType: 'application/pdf' }],
     });
     await db.insert(commissionInvoices).values({ vendorId: v.id, period, orders: Number(r.orders), baseEur: Number(r.base).toFixed(2), amountEur: amount.toFixed(2), stripeInvoiceId, // « emise » tant que Stripe n'a pas confirmé l'encaissement (le webhook invoice.paid passe en « payee ») :

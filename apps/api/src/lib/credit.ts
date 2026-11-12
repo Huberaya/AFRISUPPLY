@@ -1,6 +1,7 @@
 // Chantier 29 — Encours & conditions de paiement : exposition d'un restaurant chez un grossiste.
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getDb, orders, vendorCreditTerms } from '@afrisupply/db';
+import { h, nl2br } from './html.js';
 
 export type Exposure = { outstandingEur: number; overdueEur: number; overdueCount: number; openOrders: number; oldestDueAt: string | null };
 export type CreditCheck = { ok: true; terms: typeof vendorCreditTerms.$inferSelect | null; exposure: Exposure } | { ok: false; error: string; status: 400 | 402 | 409 };
@@ -54,7 +55,7 @@ export async function remindPayments(now = new Date()): Promise<{ reminded: numb
     const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, r.o.restaurantId), inArray(restaurantMembers.role, ['owner', 'manager'])));
     const late = r.d > 0; const subject = late ? `⚠️ Facture ${r.o.reference} en retard de ${r.d} j — ${r.vendorName} — ${eur(amount)}` : `📅 Facture ${r.o.reference} à régler dans 2 jours — ${r.vendorName} — ${eur(amount)}`;
     const text = `Bonjour,\n\nLa commande ${r.o.reference} livrée par ${r.vendorName} ${late ? `devait être réglée le ${r.o.dueAt} (${r.d} jour${r.d > 1 ? 's' : ''} de retard)` : `arrive à échéance le ${r.o.dueAt}`} : ${eur(amount)}.\n${late ? 'Tant qu\'une facture est en retard, vous ne pouvez plus commander à crédit chez ce fournisseur.' : ''}\n\nAFRISUPPLY`;
-    for (const x of rcpts) { void sendMail({ to: x.email, subject, text, html: `<p>${text.replace(/\n/g, '<br/>')}</p>` }); reminded += 1; }
+    for (const x of rcpts) { void sendMail({ to: x.email, subject, text, html: h`<p>${nl2br(text, '<br/>')}</p>` }); reminded += 1; }
   }
   return { reminded };
 }

@@ -25,6 +25,7 @@ import { restaurantZones } from './marketplace.js';
 import { inventoryItems, leads } from '@afrisupply/db';
 import { prospects } from '@afrisupply/db';
 import { APP_URL } from '../jobs/daily.js';
+import { h, nl2br, zNomAffiche } from '../lib/html.js';
 
 type VEnv = { Variables: Env['Variables'] & { vendorId: string } };
 export const vendorRoutes = new Hono<VEnv>();
@@ -60,7 +61,7 @@ async function requireVendor(c: Context<VEnv>, next: Next) {
 // ---- inscription (compte utilisateur existant requis : le fournisseur crée d'abord un compte AFRISUPPLY) ----
 vendorRoutes.post('/vendor/register', requireAuth, async (c) => {
   const body = z.object({
-    name: z.string().min(2), description: z.string().max(500).optional(), city: z.string().optional(), deliveryZones: z.array(z.string().min(1)).max(30).default([]),
+    name: zNomAffiche, description: z.string().max(500).optional(), city: z.string().optional(), deliveryZones: z.array(z.string().min(1)).max(30).default([]),
     categories: z.array(z.enum(['feculents', 'frais', 'viandes_poissons', 'epicerie', 'boissons', 'emballages'])).default([]),
     leadTimeHours: z.number().int().positive().default(48), minOrderEur: z.number().nonnegative().default(0), deliveryFeeEur: z.number().nonnegative().default(0),
     contactEmail: z.string().email().optional(), contactPhone: z.string().optional(), whatsapp: z.string().optional(), invite: z.string().optional(), acceptCgv: z.boolean().optional(),
@@ -110,7 +111,7 @@ vendorRoutes.get('/vendor/dashboard', async (c) => {
 });
 
 vendorRoutes.put('/vendor/profile', async (c) => {
-  const body = z.object({ name: z.string().min(2).optional(), description: z.string().max(500).nullable().optional(), city: z.string().nullable().optional(), deliveryZones: z.array(z.string()).max(30).optional(), leadTimeHours: z.number().int().positive().optional(), deliveryDays: z.array(z.number().int().min(1).max(7)).optional(), minOrderEur: z.number().nonnegative().optional(), deliveryFeeEur: z.number().nonnegative().optional(), contactEmail: z.string().email().nullable().optional(), contactPhone: z.string().nullable().optional(), whatsapp: z.string().nullable().optional(),
+  const body = z.object({ name: zNomAffiche.optional(), description: z.string().max(500).nullable().optional(), city: z.string().nullable().optional(), deliveryZones: z.array(z.string()).max(30).optional(), leadTimeHours: z.number().int().positive().optional(), deliveryDays: z.array(z.number().int().min(1).max(7)).optional(), minOrderEur: z.number().nonnegative().optional(), deliveryFeeEur: z.number().nonnegative().optional(), contactEmail: z.string().email().nullable().optional(), contactPhone: z.string().nullable().optional(), whatsapp: z.string().nullable().optional(),
     // Chantier 8 : adresse de facturation (comptabilité) — sinon l'e-mail de contact est utilisé.
     billingEmail: z.union([z.string().email(), z.literal(''), z.null()]).optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
@@ -186,7 +187,7 @@ async function notifyRestaurant(orderId: string, subject: string, text: string, 
   const [rest] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq(restaurants.id, o.restaurantId));
   if (rest?.settings?.notifyPhone) void sendMessage({ to: rest.settings.notifyPhone, body: `AFRISUPPLY — ${subject}\n${text}\nSuivi : ${APP_URL()}/app/achats`, kind, orderId, vendorId: o.vendorId, restaurantId: o.restaurantId });
   const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, o.restaurantId), inArray(restaurantMembers.role, ['owner', 'manager'])));
-  for (const r of rcpts) void sendMail({ to: r.email, subject, text, html: `<p>${text.replace(/\n/g, '<br>')}</p><p><a href="${APP_URL()}/app/achats">Voir mes commandes</a></p>`, tags: { type: 'order_status' } });
+  for (const r of rcpts) void sendMail({ to: r.email, subject, text, html: h`<p>${nl2br(text)}</p><p><a href="${APP_URL()}/app/achats">Voir mes commandes</a></p>`, tags: { type: 'order_status' } });
 }
 
 /** Confirmer : statut confirmee + date de livraison + commission calculée. */
@@ -468,7 +469,7 @@ vendorAdminRoutes.put('/admin/vendors/:id', async (c) => {
   const body = z.object({ status: z.enum(['en_attente', 'actif', 'suspendu']).optional(), commissionPct: z.number().min(0).max(20).optional() }).safeParse(await c.req.json()); if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const db = await getDb();
   const [v] = await db.update(vendors).set({ status: body.data.status, commissionPct: body.data.commissionPct?.toFixed(2) }).where(eq(vendors.id, c.req.param('id'))).returning();
-  if (v && body.data.status === 'actif' && v.contactEmail) void sendMail({ to: v.contactEmail, subject: 'Votre espace fournisseur AFRISUPPLY est activé', text: `Bonjour,\n\nVotre espace ${v.name} est actif : ${APP_URL()}/fournisseur\nAjoutez votre catalogue, les restaurants de votre zone vous verront dès aujourd'hui.\nCommission plateforme : ${n(v.commissionPct)} % sur les commandes confirmées, facturée mensuellement.`, html: `<p>Votre espace <b>${v.name}</b> est actif : <a href="${APP_URL()}/fournisseur">${APP_URL()}/fournisseur</a></p><p>Commission plateforme : ${n(v.commissionPct)} % sur les commandes confirmées.</p>`, tags: { type: 'vendor_activated' } });
+  if (v && body.data.status === 'actif' && v.contactEmail) void sendMail({ to: v.contactEmail, subject: 'Votre espace fournisseur AFRISUPPLY est activé', text: `Bonjour,\n\nVotre espace ${v.name} est actif : ${APP_URL()}/fournisseur\nAjoutez votre catalogue, les restaurants de votre zone vous verront dès aujourd'hui.\nCommission plateforme : ${n(v.commissionPct)} % sur les commandes confirmées, facturée mensuellement.`, html: h`<p>Votre espace <b>${v.name}</b> est actif : <a href="${APP_URL()}/fournisseur">${APP_URL()}/fournisseur</a></p><p>Commission plateforme : ${n(v.commissionPct)} % sur les commandes confirmées.</p>`, tags: { type: 'vendor_activated' } });
   await audit('vendor.update', { actorEmail: c.get('user').email, target: v?.id, meta: body.data });
   return c.json({ vendor: v });
 });

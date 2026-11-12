@@ -4127,24 +4127,24 @@ async function jobHealth() {
   return out;
 }
 function publicJobHealth(jobs) {
-  return Object.fromEntries(Object.entries(jobs).map(([job, h]) => [job, {
-    state: h.state,
-    maxHours: h.maxHours,
-    lastRun: h.lastRun ? { status: h.lastRun.status, finishedAt: h.lastRun.finishedAt, durationMs: h.lastRun.durationMs, hoursAgo: h.lastRun.hoursAgo, summary: null, error: null } : null
+  return Object.fromEntries(Object.entries(jobs).map(([job, h2]) => [job, {
+    state: h2.state,
+    maxHours: h2.maxHours,
+    lastRun: h2.lastRun ? { status: h2.lastRun.status, finishedAt: h2.lastRun.finishedAt, durationMs: h2.lastRun.durationMs, hoursAgo: h2.lastRun.hoursAgo, summary: null, error: null } : null
   }]));
 }
 async function watchdog(opts = { self: "unknown" }) {
   const jobs = await jobHealth();
-  const late = Object.entries(jobs).filter(([job, h]) => job !== opts.self && h.state !== "ok");
+  const late = Object.entries(jobs).filter(([job, h2]) => job !== opts.self && h2.state !== "ok");
   const raised = [];
-  for (const [job, h] of late) {
-    const when = h.lastRun ? `il y a ${h.lastRun.hoursAgo} h` : "jamais";
+  for (const [job, h2] of late) {
+    const when = h2.lastRun ? `il y a ${h2.lastRun.hoursAgo} h` : "jamais";
     const ok = await alertAdmin({
-      key: `job.${job}.${h.state}`,
-      message: `T\xE2che planifi\xE9e \xAB ${job} \xBB en probl\xE8me : ${h.state === "stale" ? `aucun passage depuis plus de ${h.maxHours} h (dernier : ${when})` : h.state === "never" ? "aucun passage enregistr\xE9 (cron non branch\xE9 ?)" : `dernier passage en \xE9chec (${when})`}.`,
-      detail: { job, state: h.state, lastRun: h.lastRun, detectedBy: opts.self }
+      key: `job.${job}.${h2.state}`,
+      message: `T\xE2che planifi\xE9e \xAB ${job} \xBB en probl\xE8me : ${h2.state === "stale" ? `aucun passage depuis plus de ${h2.maxHours} h (dernier : ${when})` : h2.state === "never" ? "aucun passage enregistr\xE9 (cron non branch\xE9 ?)" : `dernier passage en \xE9chec (${when})`}.`,
+      detail: { job, state: h2.state, lastRun: h2.lastRun, detectedBy: opts.self }
     });
-    raised.push({ job, state: h.state, hoursAgo: h.lastRun?.hoursAgo ?? null, alerted: ok === true });
+    raised.push({ job, state: h2.state, hoursAgo: h2.lastRun?.hoursAgo ?? null, alerted: ok === true });
   }
   return { checked: Object.keys(jobs).length, late: raised };
 }
@@ -4164,8 +4164,8 @@ var init_ops_health = __esm({
       phone: () => process.env.SUPPORT_PHONE ?? null
     };
     seuil = (job, defaut) => {
-      const brut = process.env[`JOB_MAX_HOURS_${job.toUpperCase().replace(/-/g, "_")}`];
-      const n18 = Number(brut);
+      const brut2 = process.env[`JOB_MAX_HOURS_${job.toUpperCase().replace(/-/g, "_")}`];
+      const n18 = Number(brut2);
       return Number.isFinite(n18) && n18 > 0 ? n18 : defaut;
     };
     JOB_MAX_HOURS = {
@@ -4309,6 +4309,47 @@ var init_mailer = __esm({
       stats.lastTransport = null;
       stats.lastError = null;
     };
+  }
+});
+
+// apps/api/src/lib/html.ts
+import { z } from "zod";
+function h(morceaux, ...valeurs) {
+  let out = "";
+  morceaux.forEach((m, i) => {
+    out += m;
+    if (i < valeurs.length) {
+      const v = valeurs[i];
+      out += v instanceof Brut ? v.html : esc(v);
+    }
+  });
+  return out;
+}
+var esc, Brut, brut, nl2br, NOM_MAX, nomAfficheProbleme, zNomAffiche;
+var init_html = __esm({
+  "apps/api/src/lib/html.ts"() {
+    "use strict";
+    esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    Brut = class {
+      constructor(html) {
+        this.html = html;
+      }
+    };
+    brut = (html) => new Brut(html);
+    nl2br = (texte, balise = "<br>") => brut(esc(texte).replace(/\n/g, balise));
+    NOM_MAX = 80;
+    nomAfficheProbleme = (nom) => {
+      const s = nom.trim();
+      if (s.length < 2) return "Ce nom est trop court (2 caract\xE8res au moins).";
+      if (s.length > NOM_MAX) return `Ce nom est trop long (${NOM_MAX} caract\xE8res au plus).`;
+      if (/[<>]/.test(s)) return "Ce nom ne peut pas contenir les caract\xE8res < et >.";
+      if (/(https?:\/\/|www\.)/i.test(s)) return "Ce nom ne peut pas contenir d'adresse web.";
+      return null;
+    };
+    zNomAffiche = z.string().trim().superRefine((v, ctx) => {
+      const pb = nomAfficheProbleme(v);
+      if (pb) ctx.addIssue({ code: "custom", message: pb });
+    });
   }
 });
 
@@ -4807,7 +4848,7 @@ var init_engines = __esm({
 
 // apps/api/src/routes/restaurant.ts
 import { Hono as Hono2 } from "hono";
-import { z as z2 } from "zod";
+import { z as z3 } from "zod";
 import { and as and8, eq as eq11, desc as desc3, gte as gte2, sql as sql10, inArray as inArray4 } from "drizzle-orm";
 async function assertPlausibleQuantity(rid2, asked, opts = {}) {
   const db = await getDb();
@@ -5027,7 +5068,7 @@ var init_restaurant = __esm({
       const rid2 = c.get("restaurantId");
       const db = await getDb();
       const user = c.get("user");
-      const body3 = z2.object({ type: z2.enum(["reception", "consommation", "ajustement", "perte"]), quantity: z2.number(), note: z2.string().optional() }).safeParse(await c.req.json());
+      const body3 = z3.object({ type: z3.enum(["reception", "consommation", "ajustement", "perte"]), quantity: z3.number(), note: z3.string().optional() }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
       const [item] = await db.select().from(inventoryItems).where(and8(eq11(inventoryItems.id, c.req.param("itemId")), eq11(inventoryItems.restaurantId, rid2)));
       if (!item) return c.json({ error: "Article introuvable" }, 404);
@@ -5087,17 +5128,17 @@ var init_restaurant = __esm({
     restaurantRoutes.post("/suppliers", async (c) => {
       const rid2 = c.get("restaurantId");
       const db = await getDb();
-      const body3 = z2.object({
-        name: z2.string().min(2),
-        contactName: z2.string().optional(),
-        email: z2.string().email().optional().or(z2.literal("")),
-        phone: z2.string().optional(),
-        whatsapp: z2.string().optional(),
-        city: z2.string().optional(),
-        leadTimeHours: z2.number().int().positive().default(48),
-        minOrderEur: z2.number().nonnegative().default(0),
-        deliveryFeeEur: z2.number().nonnegative().default(0),
-        preferredChannel: z2.enum(["email", "whatsapp", "telephone", "plateforme"]).default("whatsapp")
+      const body3 = z3.object({
+        name: z3.string().min(2),
+        contactName: z3.string().optional(),
+        email: z3.string().email().optional().or(z3.literal("")),
+        phone: z3.string().optional(),
+        whatsapp: z3.string().optional(),
+        city: z3.string().optional(),
+        leadTimeHours: z3.number().int().positive().default(48),
+        minOrderEur: z3.number().nonnegative().default(0),
+        deliveryFeeEur: z3.number().nonnegative().default(0),
+        preferredChannel: z3.enum(["email", "whatsapp", "telephone", "plateforme"]).default("whatsapp")
       }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
       const d = body3.data;
@@ -5138,14 +5179,14 @@ var init_restaurant = __esm({
       const rid2 = c.get("restaurantId");
       const db = await getDb();
       const user = c.get("user");
-      const body3 = z2.object({
-        supplierId: z2.string().uuid(),
-        channel: z2.enum(["email", "whatsapp", "telephone", "plateforme"]).optional(),
-        notes: z2.string().max(2e3).optional(),
-        source: z2.string().optional(),
-        lines: z2.array(z2.object({ offerId: z2.string().uuid(), packs: z2.number().int().positive().max(MAX_PACKS_PER_LINE) })).min(1),
+      const body3 = z3.object({
+        supplierId: z3.string().uuid(),
+        channel: z3.enum(["email", "whatsapp", "telephone", "plateforme"]).optional(),
+        notes: z3.string().max(2e3).optional(),
+        source: z3.string().optional(),
+        lines: z3.array(z3.object({ offerId: z3.string().uuid(), packs: z3.number().int().positive().max(MAX_PACKS_PER_LINE) })).min(1),
         /** Confirmation explicite : autorise un volume au-delà du plafond de plausibilité. */
-        override: z2.boolean().optional()
+        override: z3.boolean().optional()
       }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides : chaque ligne attend un nombre de colis entre 1 et " + MAX_PACKS_PER_LINE, details: body3.error.flatten() }, 400);
       const d = body3.data;
@@ -5207,16 +5248,16 @@ var init_restaurant = __esm({
       const rid2 = c.get("restaurantId");
       const db = await getDb();
       const user = c.get("user");
-      const body3 = z2.object({
-        lines: z2.array(z2.object({
-          lineId: z2.string().uuid(),
-          receivedQty: z2.number().nonnegative().max(RECEIPT_ABS_MAX),
+      const body3 = z3.object({
+        lines: z3.array(z3.object({
+          lineId: z3.string().uuid(),
+          receivedQty: z3.number().nonnegative().max(RECEIPT_ABS_MAX),
           /** Prix réellement facturé par le fournisseur (€ par unité de base : kg, L, pièce…). Optionnel. */
-          invoicedUnitPrice: z2.number().positive().max(INVOICE_UNIT_MAX).optional()
+          invoicedUnitPrice: z3.number().positive().max(INVOICE_UNIT_MAX).optional()
         })).min(1),
-        notes: z2.string().max(500).optional(),
+        notes: z3.string().max(500).optional(),
         /** Confirmation explicite : autorise une quantité ou un prix au-delà du plafond de plausibilité. */
-        override: z2.boolean().optional()
+        override: z3.boolean().optional()
       }).safeParse(await c.req.json().catch(() => ({})));
       if (!body3.success) {
         return c.json({
@@ -5442,8 +5483,8 @@ ${user.fullName}`;
       for (const o of offers) if (o.inStock && (!prices.has(o.productId) || o.unitPrice < prices.get(o.productId))) prices.set(o.productId, o.unitPrice);
       const hist = await db.select({ productId: supplierOffers.productId, unitPrice: priceHistory.unitPriceEur, recordedAt: priceHistory.recordedAt }).from(priceHistory).innerJoin(supplierOffers, eq11(supplierOffers.id, priceHistory.offerId)).where(and8(eq11(priceHistory.restaurantId, rid2), gte2(priceHistory.recordedAt, new Date(Date.now() - 45 * 864e5))));
       const drift = /* @__PURE__ */ new Map();
-      for (const pid of new Map(hist.map((h) => [h.productId, 1])).keys()) {
-        const pts = hist.filter((h) => h.productId === pid).sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime());
+      for (const pid of new Map(hist.map((h2) => [h2.productId, 1])).keys()) {
+        const pts = hist.filter((h2) => h2.productId === pid).sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime());
         if (pts.length >= 2) {
           const first = n(pts[0].unitPrice), last = n(pts[pts.length - 1].unitPrice);
           if (first > 0) drift.set(pid, Math.round((last - first) / first * 1e3) / 10);
@@ -6012,7 +6053,7 @@ var init_assistant = __esm({
 
 // apps/api/src/routes/intelligence.ts
 import { Hono as Hono4 } from "hono";
-import { z as z4 } from "zod";
+import { z as z5 } from "zod";
 import { and as and11, eq as eq14, desc as desc4, gte as gte3, asc as asc3, sql as sql12, inArray as inArray7 } from "drizzle-orm";
 async function loadContext(rid2) {
   const db = await getDb();
@@ -6209,14 +6250,14 @@ var init_intelligence = __esm({
       const rid2 = c.get("restaurantId");
       const db = await getDb();
       const user = c.get("user");
-      const body3 = z4.object({
-        suppliers: z4.array(z4.object({
-          supplierId: z4.string().uuid(),
-          lines: z4.array(z4.object({ offerId: z4.string().uuid(), packs: z4.number().int().positive().max(MAX_PACKS_PER_LINE2) })).min(1).max(MAX_ORDER_LINES)
+      const body3 = z5.object({
+        suppliers: z5.array(z5.object({
+          supplierId: z5.string().uuid(),
+          lines: z5.array(z5.object({ offerId: z5.string().uuid(), packs: z5.number().int().positive().max(MAX_PACKS_PER_LINE2) })).min(1).max(MAX_ORDER_LINES)
         })).min(1).max(50),
-        source: z4.string().max(40).default("panier_ia"),
+        source: z5.string().max(40).default("panier_ia"),
         /** Confirmation explicite : autorise un volume au-delà du plafond de plausibilité. */
-        override: z4.boolean().optional()
+        override: z5.boolean().optional()
       }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: `Panier invalide : chaque ligne attend un nombre de colis entre 1 et ${MAX_PACKS_PER_LINE2}.`, details: body3.error.flatten() }, 400);
       const prepared = [];
@@ -6254,7 +6295,7 @@ var init_intelligence = __esm({
     intelligenceRoutes.put("/reorder-rules/:inventoryItemId", async (c) => {
       const rid2 = c.get("restaurantId");
       const db = await getDb();
-      const body3 = z4.object({ enabled: z4.boolean().default(true), threshold: z4.number().nonnegative(), reorderQty: z4.number().positive(), supplierStrategy: z4.enum(["best", "preferred"]).default("best") }).safeParse(await c.req.json());
+      const body3 = z5.object({ enabled: z5.boolean().default(true), threshold: z5.number().nonnegative(), reorderQty: z5.number().positive(), supplierStrategy: z5.enum(["best", "preferred"]).default("best") }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
       const [item] = await db.select().from(inventoryItems).where(and11(eq14(inventoryItems.id, c.req.param("inventoryItemId")), eq14(inventoryItems.restaurantId, rid2)));
       if (!item) return c.json({ error: "Article introuvable" }, 404);
@@ -6278,13 +6319,13 @@ var init_intelligence = __esm({
       const day = c.req.query("day") ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
       const [recs, rows] = await Promise.all([db.select().from(recipes).where(and11(eq14(recipes.restaurantId, rid2), eq14(recipes.isActive, true))).orderBy(recipes.name), db.select().from(sales).where(and11(eq14(sales.restaurantId, rid2), eq14(sales.day, day)))]);
       const last14 = await db.select({ day: sales.day, portions: sql12`sum(${sales.portions})` }).from(sales).where(and11(eq14(sales.restaurantId, rid2), gte3(sales.day, new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10)))).groupBy(sales.day).orderBy(sales.day);
-      return c.json({ day, recipes: recs.map((r) => ({ id: r.id, name: r.name, portions: rows.find((s) => s.recipeId === r.id)?.portions ?? 0 })), history: last14.map((h) => ({ day: h.day, portions: n3(h.portions) })) });
+      return c.json({ day, recipes: recs.map((r) => ({ id: r.id, name: r.name, portions: rows.find((s) => s.recipeId === r.id)?.portions ?? 0 })), history: last14.map((h2) => ({ day: h2.day, portions: n3(h2.portions) })) });
     });
     intelligenceRoutes.post("/sales", async (c) => {
       const rid2 = c.get("restaurantId");
       const db = await getDb();
       const user = c.get("user");
-      const body3 = z4.object({ day: z4.string().regex(/^\d{4}-\d{2}-\d{2}$/), lines: z4.array(z4.object({ recipeId: z4.string().uuid(), portions: z4.number().int().nonnegative() })), decrementStock: z4.boolean().default(true) }).safeParse(await c.req.json());
+      const body3 = z5.object({ day: z5.string().regex(/^\d{4}-\d{2}-\d{2}$/), lines: z5.array(z5.object({ recipeId: z5.string().uuid(), portions: z5.number().int().nonnegative() })), decrementStock: z5.boolean().default(true) }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
       const { day, lines, decrementStock } = body3.data;
       if ((await foreignRecipeIds(rid2, lines.map((l) => l.recipeId))).length) return c.json({ error: "Recette introuvable", code: "recipe_not_found" }, 404);
@@ -6312,7 +6353,7 @@ var init_intelligence = __esm({
     intelligenceRoutes.post("/assistant/ask", async (c) => {
       const rid2 = c.get("restaurantId");
       const db = await getDb();
-      const body3 = z4.object({ question: z4.string().min(2).max(500) }).safeParse(await c.req.json());
+      const body3 = z5.object({ question: z5.string().min(2).max(500) }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Question invalide" }, 400);
       const question = body3.data.question;
       const ctx = await loadContext(rid2);
@@ -6437,9 +6478,9 @@ var init_intelligence = __esm({
           }
           hikes.sort((x, y) => y.pct - x.pct);
           const evo = n3(sp.prev30) > 0 ? Math.round((n3(sp.last30) - n3(sp.prev30)) / n3(sp.prev30) * 100) : null;
-          facts.push(`D\xE9penses mois en cours ${eur2(n3(sp.month))}, 30 derniers jours ${eur2(n3(sp.last30))}, 30 j pr\xE9c\xE9dents ${eur2(n3(sp.prev30))}, \xE9volution ${evo ?? "n/a"} %`, `Par fournisseur (30 j) : ${bySup.map((b) => `${b.name} ${eur2(n3(b.total))}`).join(", ")}`, `Hausses de prix (60 j) : ${hikes.map((h) => `${h.productName} chez ${h.supplierName} +${h.pct} % (${eur2(h.from)}\u2192${eur2(h.to)}/${h.unit})`).join(" ; ") || "aucune"}`);
+          facts.push(`D\xE9penses mois en cours ${eur2(n3(sp.month))}, 30 derniers jours ${eur2(n3(sp.last30))}, 30 j pr\xE9c\xE9dents ${eur2(n3(sp.prev30))}, \xE9volution ${evo ?? "n/a"} %`, `Par fournisseur (30 j) : ${bySup.map((b) => `${b.name} ${eur2(n3(b.total))}`).join(", ")}`, `Hausses de prix (60 j) : ${hikes.map((h2) => `${h2.productName} chez ${h2.supplierName} +${h2.pct} % (${eur2(h2.from)}\u2192${eur2(h2.to)}/${h2.unit})`).join(" ; ") || "aucune"}`);
           if (cls.intent === "monthly_spend") draft = `Ce mois-ci, tu as d\xE9pens\xE9 **${eur2(n3(sp.month))}** chez tes fournisseurs (${eur2(n3(sp.last30))} sur 30 jours glissants${evo !== null ? `, ${evo > 0 ? "+" : ""}${evo} % vs la p\xE9riode pr\xE9c\xE9dente` : ""}). R\xE9partition : ${bySup.slice(0, 4).map((b) => `${b.name} ${eur2(n3(b.total))}`).join(", ")}.`;
-          else draft = `${evo !== null ? `Tes achats ont \xE9volu\xE9 de **${evo > 0 ? "+" : ""}${evo} %** sur 30 jours (${eur2(n3(sp.last30))} vs ${eur2(n3(sp.prev30))}). ` : ""}${hikes.length ? `Les causes identifi\xE9es c\xF4t\xE9 prix : ${hikes.slice(0, 3).map((h) => `**${h.productName}** +${h.pct} % chez ${h.supplierName} (${eur2(h.from)} \u2192 ${eur2(h.to)}/${h.unit})`).join(", ")}. ` : "Aucune hausse de tarif fournisseur significative : la variation vient des volumes command\xE9s. "}${bySup[0] ? `Ton premier poste est ${bySup[0].name} (${eur2(n3(bySup[0].total))} sur 30 j).` : ""}${hikes.length ? " Je peux te proposer des alternatives moins ch\xE8res pour ces produits." : ""}`;
+          else draft = `${evo !== null ? `Tes achats ont \xE9volu\xE9 de **${evo > 0 ? "+" : ""}${evo} %** sur 30 jours (${eur2(n3(sp.last30))} vs ${eur2(n3(sp.prev30))}). ` : ""}${hikes.length ? `Les causes identifi\xE9es c\xF4t\xE9 prix : ${hikes.slice(0, 3).map((h2) => `**${h2.productName}** +${h2.pct} % chez ${h2.supplierName} (${eur2(h2.from)} \u2192 ${eur2(h2.to)}/${h2.unit})`).join(", ")}. ` : "Aucune hausse de tarif fournisseur significative : la variation vient des volumes command\xE9s. "}${bySup[0] ? `Ton premier poste est ${bySup[0].name} (${eur2(n3(bySup[0].total))} sur 30 j).` : ""}${hikes.length ? " Je peux te proposer des alternatives moins ch\xE8res pour ces produits." : ""}`;
           actions.push({ label: "Voir l\u2019analyse", url: "/app/analyse" });
           break;
         }
@@ -6574,7 +6615,7 @@ Confirmer / refuser : ${APP_URL2()}/fournisseur/commandes`;
       ok = res.ok;
     }
     if (v.contactEmail) {
-      const m = await sendMail({ to: v.contactEmail, subject: `\u23F0 Rappel : commande ${o.reference} de ${r.name} en attente`, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p>`, tags: { type: "order_reminder" } });
+      const m = await sendMail({ to: v.contactEmail, subject: `\u23F0 Rappel : commande ${o.reference} de ${r.name} en attente`, text: text2, html: h`<p>${nl2br(text2)}</p>`, tags: { type: "order_reminder" } });
       ok = ok || m.ok;
       channel = channel === "none" ? "email" : `${channel}+email`;
     }
@@ -6608,6 +6649,7 @@ var init_reminders = __esm({
     init_job_runs();
     init_notify();
     init_ops_health();
+    init_html();
     APP_URL2 = () => process.env.APP_URL ?? "http://localhost:5173";
     eur4 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     lastRun = 0;
@@ -6678,7 +6720,7 @@ ${late ? "Tant qu'une facture est en retard, vous ne pouvez plus commander \xE0 
 
 AFRISUPPLY`;
     for (const x of rcpts) {
-      void sendMail2({ to: x.email, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br/>")}</p>` });
+      void sendMail2({ to: x.email, subject, text: text2, html: h`<p>${nl2br(text2, "<br/>")}</p>` });
       reminded += 1;
     }
   }
@@ -6689,6 +6731,7 @@ var init_credit = __esm({
   "apps/api/src/lib/credit.ts"() {
     "use strict";
     init_src();
+    init_html();
     n5 = (v) => v === null || v === void 0 ? 0 : Number(v);
     eur5 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     today = () => (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -6845,32 +6888,32 @@ function buildDigest(d) {
   ].join("\n");
   const sec = (s) => `
     <tr><td style="padding:18px 24px 0 24px">
-      <p style="margin:0 0 8px 0;font:700 15px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1c1917">${s.emoji} ${esc(s.title)}</p>
-      <ul style="margin:0;padding-left:18px;font:14px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#44403c">${s.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
-      ${s.cta ? `<a href="${d.appUrl}${s.cta.path}" style="display:inline-block;margin-top:10px;padding:8px 14px;border-radius:10px;background:#c2410c;color:#fff;text-decoration:none;font:600 13px -apple-system,Segoe UI,Roboto,Arial,sans-serif">${esc(s.cta.label)} \u2192</a>` : ""}
+      <p style="margin:0 0 8px 0;font:700 15px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1c1917">${s.emoji} ${esc2(s.title)}</p>
+      <ul style="margin:0;padding-left:18px;font:14px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#44403c">${s.lines.map((l) => `<li>${esc2(l)}</li>`).join("")}</ul>
+      ${s.cta ? `<a href="${d.appUrl}${s.cta.path}" style="display:inline-block;margin-top:10px;padding:8px 14px;border-radius:10px;background:#c2410c;color:#fff;text-decoration:none;font:600 13px -apple-system,Segoe UI,Roboto,Arial,sans-serif">${esc2(s.cta.label)} \u2192</a>` : ""}
     </td></tr>`;
   const html = `<!doctype html><html lang="fr"><body style="margin:0;background:#fafaf9;padding:24px 0">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center">
   <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border-radius:16px;border:1px solid #e7e5e4;overflow:hidden">
     <tr><td style="background:#1c1917;padding:20px 24px">
       <p style="margin:0;font:800 18px -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#fff">AFRI<span style="color:#fb923c">SUPPLY</span></p>
-      <p style="margin:6px 0 0 0;font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#a8a29e">${esc(d.restaurantName)} \xB7 ${esc(dateStr)}</p>
+      <p style="margin:6px 0 0 0;font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#a8a29e">${esc2(d.restaurantName)} \xB7 ${esc2(dateStr)}</p>
     </td></tr>
     <tr><td style="padding:22px 24px 0 24px">
-      <p style="margin:0;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#44403c">Bonjour ${esc(d.firstName)},</p>
-      <h1 style="margin:8px 0 0 0;font:800 22px/1.25 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1c1917">${esc(headline)}</h1>
+      <p style="margin:0;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#44403c">Bonjour ${esc2(d.firstName)},</p>
+      <h1 style="margin:8px 0 0 0;font:800 22px/1.25 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1c1917">${esc2(headline)}</h1>
     </td></tr>
     ${sections.map(sec).join("")}
     ${isEmpty ? `<tr><td style="padding:18px 24px 0 24px;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#44403c">Rien d\u2019urgent aujourd\u2019hui. Vos stocks couvrent la pr\xE9vision. \u{1F389}</td></tr>` : ""}
     <tr><td style="padding:22px 24px 0 24px"><hr style="border:0;border-top:1px solid #e7e5e4;margin:0"></td></tr>
     <tr><td style="padding:14px 24px 22px 24px;font:12px/1.6 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#78716c">
-      ${footerFacts.map(esc).join("<br>")}<br><br>
+      ${footerFacts.map(esc2).join("<br>")}<br><br>
       <a href="${d.appUrl}/app" style="color:#c2410c;font-weight:600;text-decoration:none">Ouvrir AFRISUPPLY \u2192</a> \xB7 <a href="${d.appUrl}/app/parametres" style="color:#a8a29e">G\xE9rer mes notifications</a>
     </td></tr>
   </table></td></tr></table></body></html>`;
   return { subject, text: text2, html, isEmpty };
 }
-var eur6, UNIT_FR, q, days, dayFr, esc;
+var eur6, UNIT_FR, q, days, dayFr, esc2;
 var init_digest = __esm({
   "apps/api/src/lib/digest.ts"() {
     "use strict";
@@ -6883,13 +6926,13 @@ var init_digest = __esm({
     };
     days = (d) => `${(Math.round(d * 10) / 10).toString().replace(".", ",")} j`;
     dayFr = (iso) => iso ? new Date(iso).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric" }) : null;
-    esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    esc2 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 });
 
 // apps/api/src/routes/public.ts
 import { Hono as Hono6 } from "hono";
-import { z as z5 } from "zod";
+import { z as z6 } from "zod";
 import { and as and16, desc as desc5, eq as eq19, ilike, isNotNull as isNotNull2, isNull as isNull9, sql as sql15 } from "drizzle-orm";
 function rateLimited(ip) {
   const now = Date.now();
@@ -6949,19 +6992,19 @@ var init_public = __esm({
         }
       });
     });
-    leadBody = z5.object({
-      restaurantName: z5.string().min(2).max(120),
-      contactName: z5.string().min(2).max(120),
-      email: z5.string().email(),
-      phone: z5.string().max(40).optional(),
-      city: z5.string().max(80).optional(),
-      cuisine: z5.string().max(80).optional(),
-      coversPerDay: z5.number().int().positive().max(5e3).optional(),
-      message: z5.string().max(2e3).optional(),
-      planInterest: z5.enum(["starter", "pro", "business", "pilote"]).optional(),
-      source: z5.string().max(40).optional(),
-      utm: z5.record(z5.string(), z5.string()).optional(),
-      website: z5.string().optional()
+    leadBody = z6.object({
+      restaurantName: z6.string().min(2).max(120),
+      contactName: z6.string().min(2).max(120),
+      email: z6.string().email(),
+      phone: z6.string().max(40).optional(),
+      city: z6.string().max(80).optional(),
+      cuisine: z6.string().max(80).optional(),
+      coversPerDay: z6.number().int().positive().max(5e3).optional(),
+      message: z6.string().max(2e3).optional(),
+      planInterest: z6.enum(["starter", "pro", "business", "pilote"]).optional(),
+      source: z6.string().max(40).optional(),
+      utm: z6.record(z6.string(), z6.string()).optional(),
+      website: z6.string().optional()
       // honeypot anti-spam : doit rester vide (sinon on répond ok sans enregistrer)
     });
     hits = /* @__PURE__ */ new Map();
@@ -6985,7 +7028,7 @@ var init_public = __esm({
     });
     publicRoutes.put("/admin/leads/:id", requireAuth, async (c) => {
       if (!isPlatformAdmin(c.get("user"))) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-      const body3 = z5.object({ status: z5.enum(["nouveau", "contacte", "demo", "pilote", "client", "perdu"]).optional(), notes: z5.string().nullable().optional() }).safeParse(await c.req.json());
+      const body3 = z6.object({ status: z6.enum(["nouveau", "contacte", "demo", "pilote", "client", "perdu"]).optional(), notes: z6.string().nullable().optional() }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
       const db = await getDb();
       const [row] = await db.update(leads).set(body3.data).where(eq19(leads.id, c.req.param("id") ?? "")).returning();
@@ -7212,8 +7255,8 @@ var init_pdf = __esm({
       line(x1, y1, x2, y2, gray = 0.8) {
         this.ops.push(`${gray} G 0.5 w ${x1} ${y1} m ${x2} ${y2} l S`);
       }
-      rect(x, y, w, h, gray = 0.95) {
-        this.ops.push(`${gray} g ${x} ${y} ${w} ${h} re f 0 g`);
+      rect(x, y, w, h2, gray = 0.95) {
+        this.ops.push(`${gray} g ${x} ${y} ${w} ${h2} re f 0 g`);
       }
       down(n18) {
         this.y -= n18;
@@ -7295,7 +7338,7 @@ ${xref}
 
 // apps/api/src/routes/billing.ts
 import { Hono as Hono7 } from "hono";
-import { z as z6 } from "zod";
+import { z as z7 } from "zod";
 import { and as and17, eq as eq20, sql as sql16, desc as desc6 } from "drizzle-orm";
 async function handleStripeInvoicePaid(db, inv) {
   if (typeof inv.customer === "string") await db.update(restaurants).set({ subscriptionStatus: "active" }).where(eq20(restaurants.stripeCustomerId, inv.customer));
@@ -7378,7 +7421,7 @@ La facture est jointe \xE0 ce message (PDF) et reste disponible dans votre espac
 
 Merci de votre confiance,
 L'\xE9quipe AFRISUPPLY`,
-    html: `<p>Bonjour,</p><p>Voici votre facture <b>${invoice.number}</b> pour <b>${restaurantName}</b> :</p><ul><li>Formule ${invoice.plan}${invoice.founder ? " (tarif pilote fondateur \u221250 %)" : ""}</li><li>P\xE9riode : du ${invoice.periodStart.toLocaleDateString("fr-FR")} au ${invoice.periodEnd.toLocaleDateString("fr-FR")}</li><li>Montant : ${eur12(Number(invoice.amountEur))} HT \u2014 <b>${eur12(ttc)} TTC</b></li></ul><p>La facture est jointe \xE0 ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.</p><p>Merci de votre confiance,<br>L'\xE9quipe AFRISUPPLY</p>`,
+    html: h`<p>Bonjour,</p><p>Voici votre facture <b>${invoice.number}</b> pour <b>${restaurantName}</b> :</p><ul><li>Formule ${invoice.plan}${invoice.founder ? " (tarif pilote fondateur \u221250 %)" : ""}</li><li>Période : du ${invoice.periodStart.toLocaleDateString("fr-FR")} au ${invoice.periodEnd.toLocaleDateString("fr-FR")}</li><li>Montant : ${eur12(Number(invoice.amountEur))} HT — <b>${eur12(ttc)} TTC</b></li></ul><p>La facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.</p><p>Merci de votre confiance,<br>L'équipe AFRISUPPLY</p>`,
     tags: { type: "subscription_invoice", restaurant: invoice.restaurantId },
     attachments: [{ filename: `${invoice.number}.pdf`, content: pdf, contentType: "application/pdf" }]
   });
@@ -7457,7 +7500,7 @@ La facture est jointe \xE0 ce message (PDF).
 
 Merci de votre confiance,
 L'\xE9quipe AFRISUPPLY`,
-      html: `<p>Bonjour,</p><p>Facture de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirm\xE9e(s), base ${eur8(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur8(amount)} HT</b> \u2014 ${eur8(ttc)} TTC</li></ul><p>${mode === "prelevement" ? "Pr\xE9l\xE8vement automatique sur la carte enregistr\xE9e : aucune action de votre part." : "R\xE8glement sous 15 jours par virement, ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur."}</p><p>La facture est jointe \xE0 ce message (PDF).</p><p>L'\xE9quipe AFRISUPPLY</p>`,
+      html: h`<p>Bonjour,</p><p>Facture de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirmée(s), base ${eur8(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur8(amount)} HT</b> — ${eur8(ttc)} TTC</li></ul><p>${mode === "prelevement" ? "Pr\xE9l\xE8vement automatique sur la carte enregistr\xE9e : aucune action de votre part." : "R\xE8glement sous 15 jours par virement, ou activez le pr\xE9l\xE8vement automatique dans votre espace fournisseur."}</p><p>La facture est jointe à ce message (PDF).</p><p>L'équipe AFRISUPPLY</p>`,
       tags: { type: "commission", vendor: v.id },
       attachments: [{ filename: `commission-${period}.pdf`, content: pdf, contentType: "application/pdf" }]
     });
@@ -7492,6 +7535,7 @@ var init_billing2 = __esm({
     init_job_runs();
     init_mailer();
     init_ops();
+    init_html();
     eur8 = (v) => `${v.toFixed(2).replace(".", ",")} \u20AC`;
     billingPublicRoutes = new Hono7();
     billingPublicRoutes.get("/billing/health", async (c) => c.json(await billingHealth()));
@@ -7545,7 +7589,7 @@ Prochain pr\xE9l\xE8vement le ${when}. Vous g\xE9rez tout (factures, carte, r\xE
 Merci de nous faire confiance \u2014 une question, r\xE9pondez \xE0 cet e-mail.
 
 L'\xE9quipe AFRISUPPLY`,
-                html: `<p>Bonjour ${first},</p><p>C'est confirm\xE9 : l'abonnement <b>${applied.plan}</b> d'AFRISUPPLY est actif pour <b>\xAB ${rr?.name ?? "votre restaurant"} \xBB</b>.</p><p>Prochain pr\xE9l\xE8vement le <b>${when}</b>. Factures, carte et r\xE9siliation se g\xE8rent depuis <b>Abonnement</b> dans l'application.</p><p>Merci de nous faire confiance \u2014 une question, r\xE9pondez \xE0 cet e-mail.</p><p>L'\xE9quipe AFRISUPPLY</p>`,
+                html: h`<p>Bonjour ${first},</p><p>C'est confirmé : l'abonnement <b>${applied.plan}</b> d'AFRISUPPLY est actif pour <b>« ${rr?.name ?? "votre restaurant"} »</b>.</p><p>Prochain prélèvement le <b>${when}</b>. Factures, carte et résiliation se gèrent depuis <b>Abonnement</b> dans l'application.</p><p>Merci de nous faire confiance — une question, répondez à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`,
                 tags: { type: "subscription_active" }
               });
             }
@@ -7662,7 +7706,7 @@ L'\xE9quipe AFRISUPPLY`,
       return c.json(res, res.sent ? 200 : 424);
     });
     billingRoutes.post("/billing/checkout", async (c) => {
-      const parsed = z6.object({ plan: z6.enum(["starter", "pro", "business"]) }).safeParse(await c.req.json());
+      const parsed = z7.object({ plan: z7.enum(["starter", "pro", "business"]) }).safeParse(await c.req.json());
       if (!parsed.success) return c.json({ error: "Formule inconnue (starter, pro ou business)" }, 400);
       const { plan: plan2 } = parsed.data;
       if (!stripeConfigured()) return c.json({ error: `Paiement en ligne bient\xF4t disponible \u2014 \xE9crivez-nous \xE0 ${SUPPORT.email()} pour activer votre formule.` }, 503);
@@ -7683,7 +7727,7 @@ L'\xE9quipe AFRISUPPLY`,
       }
     });
     billingRoutes.post("/billing/sync", async (c) => {
-      const { sessionId } = z6.object({ sessionId: z6.string().optional() }).parse(await c.req.json().catch(() => ({})));
+      const { sessionId } = z7.object({ sessionId: z7.string().optional() }).parse(await c.req.json().catch(() => ({})));
       const db = await getDb();
       const [r] = await db.select().from(restaurants).where(eq20(restaurants.id, c.get("restaurantId")));
       if (!stripeConfigured()) return c.json({ synced: false });
@@ -7724,7 +7768,7 @@ L'\xE9quipe AFRISUPPLY`,
     });
     billingAdminRoutes.post("/admin/billing/restaurants/:id/invoice", async (c) => {
       if (!isPlatformAdmin(c.get("user"))) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-      const b = z6.object({ amountEur: z6.number().positive().max(1e5).optional(), vatRate: z6.number().min(0).max(20).optional(), months: z6.number().int().min(1).max(12).default(1), send: z6.boolean().default(true), note: z6.string().max(300).optional() }).parse(await c.req.json().catch(() => ({})));
+      const b = z7.object({ amountEur: z7.number().positive().max(1e5).optional(), vatRate: z7.number().min(0).max(20).optional(), months: z7.number().int().min(1).max(12).default(1), send: z7.boolean().default(true), note: z7.string().max(300).optional() }).parse(await c.req.json().catch(() => ({})));
       const db = await getDb();
       const [r] = await db.select().from(restaurants).where(eq20(restaurants.id, c.req.param("id")));
       if (!r) return c.json({ error: "Restaurant introuvable" }, 404);
@@ -7750,7 +7794,7 @@ L'\xE9quipe AFRISUPPLY`,
     });
     billingAdminRoutes.put("/admin/billing/invoices/:id", async (c) => {
       if (!isPlatformAdmin(c.get("user"))) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-      const b = z6.object({ status: z6.enum(["payee", "ouverte", "annulee"]) }).parse(await c.req.json());
+      const b = z7.object({ status: z7.enum(["payee", "ouverte", "annulee"]) }).parse(await c.req.json());
       const db = await getDb();
       const [upd] = await db.update(subscriptionInvoices).set({ status: b.status, paidAt: b.status === "payee" ? /* @__PURE__ */ new Date() : null }).where(eq20(subscriptionInvoices.id, c.req.param("id"))).returning();
       if (!upd) return c.json({ error: "Facture introuvable" }, 404);
@@ -7759,7 +7803,7 @@ L'\xE9quipe AFRISUPPLY`,
     });
     billingAdminRoutes.put("/admin/billing/restaurants/:id", async (c) => {
       if (!isPlatformAdmin(c.get("user"))) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-      const b = z6.object({ founder: z6.boolean().optional(), extendTrialDays: z6.number().int().min(1).max(180).optional(), plan: z6.enum(["trial", "starter", "pro", "business"]).optional(), subscriptionStatus: z6.enum(["trialing", "active", "past_due", "canceled", "expired"]).optional() }).parse(await c.req.json());
+      const b = z7.object({ founder: z7.boolean().optional(), extendTrialDays: z7.number().int().min(1).max(180).optional(), plan: z7.enum(["trial", "starter", "pro", "business"]).optional(), subscriptionStatus: z7.enum(["trialing", "active", "past_due", "canceled", "expired"]).optional() }).parse(await c.req.json());
       const db = await getDb();
       const [r] = await db.select().from(restaurants).where(eq20(restaurants.id, c.req.param("id")));
       if (!r) return c.json({ error: "Restaurant introuvable" }, 404);
@@ -7778,7 +7822,7 @@ L'\xE9quipe AFRISUPPLY`,
     });
     billingAdminRoutes.post("/admin/billing/commissions/invoice", async (c) => {
       if (!isPlatformAdmin(c.get("user"))) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-      const b = z6.object({ period: z6.string().regex(/^\d{4}-\d{2}$/).optional(), dryRun: z6.boolean().optional() }).parse(await c.req.json().catch(() => ({})));
+      const b = z7.object({ period: z7.string().regex(/^\d{4}-\d{2}$/).optional(), dryRun: z7.boolean().optional() }).parse(await c.req.json().catch(() => ({})));
       const prev = /* @__PURE__ */ new Date();
       prev.setUTCDate(0);
       const res = await invoiceCommissions(b.period ?? prev.toISOString().slice(0, 7), { dryRun: b.dryRun });
@@ -7790,7 +7834,7 @@ L'\xE9quipe AFRISUPPLY`,
 
 // apps/api/src/routes/pilots.ts
 import { Hono as Hono8 } from "hono";
-import { z as z7 } from "zod";
+import { z as z8 } from "zod";
 import { randomInt } from "node:crypto";
 import { and as and18, desc as desc7, eq as eq21, gte as gte5, sql as sql17 } from "drizzle-orm";
 function makeInviteCode() {
@@ -7871,7 +7915,7 @@ async function buildWeeklyPilotReport(now = /* @__PURE__ */ new Date()) {
   const newFb = await db.select({ f: feedback, restaurantName: restaurants.name }).from(feedback).innerJoin(restaurants, eq21(restaurants.id, feedback.restaurantId)).where(gte5(feedback.createdAt, since7)).orderBy(desc7(feedback.createdAt));
   const line = (p) => `${p.status === "vert" ? "\u{1F7E2}" : p.status === "orange" ? "\u{1F7E0}" : "\u{1F534}"} ${p.name} (J${p.dayNumber}, checklist ${p.checklist.done}/${p.checklist.total}, ${p.week.sales} ventes \xB7 ${p.week.movements} mvts \xB7 ${p.week.orders} cmd)${p.reasons.length ? " \u2014 " + p.reasons.join(", ") : ""}`;
   const text2 = [`Rapport pilotes \u2014 semaine du ${now.toLocaleDateString("fr-FR")}`, "", `${pilots.length} restaurants \xB7 ${pilots.filter((p) => p.status === "vert").length} \u{1F7E2} \xB7 ${pilots.filter((p) => p.status === "orange").length} \u{1F7E0} \xB7 ${pilots.filter((p) => p.status === "rouge").length} \u{1F534}`, `Actifs cette semaine : ${pilots.filter((p) => p.week.sales + p.week.movements + p.week.orders > 0).length}`, "", ...pilots.sort((a, b) => ["rouge", "orange", "vert"].indexOf(a.status) - ["rouge", "orange", "vert"].indexOf(b.status)).map(line), "", `Retours de la semaine (${newFb.length}) :`, ...newFb.map(({ f, restaurantName }) => `- [${f.kind}${f.score !== null ? ` ${f.score}/10` : ""}] ${restaurantName} : ${f.message ?? ""}`), "", `${APP3()}/app/admin/pilotes`].join("\n");
-  return { text: text2, html: `<pre style="font-family:ui-sans-serif,system-ui;white-space:pre-wrap">${text2.replace(/</g, "&lt;")}</pre>`, pilots: pilots.length };
+  return { text: text2, html: h`<pre style="font-family:ui-sans-serif,system-ui;white-space:pre-wrap">${text2}</pre>`, pilots: pilots.length };
 }
 var APP3, n7, ONBOARDING_STEPS, pilotPublicRoutes, pilotRoutes, pilotAdminRoutes;
 var init_pilots = __esm({
@@ -7882,6 +7926,7 @@ var init_pilots = __esm({
     init_mailer();
     init_ops();
     init_public();
+    init_html();
     APP3 = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     n7 = (v) => Number(v ?? 0);
     ONBOARDING_STEPS = [
@@ -7925,7 +7970,7 @@ var init_pilots = __esm({
       return c.json({ ok: true });
     });
     pilotRoutes.post("/feedback", async (c) => {
-      const b = z7.object({ kind: z7.enum(["nps", "bug", "idee", "question"]), score: z7.number().int().min(0).max(10).optional(), message: z7.string().max(2e3).optional(), page: z7.string().max(200).optional() }).parse(await c.req.json());
+      const b = z8.object({ kind: z8.enum(["nps", "bug", "idee", "question"]), score: z8.number().int().min(0).max(10).optional(), message: z8.string().max(2e3).optional(), page: z8.string().max(200).optional() }).parse(await c.req.json());
       if (b.kind !== "nps" && !b.message?.trim()) return c.json({ error: "Dites-nous en un mot ce qui se passe \u{1F642}" }, 400);
       const db = await getDb();
       const rid2 = c.get("restaurantId");
@@ -7939,7 +7984,7 @@ var init_pilots = __esm({
 
 ${b.message ?? "(sans message)"}
 
-${APP3()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) \u2014 page ${b.page ?? "?"}</p><p>${(b.message ?? "(sans message)").replace(/\n/g, "<br>")}</p><p><a href="${APP3()}/app/admin/pilotes">Cockpit pilotes</a></p>`, tags: { type: "feedback" } });
+${APP3()}/app/admin/pilotes`, html: h`<p><b>${r.name}</b> (${u.email}) — page ${b.page ?? "?"}</p><p>${nl2br(b.message ?? "(sans message)")}</p><p><a href="${APP3()}/app/admin/pilotes">Cockpit pilotes</a></p>`, tags: { type: "feedback" } });
       }
       return c.json({ feedback: row, message: b.kind === "nps" ? "Merci ! Votre avis compte vraiment." : "Bien re\xE7u \u2014 on vous r\xE9pond sous 24 h ouvr\xE9es." }, 201);
     });
@@ -7955,7 +8000,7 @@ ${APP3()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) \u2014 pag
       return c.json({ due: !last, window });
     });
     pilotRoutes.post("/usage", async (c) => {
-      const parsed = z7.object({ events: z7.array(z7.object({ event: z7.string().max(80), meta: z7.record(z7.string(), z7.unknown()).optional(), at: z7.string().optional() })).max(50) }).safeParse(await c.req.json().catch(() => null));
+      const parsed = z8.object({ events: z8.array(z8.object({ event: z8.string().max(80), meta: z8.record(z8.string(), z8.unknown()).optional(), at: z8.string().optional() })).max(50) }).safeParse(await c.req.json().catch(() => null));
       if (!parsed.success) return c.json({ error: "Format d\u2019\xE9v\xE9nement invalide", details: parsed.error.flatten() }, 400);
       const b = parsed.data;
       if (!b.events.length) return c.json({ ok: true });
@@ -7982,7 +8027,7 @@ ${APP3()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) \u2014 pag
     });
     pilotAdminRoutes.post("/admin/pilots/invite", async (c) => {
       if (!isPlatformAdmin(c.get("user"))) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-      const b = z7.object({ leadId: z7.string().uuid().optional(), email: z7.string().email().optional(), restaurantName: z7.string().min(2).optional(), contactName: z7.string().min(2).optional(), city: z7.string().optional(), resend: z7.boolean().optional() }).parse(await c.req.json());
+      const b = z8.object({ leadId: z8.string().uuid().optional(), email: z8.string().email().optional(), restaurantName: z8.string().min(2).optional(), contactName: z8.string().min(2).optional(), city: z8.string().optional(), resend: z8.boolean().optional() }).parse(await c.req.json());
       const db = await getDb();
       let lead = b.leadId ? (await db.select().from(leads).where(eq21(leads.id, b.leadId)))[0] : void 0;
       if (!lead) {
@@ -8014,14 +8059,14 @@ En \xE9change : vous utilisez l'app au quotidien et vous nous dites franchement 
 
 \xC0 tr\xE8s vite,
 L'\xE9quipe AFRISUPPLY`,
-        html: `<p>Bonjour ${first},</p><p>Bienvenue parmi les <b>${FOUNDER_OFFER.seats} restaurants pilotes fondateurs</b> d'AFRISUPPLY !</p><p>Votre code : <b style="font-size:18px">${code}</b><br><a href="${link}" style="display:inline-block;margin-top:8px;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Cr\xE9er mon compte (2 minutes)</a></p><ul><li>${FOUNDER_OFFER.trialDays} jours gratuits, sans carte bancaire</li><li>puis <b>\u2212${FOUNDER_OFFER.discountPct} % \xE0 vie</b> sur la formule de votre choix</li><li>une ligne directe avec l'\xE9quipe (r\xE9ponse sous 24 h)</li></ul><p>En \xE9change : vous utilisez l'app au quotidien et vous nous dites franchement ce qui coince.</p><p>\xC0 tr\xE8s vite,<br>L'\xE9quipe AFRISUPPLY</p>`
+        html: h`<p>Bonjour ${first},</p><p>Bienvenue parmi les <b>${FOUNDER_OFFER.seats} restaurants pilotes fondateurs</b> d'AFRISUPPLY !</p><p>Votre code : <b style="font-size:18px">${code}</b><br><a href="${link}" style="display:inline-block;margin-top:8px;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Créer mon compte (2 minutes)</a></p><ul><li>${FOUNDER_OFFER.trialDays} jours gratuits, sans carte bancaire</li><li>puis <b>−${FOUNDER_OFFER.discountPct} % à vie</b> sur la formule de votre choix</li><li>une ligne directe avec l'équipe (réponse sous 24 h)</li></ul><p>En échange : vous utilisez l'app au quotidien et vous nous dites franchement ce qui coince.</p><p>À très vite,<br>L'équipe AFRISUPPLY</p>`
       });
       await audit("pilot.invite", { actorEmail: c.get("user").email, target: lead.id, meta: { code, mail: mail.ok } });
       return c.json({ code, link, mail: mail.ok ? "envoy\xE9" : `non envoy\xE9 (${mail.error ?? mail.transport})`, lead: { ...lead, inviteCode: code } });
     });
     pilotAdminRoutes.put("/admin/pilots/feedback/:id", async (c) => {
       if (!isPlatformAdmin(c.get("user"))) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-      const b = z7.object({ status: z7.enum(["nouveau", "traite"]).optional(), published: z7.boolean().optional() }).parse(await c.req.json());
+      const b = z8.object({ status: z8.enum(["nouveau", "traite"]).optional(), published: z8.boolean().optional() }).parse(await c.req.json());
       if (b.status === void 0 && b.published === void 0) return c.json({ error: "Rien \xE0 mettre \xE0 jour (status ou published)." }, 400);
       const db = await getDb();
       const [row] = await db.update(feedback).set({ ...b.status !== void 0 ? { status: b.status } : {}, ...b.published !== void 0 ? { published: b.published } : {} }).where(eq21(feedback.id, c.req.param("id"))).returning();
@@ -8070,8 +8115,8 @@ function routeServes(r, rest) {
   if (!r.zones.length) return true;
   const city = (rest.city ?? "").trim().toLowerCase();
   const cp = (rest.postalCode ?? "").trim();
-  return r.zones.some((z22) => {
-    const t = z22.trim().toLowerCase();
+  return r.zones.some((z23) => {
+    const t = z23.trim().toLowerCase();
     if (!t) return false;
     if (/^\d{5}$/.test(t)) return cp === t;
     if (/^\d{2}$/.test(t)) return cp.startsWith(t);
@@ -8079,8 +8124,8 @@ function routeServes(r, rest) {
   });
 }
 function cutoffFor(r, date2) {
-  const [h, m] = r.cutoffTime.split(":").map(Number);
-  return { cutoffDate: addDays(date2, -r.cutoffDaysBefore), cutoffMinutes: (h || 0) * 60 + (m || 0) };
+  const [h2, m] = r.cutoffTime.split(":").map(Number);
+  return { cutoffDate: addDays(date2, -r.cutoffDaysBefore), cutoffMinutes: (h2 || 0) * 60 + (m || 0) };
 }
 function isBeforeCutoff(r, date2, now = /* @__PURE__ */ new Date()) {
   const { cutoffDate, cutoffMinutes } = cutoffFor(r, date2);
@@ -8182,13 +8227,13 @@ __export(marketplace_exports, {
   runRecurringOrders: () => runRecurringOrders
 });
 import { Hono as Hono9 } from "hono";
-import { z as z8 } from "zod";
+import { z as z9 } from "zod";
 import { and as and22, desc as desc8, eq as eq24, gte as gte8, inArray as inArray13, sql as sql20 } from "drizzle-orm";
 function restaurantZones(r) {
-  const z22 = /* @__PURE__ */ new Set(["France"]);
-  if (r.city) z22.add(r.city.trim().toLowerCase());
-  if (r.postalCode) z22.add(r.postalCode.slice(0, 2));
-  return z22;
+  const z23 = /* @__PURE__ */ new Set(["France"]);
+  if (r.city) z23.add(r.city.trim().toLowerCase());
+  if (r.postalCode) z23.add(r.postalCode.slice(0, 2));
+  return z23;
 }
 async function linkVendor(rid2, vid) {
   const db = await getDb();
@@ -8281,7 +8326,7 @@ ${linesData.map((l) => `\u2022 ${l.packs} \xD7 ${l.packLabel} \u2014 ${eur9(Numb
 Total : ${eur9(total)}
 
 Confirmez ou refusez en un clic : ${APP_URL3()}/fournisseur/commandes
-`, html: `<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${linesData.map((l) => `<li>${l.packs} \xD7 ${l.packLabel} \u2014 ${eur9(Number(l.lineTotalEur))}</li>`).join("")}</ul><p><b>Total : ${eur9(total)}</b></p><p><a href="${APP_URL3()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: "vendor_order" } });
+`, html: h`<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${brut(linesData.map((l) => h`<li>${l.packs} × ${l.packLabel} — ${eur9(Number(l.lineTotalEur))}</li>`).join(""))}</ul><p><b>Total : ${eur9(total)}</b></p><p><a href="${APP_URL3()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: "vendor_order" } });
   void logOrderEvent(order.id, "sent", `Commande envoy\xE9e \xE0 ${v.name}${source === "recurrente" ? " (commande r\xE9currente)" : source === "recommande" ? " (recommande)" : ""}`, "restaurant", { total });
   const phone = v.whatsapp || v.contactPhone;
   if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? "whatsapp" : "sms", kind: "order.new", orderId: order.id, vendorId: v.id, restaurantId: rid2, body: `AFRISUPPLY \u2014 Nouvelle commande ${reference}
@@ -8324,13 +8369,13 @@ Votre commande r\xE9currente \xAB ${r.name} \xBB chez ${res.vendorName} est pr\x
 
 Valider ou modifier : ${APP_URL3()}/app/achats?validate=${res.order.id}
 
-AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre commande r\xE9currente \xAB <b>${r.name}</b> \xBB chez ${res.vendorName} est pr\xEAte (<b>${eur9(res.total)}</b>). Elle ne partira qu'apr\xE8s votre validation.</p><p><a href="${APP_URL3()}/app/achats?validate=${res.order.id}" style="background:#0f766e;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Valider la commande</a></p>` });
+AFRISUPPLY`, html: h`<p>Bonjour,</p><p>Votre commande récurrente « <b>${r.name}</b> » chez ${res.vendorName} est prête (<b>${eur9(res.total)}</b>). Elle ne partira qu'après votre validation.</p><p><a href="${APP_URL3()}/app/achats?validate=${res.order.id}" style="background:#0f766e;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Valider la commande</a></p>` });
       }
     } else {
       await db.update(recurringOrders).set({ nextRunOn: next }).where(eq24(recurringOrders.id, r.id));
       out.push({ id: r.id, name: r.name, ok: false, error: res.error });
       const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq24(users.id, restaurantMembers.userId)).where(and22(eq24(restaurantMembers.restaurantId, r.restaurantId), inArray13(restaurantMembers.role, ["owner", "manager"])));
-      for (const x of rcpts) void sendMail({ to: x.email, subject: `\u26A0\uFE0F Commande r\xE9currente \xAB ${r.name} \xBB non envoy\xE9e`, text: `La commande r\xE9currente \xAB ${r.name} \xBB n'a pas pu \xEAtre envoy\xE9e aujourd'hui : ${res.error}. V\xE9rifiez-la dans Achats \u2192 R\xE9currentes.`, html: `<p>La commande r\xE9currente \xAB <b>${r.name}</b> \xBB n'a pas pu \xEAtre envoy\xE9e aujourd'hui : ${res.error}.</p><p><a href="${APP_URL3()}/app/achats">V\xE9rifier</a></p>`, tags: { type: "recurring" } });
+      for (const x of rcpts) void sendMail({ to: x.email, subject: `\u26A0\uFE0F Commande r\xE9currente \xAB ${r.name} \xBB non envoy\xE9e`, text: `La commande r\xE9currente \xAB ${r.name} \xBB n'a pas pu \xEAtre envoy\xE9e aujourd'hui : ${res.error}. V\xE9rifiez-la dans Achats \u2192 R\xE9currentes.`, html: h`<p>La commande récurrente « <b>${r.name}</b> » n'a pas pu être envoyée aujourd'hui : ${res.error}.</p><p><a href="${APP_URL3()}/app/achats">Vérifier</a></p>`, tags: { type: "recurring" } });
     }
   }
   return { date: today2, due: due.length, results: out };
@@ -8352,6 +8397,7 @@ var init_marketplace = __esm({
     init_credit();
     init_reliability();
     init_tenant();
+    init_html();
     marketplaceRoutes = new Hono9();
     marketplaceRoutes.on(["POST"], "/marketplace/vendors/:id/orders", requireMinRole("manager"));
     marketplaceRoutes.on(["POST"], "/marketplace/vendors/:id/link", requireMinRole("manager"));
@@ -8414,15 +8460,15 @@ var init_marketplace = __esm({
       const rid2 = c.get("restaurantId");
       const user = c.get("user");
       const vid = c.req.param("id");
-      const body3 = z8.object({
-        lines: z8.array(z8.object({ vendorOfferId: z8.string().uuid(), packs: z8.number().int().positive().max(MAX_PACKS_PER_LINE3) })).min(1).max(MAX_ORDER_LINES2),
-        notes: z8.string().max(300).optional(),
-        source: z8.string().optional(),
-        routeId: z8.string().uuid().optional(),
-        expectedAt: z8.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-        deliverySlot: z8.string().max(20).optional(),
+      const body3 = z9.object({
+        lines: z9.array(z9.object({ vendorOfferId: z9.string().uuid(), packs: z9.number().int().positive().max(MAX_PACKS_PER_LINE3) })).min(1).max(MAX_ORDER_LINES2),
+        notes: z9.string().max(300).optional(),
+        source: z9.string().optional(),
+        routeId: z9.string().uuid().optional(),
+        expectedAt: z9.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        deliverySlot: z9.string().max(20).optional(),
         /** Confirmation explicite : autorise un volume au-delà de votre plafond habituel. */
-        override: z8.boolean().optional()
+        override: z9.boolean().optional()
       }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: `Donn\xE9es invalides : chaque ligne attend un nombre de colis entre 1 et ${MAX_PACKS_PER_LINE3} (panier de ${MAX_ORDER_LINES2} lignes maximum).` }, 400);
       const res = await placeVendorOrder(rid2, vid, user.id, body3.data);
@@ -8474,7 +8520,7 @@ var init_marketplace = __esm({
       const rid2 = c.get("restaurantId");
       const db = await getDb();
       const vid = c.req.param("id");
-      const body3 = z8.object({ lines: z8.array(z8.object({ vendorOfferId: z8.string().uuid(), packs: z8.number().int().positive() })).min(1) }).safeParse(await c.req.json());
+      const body3 = z9.object({ lines: z9.array(z9.object({ vendorOfferId: z9.string().uuid(), packs: z9.number().int().positive() })).min(1) }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
       const vo = await db.select().from(vendorOffers).where(and22(eq24(vendorOffers.vendorId, vid), inArray13(vendorOffers.id, body3.data.lines.map((l) => l.vendorOfferId))));
       const pricing = await loadPricing(vo, rid2);
@@ -8505,7 +8551,7 @@ var init_marketplace = __esm({
       const rid2 = c.get("restaurantId");
       const user = c.get("user");
       const db = await getDb();
-      const body3 = z8.object({ lines: z8.array(z8.object({ vendorOfferId: z8.string().uuid(), packs: z8.number().int().positive() })).min(1).optional(), notes: z8.string().max(300).optional() }).safeParse(await c.req.json().catch(() => ({})));
+      const body3 = z9.object({ lines: z9.array(z9.object({ vendorOfferId: z9.string().uuid(), packs: z9.number().int().positive() })).min(1).optional(), notes: z9.string().max(300).optional() }).safeParse(await c.req.json().catch(() => ({})));
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
       const [o] = await db.select().from(orders).where(and22(eq24(orders.id, c.req.param("id")), eq24(orders.restaurantId, rid2)));
       if (!o?.vendorId) return c.json({ error: "Commande plateforme introuvable" }, 404);
@@ -8542,7 +8588,7 @@ var init_marketplace = __esm({
       const rid2 = c.get("restaurantId");
       const user = c.get("user");
       const db = await getDb();
-      const body3 = z8.object({ vendorId: z8.string().uuid().optional(), fromOrderId: z8.string().uuid().optional(), name: z8.string().min(2).max(60), weekdays: z8.array(z8.number().int().min(0).max(6)).min(1), mode: z8.enum(["auto", "confirm"]).default("auto"), notes: z8.string().max(300).optional(), lines: z8.array(z8.object({ vendorOfferId: z8.string().uuid(), packs: z8.number().int().positive() })).optional() }).safeParse(await c.req.json());
+      const body3 = z9.object({ vendorId: z9.string().uuid().optional(), fromOrderId: z9.string().uuid().optional(), name: z9.string().min(2).max(60), weekdays: z9.array(z9.number().int().min(0).max(6)).min(1), mode: z9.enum(["auto", "confirm"]).default("auto"), notes: z9.string().max(300).optional(), lines: z9.array(z9.object({ vendorOfferId: z9.string().uuid(), packs: z9.number().int().positive() })).optional() }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
       let { vendorId, lines } = body3.data;
       if (body3.data.fromOrderId) {
@@ -8567,7 +8613,7 @@ var init_marketplace = __esm({
     marketplaceRoutes.put("/recurring/:id", async (c) => {
       const rid2 = c.get("restaurantId");
       const db = await getDb();
-      const body3 = z8.object({ name: z8.string().min(2).max(60).optional(), weekdays: z8.array(z8.number().int().min(0).max(6)).min(1).optional(), mode: z8.enum(["auto", "confirm"]).optional(), enabled: z8.boolean().optional(), notes: z8.string().max(300).nullable().optional(), lines: z8.array(z8.object({ vendorOfferId: z8.string().uuid(), packs: z8.number().int().positive() })).min(1).optional() }).safeParse(await c.req.json());
+      const body3 = z9.object({ name: z9.string().min(2).max(60).optional(), weekdays: z9.array(z9.number().int().min(0).max(6)).min(1).optional(), mode: z9.enum(["auto", "confirm"]).optional(), enabled: z9.boolean().optional(), notes: z9.string().max(300).nullable().optional(), lines: z9.array(z9.object({ vendorOfferId: z9.string().uuid(), packs: z9.number().int().positive() })).min(1).optional() }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
       if (!Object.values(body3.data).some((v) => v !== void 0)) return c.json({ error: "Aucune modification fournie : indiquez au moins un champ \xE0 changer.", code: "empty_update" }, 400);
       const [cur] = await db.select().from(recurringOrders).where(and22(eq24(recurringOrders.id, c.req.param("id")), eq24(recurringOrders.restaurantId, rid2)));
@@ -8625,7 +8671,7 @@ var init_marketplace = __esm({
       const rid2 = c.get("restaurantId");
       const db = await getDb();
       const id = c.req.param("id");
-      const body3 = z8.object({ packs: z8.number().int().min(0).max(500) }).safeParse(await c.req.json());
+      const body3 = z9.object({ packs: z9.number().int().min(0).max(500) }).safeParse(await c.req.json());
       if (!body3.success) return c.json({ error: "Nombre de colis invalide" }, 400);
       const [gb] = await db.select().from(groupBuys).where(eq24(groupBuys.id, id));
       if (!gb || gb.status !== "ouvert" || new Date(gb.closesAt) < /* @__PURE__ */ new Date()) return c.json({ error: "Achat group\xE9 ferm\xE9" }, 400);
@@ -8985,7 +9031,7 @@ Votre essai gratuit AFRISUPPLY pour ${r.name} se termine dans ${r.daysLeft} jour
 
 Besoin d'aide ? R\xE9pondez simplement \xE0 cet e-mail.
 
-L'\xE9quipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY pour <b>${r.name}</b> se termine dans <b>${r.daysLeft} jour(s)</b>.</p><p>Pour garder votre stock, vos fournisseurs et vos alertes : <a href="${APP_URL3()}/app/abonnement">choisir ma formule</a>.</p><p>Besoin d'aide ? R\xE9pondez simplement \xE0 cet e-mail.</p><p>L'\xE9quipe AFRISUPPLY</p>`, tags: { type: "trial-reminder" } });
+L'\xE9quipe AFRISUPPLY`, html: h`<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY pour <b>${r.name}</b> se termine dans <b>${r.daysLeft} jour(s)</b>.</p><p>Pour garder votre stock, vos fournisseurs et vos alertes : <a href="${APP_URL3()}/app/abonnement">choisir ma formule</a>.</p><p>Besoin d'aide ? Répondez simplement à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`, tags: { type: "trial-reminder" } });
       }
       const billing = { trialsExpired: sw.expired.length, reminders: sw.reminders.length, enforced: billingEnforced() };
       if (now.getUTCDate() === 1) {
@@ -9174,6 +9220,7 @@ var init_daily = __esm({
     init_job_runs();
     init_ops_health();
     init_credit();
+    init_html();
     n10 = (v) => v === null || v === void 0 ? 0 : Number(v);
     APP_URL3 = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     recipientsFor2 = (rid2, settingsRecipients) => recipientsFor(rid2, settingsRecipients);
@@ -9207,7 +9254,7 @@ init_src();
 init_auth();
 init_security();
 import { Hono } from "hono";
-import { z } from "zod";
+import { z as z2 } from "zod";
 import { and as and6, eq as eq7, isNull as isNull5, gt, sql as sql8 } from "drizzle-orm";
 import { createHash as createHash5 } from "node:crypto";
 import { setCookie, getCookie as getCookie2, deleteCookie } from "hono/cookie";
@@ -9280,8 +9327,8 @@ function clerkAuthorizedParties(env = process.env) {
     const s = p.trim().replace(/\/$/, "");
     if (s) list.add(s);
   }
-  const host = (h) => {
-    const s = clean2(h);
+  const host = (h2) => {
+    const s = clean2(h2);
     if (s) list.add(`https://${s.replace(/^https?:\/\//, "").replace(/\/$/, "")}`);
   };
   if (env.VERCEL_ENV === "production") host(env.VERCEL_PROJECT_PRODUCTION_URL);
@@ -9371,6 +9418,7 @@ async function clerkIdentityFromRequest(req, env = process.env) {
 }
 
 // apps/api/src/routes/auth.ts
+init_html();
 var slugify = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 var cookieOpts = { httpOnly: true, sameSite: "Lax", path: "/", maxAge: tokenTtlSeconds(), secure: process.env.NODE_ENV === "production" };
 var hashResetToken2 = (t) => createHash5("sha256").update(t).digest("hex");
@@ -9389,14 +9437,14 @@ var mailStatus = (res, link, kind) => {
   };
 };
 authRoutes.post("/register", async (c) => {
-  const body3 = z.object({
-    email: z.string().email(),
-    password: z.string().min(8),
-    fullName: z.string().min(2),
-    restaurantName: z.string().min(2),
-    city: z.string().optional(),
-    coversPerDay: z.number().int().positive().optional(),
-    inviteCode: z.string().max(20).optional()
+  const body3 = z2.object({
+    email: z2.string().email(),
+    password: z2.string().min(8),
+    fullName: zNomAffiche,
+    restaurantName: zNomAffiche,
+    city: z2.string().optional(),
+    coversPerDay: z2.number().int().positive().optional(),
+    inviteCode: z2.string().max(20).optional()
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const d = body3.data;
@@ -9424,7 +9472,7 @@ authRoutes.post("/register", async (c) => {
 Bienvenue sur AFRISUPPLY. Confirmez votre adresse e-mail en ouvrant ce lien (valable ${TTL_H} heures) : ${link}
 
 Tant que l'adresse n'est pas confirm\xE9e, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.`,
-    html: `<p>Bonjour ${user.fullName.split(" ")[0] || "chef"},</p><p>Bienvenue sur AFRISUPPLY. <a href="${link}">Confirmez votre adresse e-mail</a> (lien valable ${TTL_H} heures).</p><p>Tant que l'adresse n'est pas confirm\xE9e, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.</p>`,
+    html: h`<p>Bonjour ${user.fullName.split(" ")[0] || "chef"},</p><p>Bienvenue sur AFRISUPPLY. <a href="${link}">Confirmez votre adresse e-mail</a> (lien valable ${TTL_H} heures).</p><p>Tant que l'adresse n'est pas confirmée, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.</p>`,
     tags: { type: "email_verification" }
   });
   void audit("email.verification.sent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== "log" } });
@@ -9448,7 +9496,7 @@ Une question ? R\xE9pondez \xE0 cet e-mail, on r\xE9pond sous 24 h.
 
 Bienvenue \xE0 bord,
 L'\xE9quipe AFRISUPPLY`,
-    html: `<p>Bonjour ${firstName2},</p><p>Votre espace <b>\xAB ${d.restaurantName} \xBB</b> est pr\xEAt.</p><p><a href="${appUrl}/app/demarrer" style="display:inline-block;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Commencer (20 minutes)</a></p><ol><li>Configurez votre carte (vos produits sont d\xE9duits des recettes)</li><li>Fixez vos seuils : vous serez alert\xE9 avant les ruptures</li><li>Pr\xE9parez votre premi\xE8re commande \u2014 rien ne part sans vous</li></ol><p>Une question ? R\xE9pondez \xE0 cet e-mail, on r\xE9pond sous 24 h.</p><p>Bienvenue \xE0 bord,<br>L'\xE9quipe AFRISUPPLY</p>`,
+    html: h`<p>Bonjour ${firstName2},</p><p>Votre espace <b>« ${d.restaurantName} »</b> est prêt.</p><p><a href="${appUrl}/app/demarrer" style="display:inline-block;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Commencer (20 minutes)</a></p><ol><li>Configurez votre carte (vos produits sont déduits des recettes)</li><li>Fixez vos seuils : vous serez alerté avant les ruptures</li><li>Préparez votre première commande — rien ne part sans vous</li></ol><p>Une question ? Répondez à cet e-mail, on répond sous 24 h.</p><p>Bienvenue à bord,<br>L'équipe AFRISUPPLY</p>`,
     tags: { type: "welcome" }
   });
   return c.json({
@@ -9460,7 +9508,7 @@ L'\xE9quipe AFRISUPPLY`,
   }, 201);
 });
 authRoutes.post("/verify-email", async (c) => {
-  const body3 = z.object({ token: z.string().min(10) }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z2.object({ token: z2.string().min(10) }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Lien de confirmation incomplet.", code: "verify_invalid" }, 400);
   const db = await getDb();
   const [row] = await db.select().from(emailVerifications).where(eq7(emailVerifications.tokenHash, hashEmailToken(body3.data.token))).limit(1);
@@ -9501,7 +9549,7 @@ authRoutes.post("/resend-verification", requireAuth, async (c) => {
 Voici un nouveau lien pour confirmer votre adresse (valable ${TTL_H} heures) : ${link}
 
 Les liens pr\xE9c\xE9dents ne fonctionnent plus.`,
-    html: `<p>Bonjour ${user.fullName.split(" ")[0] || "chef"},</p><p><a href="${link}">Confirmer mon adresse e-mail</a> (valable ${TTL_H} heures). Les liens pr\xE9c\xE9dents ne fonctionnent plus.</p>`,
+    html: h`<p>Bonjour ${user.fullName.split(" ")[0] || "chef"},</p><p><a href="${link}">Confirmer mon adresse e-mail</a> (valable ${TTL_H} heures). Les liens précédents ne fonctionnent plus.</p>`,
     tags: { type: "email_verification" }
   });
   void audit("email.verification.resent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport } });
@@ -9513,7 +9561,7 @@ Les liens pr\xE9c\xE9dents ne fonctionnent plus.`,
   });
 });
 authRoutes.post("/login", async (c) => {
-  const body3 = z.object({ email: z.string().email(), password: z.string() }).safeParse(await c.req.json());
+  const body3 = z2.object({ email: z2.string().email(), password: z2.string() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const [user] = await db.select().from(users).where(eq7(users.email, body3.data.email.toLowerCase())).limit(1);
@@ -9549,7 +9597,7 @@ authRoutes.get("/password-policy", (c) => c.json({
   hint: `Au moins ${PASSWORD_MIN_LENGTH} caract\xE8res, et pas un mot de passe courant (par exemple trois mots qui n\u2019ont rien \xE0 voir entre eux).`
 }));
 authRoutes.post("/forgot-password", async (c) => {
-  const body3 = z.object({ email: z.string().email() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z2.object({ email: z2.string().email() }).safeParse(await c.req.json().catch(() => ({})));
   const deliverable = mailDeliverable();
   const generic = {
     ok: true,
@@ -9577,14 +9625,14 @@ Vous avez demand\xE9 \xE0 r\xE9initialiser votre mot de passe AFRISUPPLY.
 Lien (valable ${RESET_TTL} minutes) : ${link}
 
 Si vous n'\xEAtes pas \xE0 l'origine de cette demande, ignorez ce message : votre mot de passe reste inchang\xE9.`,
-    html: `<p>Bonjour ${firstName},</p><p>Vous avez demand\xE9 \xE0 r\xE9initialiser votre mot de passe AFRISUPPLY.</p><p><a href="${link}">Choisir un nouveau mot de passe</a> (lien valable ${RESET_TTL} minutes).</p><p>Si vous n'\xEAtes pas \xE0 l'origine de cette demande, ignorez ce message : votre mot de passe reste inchang\xE9.</p>`,
+    html: h`<p>Bonjour ${firstName},</p><p>Vous avez demandé à réinitialiser votre mot de passe AFRISUPPLY.</p><p><a href="${link}">Choisir un nouveau mot de passe</a> (lien valable ${RESET_TTL} minutes).</p><p>Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : votre mot de passe reste inchangé.</p>`,
     tags: { type: "password_reset" }
   });
   void audit("password.forgot", { actorEmail: email, target: user.id, meta: { transport: res.transport, sent: res.ok } });
   return c.json({ ...generic, ...devLinksAllowed() ? { devLink: link } : {} });
 });
 authRoutes.post("/reset-password", async (c) => {
-  const body3 = z.object({ token: z.string().min(10), password: z.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z2.object({ token: z2.string().min(10), password: z2.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Lien incomplet : demandez un nouveau lien de r\xE9initialisation.", code: "reset_invalid" }, 400);
   const weak = passwordProblem(body3.data.password);
   if (weak) return c.json({ error: weak, code: "weak_password" }, 400);
@@ -9605,7 +9653,7 @@ authRoutes.post("/reset-password", async (c) => {
   return c.json({ ok: true, message: "Mot de passe modifi\xE9. Toutes les sessions ouvertes ont \xE9t\xE9 d\xE9connect\xE9es : connectez-vous avec votre nouveau mot de passe." });
 });
 authRoutes.post("/password", requireAuth, async (c) => {
-  const body3 = z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z2.object({ currentPassword: z2.string().min(1), newPassword: z2.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Mot de passe actuel et nouveau mot de passe requis." }, 400);
   const db = await getDb();
   const me = c.get("user");
@@ -9731,7 +9779,7 @@ init_src();
 init_data();
 init_auth();
 import { Hono as Hono3 } from "hono";
-import { z as z3 } from "zod";
+import { z as z4 } from "zod";
 import { and as and10, eq as eq13, isNull as isNull7, sql as sql11, inArray as inArray6 } from "drizzle-orm";
 
 // apps/api/src/lib/csv.ts
@@ -9767,9 +9815,9 @@ function parseCsv(text2) {
   cur.push(field);
   if (cur.some((c) => c.trim() !== "")) records.push(cur);
   if (!records.length) return { headers: [], rows: [] };
-  const norm2 = (h) => h.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  const norm2 = (h2) => h2.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
   const headers = records[0].map(norm2);
-  const rows = records.slice(1).map((r) => Object.fromEntries(headers.map((h, i) => [h, (r[i] ?? "").trim()])));
+  const rows = records.slice(1).map((r) => Object.fromEntries(headers.map((h2, i) => [h2, (r[i] ?? "").trim()])));
   return { headers, rows };
 }
 var COLUMN_ALIASES = {
@@ -9875,14 +9923,14 @@ catalogRoutes.get("/catalog", async (c) => {
 catalogRoutes.post("/catalog/products", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z3.object({ name: z3.string().min(2), category: z3.enum(["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"]), baseUnit: z3.enum(["kg", "g", "L", "mL", "piece", "botte", "sac", "carton"]), aliases: z3.array(z3.string()).default([]) }).safeParse(await c.req.json());
+  const body3 = z4.object({ name: z4.string().min(2), category: z4.enum(["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"]), baseUnit: z4.enum(["kg", "g", "L", "mL", "piece", "botte", "sac", "carton"]), aliases: z4.array(z4.string()).default([]) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const [row] = await db.insert(products).values({ ...body3.data, restaurantId: rid2 }).returning();
   return c.json(row, 201);
 });
 catalogRoutes.post("/catalog/track", async (c) => {
   const rid2 = c.get("restaurantId");
-  const body3 = z3.object({ productIds: z3.array(z3.string().uuid()).min(1), criticalLevel: z3.number().nonnegative().optional() }).safeParse(await c.req.json());
+  const body3 = z4.object({ productIds: z4.array(z4.string().uuid()).min(1), criticalLevel: z4.number().nonnegative().optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   if ((await unusableProductIds(rid2, body3.data.productIds)).length) return c.json(PRODUCT_NOT_FOUND, 404);
   const added = await trackProducts(rid2, body3.data.productIds, { criticalLevel: body3.data.criticalLevel });
@@ -9898,7 +9946,7 @@ catalogRoutes.get("/onboarding/templates", (c) => {
 catalogRoutes.post("/onboarding/apply", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z3.object({ templates: z3.array(z3.string()).min(1), prices: z3.record(z3.string(), z3.number()).optional() }).safeParse(await c.req.json());
+  const body3 = z4.object({ templates: z4.array(z4.string()).min(1), prices: z4.record(z4.string(), z4.number()).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const byName = await ensureReference();
   const chosen = RECIPE_TEMPLATES.filter((t) => body3.data.templates.includes(t.name));
@@ -9935,10 +9983,10 @@ catalogRoutes.post("/onboarding/apply", async (c) => {
     items: items.map((i) => ({ id: i.id, productId: i.productId, productName: i.productName, unit: i.unit, category: i.category, criticalLevel: n2(i.criticalLevel), targetLevel: i.targetLevel === null ? null : n2(i.targetLevel) }))
   });
 });
-var importSchema = z3.object({
-  csv: z3.string().min(1),
-  dryRun: z3.boolean().default(true),
-  defaultSupplier: z3.string().optional()
+var importSchema = z4.object({
+  csv: z4.string().min(1),
+  dryRun: z4.boolean().default(true),
+  defaultSupplier: z4.string().optional()
   // si la colonne fournisseur est absente
 });
 catalogRoutes.post("/import/suppliers", async (c) => {
@@ -10025,12 +10073,12 @@ catalogRoutes.get("/export/offers.csv", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
   const rows = await db.select({ supplier: suppliers.name, product: products.name, pack: supplierOffers.packLabel, qty: supplierOffers.packQty, price: supplierOffers.packPriceEur, unit: products.baseUnit, phone: suppliers.phone, whatsapp: suppliers.whatsapp, email: suppliers.email, city: suppliers.city, lead: suppliers.leadTimeHours, min: suppliers.minOrderEur, fee: suppliers.deliveryFeeEur }).from(supplierOffers).innerJoin(suppliers, eq13(suppliers.id, supplierOffers.supplierId)).innerJoin(products, eq13(products.id, supplierOffers.productId)).where(eq13(supplierOffers.restaurantId, rid2)).orderBy(suppliers.name, products.name);
-  const esc2 = (v) => {
+  const esc3 = (v) => {
     const s = v === null || v === void 0 ? "" : String(v);
     return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const header = "fournisseur;produit;conditionnement;quantite;unite;prix;telephone;whatsapp;email;ville;delai_h;minimum;frais_livraison";
-  const body3 = rows.map((r) => [r.supplier, r.product, r.pack, Number(r.qty), r.unit, Number(r.price).toFixed(2).replace(".", ","), r.phone, r.whatsapp, r.email, r.city, r.lead, Number(r.min), Number(r.fee)].map(esc2).join(";"));
+  const body3 = rows.map((r) => [r.supplier, r.product, r.pack, Number(r.qty), r.unit, Number(r.price).toFixed(2).replace(".", ","), r.phone, r.whatsapp, r.email, r.city, r.lead, Number(r.min), Number(r.fee)].map(esc3).join(";"));
   return new Response("\uFEFF" + [header, ...body3].join("\r\n"), { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="afrisupply-offres.csv"' } });
 });
 catalogRoutes.get("/import/template.csv", (_c) => {
@@ -10454,7 +10502,7 @@ init_src();
 init_mailer();
 init_auth();
 import { Hono as Hono12 } from "hono";
-import { z as z11 } from "zod";
+import { z as z12 } from "zod";
 import { and as and26, eq as eq28, desc as desc12, gte as gte10, inArray as inArray16, sql as sql24 } from "drizzle-orm";
 
 // apps/api/src/lib/messages.ts
@@ -10503,7 +10551,7 @@ function buildOrderMessage(i) {
 // apps/api/src/routes/vendor.ts
 init_src();
 import { Hono as Hono11 } from "hono";
-import { z as z10 } from "zod";
+import { z as z11 } from "zod";
 import { and as and25, desc as desc11, eq as eq27, inArray as inArray15, sql as sql23 } from "drizzle-orm";
 
 // apps/api/src/lib/quick.ts
@@ -10638,8 +10686,9 @@ init_auth();
 init_ops();
 init_mailer();
 init_daily();
+init_html();
 import { Hono as Hono10 } from "hono";
-import { z as z9 } from "zod";
+import { z as z10 } from "zod";
 import { and as and24, desc as desc10, eq as eq26, ilike as ilike2, or as or4, sql as sql22 } from "drizzle-orm";
 import { SignJWT as SignJWT2, jwtVerify as jwtVerify2 } from "jose";
 var inviteSecret = () => new TextEncoder().encode(`invite:${process.env.JWT_SECRET ?? "dev-secret-change-me-in-production"}`);
@@ -10663,17 +10712,17 @@ prospectPublicRoutes.get("/public/vendor-invite/:token", async (c) => {
   return c.json({ invite: { ...inv, converted: p?.status === "converti" } });
 });
 var PROSPECT_STATUS = ["a_contacter", "contacte", "rdv", "interesse", "converti", "perdu"];
-var body = z9.object({
-  kind: z9.enum(["restaurant", "fournisseur"]),
-  name: z9.string().min(2).max(120),
-  address: z9.string().max(200).nullable().optional(),
-  city: z9.string().max(80).nullable().optional(),
-  phone: z9.string().max(30).nullable().optional(),
-  email: z9.string().email().nullable().optional().or(z9.literal("")),
-  contactName: z9.string().max(80).nullable().optional(),
-  status: z9.enum(PROSPECT_STATUS).optional(),
-  notes: z9.string().max(4e3).nullable().optional(),
-  nextActionAt: z9.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
+var body = z10.object({
+  kind: z10.enum(["restaurant", "fournisseur"]),
+  name: z10.string().min(2).max(120),
+  address: z10.string().max(200).nullable().optional(),
+  city: z10.string().max(80).nullable().optional(),
+  phone: z10.string().max(30).nullable().optional(),
+  email: z10.string().email().nullable().optional().or(z10.literal("")),
+  contactName: z10.string().max(80).nullable().optional(),
+  status: z10.enum(PROSPECT_STATUS).optional(),
+  notes: z10.string().max(4e3).nullable().optional(),
+  nextActionAt: z10.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
 });
 var prospectRoutes = new Hono10();
 prospectRoutes.use("/admin/prospects", requireAuth);
@@ -10704,7 +10753,7 @@ prospectRoutes.post("/admin/prospects", async (c) => {
   return c.json({ prospect: row }, 201);
 });
 prospectRoutes.post("/admin/prospects/import", async (c) => {
-  const { rows } = z9.object({ rows: z9.array(z9.record(z9.string(), z9.unknown())).max(500) }).parse(await c.req.json());
+  const { rows } = z10.object({ rows: z10.array(z10.record(z10.string(), z10.unknown())).max(500) }).parse(await c.req.json());
   const kindDefault = c.req.query("kind") ?? "restaurant";
   const db = await getDb();
   const rowSchema = body.partial({ kind: true });
@@ -10731,7 +10780,7 @@ prospectRoutes.post("/admin/prospects/:id/invite-vendor", async (c) => {
   const [p] = await db.select().from(prospects).where(eq26(prospects.id, c.req.param("id")));
   if (!p) return c.json({ error: "Introuvable" }, 404);
   if (p.kind !== "fournisseur") return c.json({ error: "R\xE9serv\xE9 aux prospects fournisseurs" }, 400);
-  const body3 = z9.object({ email: z9.string().email().optional(), send: z9.boolean().default(true) }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z10.object({ email: z10.string().email().optional(), send: z10.boolean().default(true) }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const email = body3.data.email ?? p.email ?? null;
   if (body3.data.email && body3.data.email !== p.email) await db.update(prospects).set({ email: body3.data.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq26(prospects.id, p.id));
@@ -10751,7 +10800,7 @@ Le lien est valable 30 jours. R\xE9pondez \xE0 ce message pour toute question.
 L'\xE9quipe AFRISUPPLY`;
   const whatsapp = `${first}, c'est AFRISUPPLY, la marketplace des restaurants africains. Votre fiche \xAB ${p.name} \xBB est pr\xEAte : cliquez, cr\xE9ez un mot de passe, collez votre tarif et vous \xEAtes en ligne en 10 min \u{1F449} ${url}`;
   let mail = { ok: false, error: "Pas d'e-mail" };
-  if (email && body3.data.send) mail = await sendMail({ to: email, subject: `${p.name} : votre catalogue devant 200 restaurants africains \u2014 fiche d\xE9j\xE0 pr\xEAte`, text: text2, html: `<p>${text2.replace(/\n/g, "<br/>").replace(url, `<a href="${url}">${url}</a>`)}</p>`, tags: { type: "vendor-invite" } });
+  if (email && body3.data.send) mail = await sendMail({ to: email, subject: `${p.name} : votre catalogue devant 200 restaurants africains \u2014 fiche d\xE9j\xE0 pr\xEAte`, text: text2, html: h`<p>${brut(nl2br(text2, "<br/>").html.replace(esc(url), h`<a href="${url}">${url}</a>`))}</p>`, tags: { type: "vendor-invite" } });
   await db.update(prospects).set({ status: p.status === "a_contacter" ? "contacte" : p.status, notes: `${p.notes ? p.notes + "\n" : ""}[${(/* @__PURE__ */ new Date()).toLocaleDateString("fr-FR")}] Invitation fournisseur ${mail.ok ? "envoy\xE9e par e-mail" : "g\xE9n\xE9r\xE9e"}${email ? ` (${email})` : ""}`, updatedAt: /* @__PURE__ */ new Date() }).where(eq26(prospects.id, p.id));
   await audit("prospect.invite_vendor", { actorEmail: c.get("user").email, target: p.id, meta: { email, sent: mail.ok } });
   return c.json({ url, whatsapp, email, sent: mail.ok, mailError: mail.ok ? null : mail.error ?? null, message: mail.ok ? `Invitation envoy\xE9e \xE0 ${email}.` : "Lien g\xE9n\xE9r\xE9 : copiez-le ou envoyez le message WhatsApp." });
@@ -10764,6 +10813,7 @@ init_marketplace();
 init_src();
 init_src();
 init_daily();
+init_html();
 
 // apps/api/src/lib/catalog-import.ts
 var UNIT = { kg: "kg", kilo: "kg", kilos: "kg", kgs: "kg", g: "g", gr: "g", l: "L", lt: "L", litre: "L", litres: "L", ml: "mL", cl: "cL", pc: "piece", pcs: "piece", piece: "piece", pieces: "piece", u: "piece", unite: "piece", unites: "piece", botte: "botte", bottes: "botte" };
@@ -10946,20 +10996,20 @@ async function requireVendor(c, next) {
   await next();
 }
 vendorRoutes2.post("/vendor/register", requireAuth, async (c) => {
-  const body3 = z10.object({
-    name: z10.string().min(2),
-    description: z10.string().max(500).optional(),
-    city: z10.string().optional(),
-    deliveryZones: z10.array(z10.string().min(1)).max(30).default([]),
-    categories: z10.array(z10.enum(["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"])).default([]),
-    leadTimeHours: z10.number().int().positive().default(48),
-    minOrderEur: z10.number().nonnegative().default(0),
-    deliveryFeeEur: z10.number().nonnegative().default(0),
-    contactEmail: z10.string().email().optional(),
-    contactPhone: z10.string().optional(),
-    whatsapp: z10.string().optional(),
-    invite: z10.string().optional(),
-    acceptCgv: z10.boolean().optional()
+  const body3 = z11.object({
+    name: zNomAffiche,
+    description: z11.string().max(500).optional(),
+    city: z11.string().optional(),
+    deliveryZones: z11.array(z11.string().min(1)).max(30).default([]),
+    categories: z11.array(z11.enum(["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"])).default([]),
+    leadTimeHours: z11.number().int().positive().default(48),
+    minOrderEur: z11.number().nonnegative().default(0),
+    deliveryFeeEur: z11.number().nonnegative().default(0),
+    contactEmail: z11.string().email().optional(),
+    contactPhone: z11.string().optional(),
+    whatsapp: z11.string().optional(),
+    invite: z11.string().optional(),
+    acceptCgv: z11.boolean().optional()
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   if (!body3.data.acceptCgv) return c.json({ error: "Vous devez accepter les conditions g\xE9n\xE9rales fournisseur.", code: "cgv_required" }, 400);
@@ -10968,7 +11018,7 @@ vendorRoutes2.post("/vendor/register", requireAuth, async (c) => {
   const { invite, acceptCgv: _a, ...d } = body3.data;
   void _a;
   const inv = invite ? await readVendorInvite(invite) : null;
-  const [v] = await db.insert(vendors).values({ ...d, cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email, slug: `${slugify2(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z22) => z22.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
+  const [v] = await db.insert(vendors).values({ ...d, cgvVersion: VENDOR_CGV_VERSION, cgvAcceptedAt: /* @__PURE__ */ new Date(), cgvAcceptedBy: user.email, slug: `${slugify2(d.name)}-${user.id.slice(0, 6)}`, contactEmail: d.contactEmail ?? user.email, deliveryZones: d.deliveryZones.map((z23) => z23.trim().toLowerCase()), minOrderEur: d.minOrderEur.toFixed(2), deliveryFeeEur: d.deliveryFeeEur.toFixed(2), status: inv || process.env.VENDOR_AUTO_APPROVE === "true" ? "actif" : "en_attente" }).returning();
   if (inv) await db.update(prospects).set({ status: "converti", email: user.email, updatedAt: /* @__PURE__ */ new Date() }).where(eq27(prospects.id, inv.pid));
   await db.insert(vendorMembers).values({ vendorId: v.id, userId: user.id, role: "owner" });
   await audit("vendor.register", { actorEmail: user.email, target: v.id, meta: { name: v.name, invited: !!inv } });
@@ -11006,26 +11056,26 @@ vendorRoutes2.get("/vendor/dashboard", async (c) => {
   return c.json({ vendor: v, stats: { pendingOrders: n11(stats3.pending), confirmedOrders: n11(stats3.confirmed), monthRevenue: n11(stats3.month), restaurantsServed: n11(stats3.restaurants), offers: n11(offers), restaurantsFollowing: n11(linked), commissionThisMonth: n11(commission), commissionPct: n11(v.commissionPct) } });
 });
 vendorRoutes2.put("/vendor/profile", async (c) => {
-  const body3 = z10.object({
-    name: z10.string().min(2).optional(),
-    description: z10.string().max(500).nullable().optional(),
-    city: z10.string().nullable().optional(),
-    deliveryZones: z10.array(z10.string()).max(30).optional(),
-    leadTimeHours: z10.number().int().positive().optional(),
-    deliveryDays: z10.array(z10.number().int().min(1).max(7)).optional(),
-    minOrderEur: z10.number().nonnegative().optional(),
-    deliveryFeeEur: z10.number().nonnegative().optional(),
-    contactEmail: z10.string().email().nullable().optional(),
-    contactPhone: z10.string().nullable().optional(),
-    whatsapp: z10.string().nullable().optional(),
+  const body3 = z11.object({
+    name: zNomAffiche.optional(),
+    description: z11.string().max(500).nullable().optional(),
+    city: z11.string().nullable().optional(),
+    deliveryZones: z11.array(z11.string()).max(30).optional(),
+    leadTimeHours: z11.number().int().positive().optional(),
+    deliveryDays: z11.array(z11.number().int().min(1).max(7)).optional(),
+    minOrderEur: z11.number().nonnegative().optional(),
+    deliveryFeeEur: z11.number().nonnegative().optional(),
+    contactEmail: z11.string().email().nullable().optional(),
+    contactPhone: z11.string().nullable().optional(),
+    whatsapp: z11.string().nullable().optional(),
     // Chantier 8 : adresse de facturation (comptabilité) — sinon l'e-mail de contact est utilisé.
-    billingEmail: z10.union([z10.string().email(), z10.literal(""), z10.null()]).optional()
+    billingEmail: z11.union([z11.string().email(), z11.literal(""), z11.null()]).optional()
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const d = body3.data;
   const { billingEmail, ...rest } = d;
-  const [v] = await db.update(vendors).set({ ...rest, ...billingEmail !== void 0 ? { billingEmail: billingEmail || null } : {}, deliveryZones: d.deliveryZones?.map((z22) => z22.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq27(vendors.id, c.get("vendorId"))).returning();
+  const [v] = await db.update(vendors).set({ ...rest, ...billingEmail !== void 0 ? { billingEmail: billingEmail || null } : {}, deliveryZones: d.deliveryZones?.map((z23) => z23.trim().toLowerCase()), minOrderEur: d.minOrderEur?.toFixed(2), deliveryFeeEur: d.deliveryFeeEur?.toFixed(2) }).where(eq27(vendors.id, c.get("vendorId"))).returning();
   return c.json({ vendor: v });
 });
 vendorRoutes2.get("/vendor/offers", async (c) => {
@@ -11035,7 +11085,7 @@ vendorRoutes2.get("/vendor/offers", async (c) => {
   return c.json({ offers: rows.map(({ offer, product }) => ({ ...offer, productName: product.name, category: product.category, unit: product.baseUnit, unitPrice: Math.round(n11(offer.packPriceEur) / n11(offer.packQty) * 1e4) / 1e4 })) });
 });
 vendorRoutes2.post("/vendor/offers", async (c) => {
-  const body3 = z10.object({ productId: z10.string().uuid(), packLabel: z10.string().min(1), packQty: z10.number().positive(), packPrice: z10.number().positive(), inStock: z10.boolean().default(true) }).safeParse(await c.req.json());
+  const body3 = z11.object({ productId: z11.string().uuid(), packLabel: z11.string().min(1), packQty: z11.number().positive(), packPrice: z11.number().positive(), inStock: z11.boolean().default(true) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11050,7 +11100,7 @@ vendorRoutes2.post("/vendor/offers", async (c) => {
   return c.json({ offer, propagatedTo: linked.length }, 201);
 });
 vendorRoutes2.post("/vendor/offers/import", async (c) => {
-  const body3 = z10.object({ rows: z10.array(z10.object({ product: z10.string(), packLabel: z10.string(), packQty: z10.number().positive(), packPrice: z10.number().positive(), inStock: z10.boolean().optional() })).min(1).max(2e3) }).safeParse(await c.req.json());
+  const body3 = z11.object({ rows: z11.array(z11.object({ product: z11.string(), packLabel: z11.string(), packQty: z11.number().positive(), packPrice: z11.number().positive(), inStock: z11.boolean().optional() })).min(1).max(2e3) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11097,10 +11147,10 @@ async function notifyRestaurant(orderId, subject, text2, kind = "order.confirmed
 ${text2}
 Suivi : ${APP_URL3()}/app/achats`, kind, orderId, vendorId: o.vendorId, restaurantId: o.restaurantId });
   const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq27(users.id, restaurantMembers.userId)).where(and25(eq27(restaurantMembers.restaurantId, o.restaurantId), inArray15(restaurantMembers.role, ["owner", "manager"])));
-  for (const r of rcpts) void sendMail({ to: r.email, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p><p><a href="${APP_URL3()}/app/achats">Voir mes commandes</a></p>`, tags: { type: "order_status" } });
+  for (const r of rcpts) void sendMail({ to: r.email, subject, text: text2, html: h`<p>${nl2br(text2)}</p><p><a href="${APP_URL3()}/app/achats">Voir mes commandes</a></p>`, tags: { type: "order_status" } });
 }
 vendorRoutes2.post("/vendor/orders/:id/confirm", async (c) => {
-  const body3 = z10.object({ expectedAt: z10.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), note: z10.string().max(300).optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z11.object({ expectedAt: z11.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), note: z11.string().max(300).optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11118,10 +11168,10 @@ Message du fournisseur : ${body3.data.note}` : ""}`);
   return c.json({ order: upd, commission: Math.round(amount * 100) / 100 });
 });
 vendorRoutes2.post("/vendor/orders/:id/propose", async (c) => {
-  const body3 = z10.object({
-    note: z10.string().max(300).optional(),
-    expectedAt: z10.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    lines: z10.array(z10.object({ lineId: z10.string().uuid(), newPacks: z10.number().int().nonnegative(), replacementOfferId: z10.string().uuid().nullable().optional(), replacementPacks: z10.number().int().positive().optional() })).min(1)
+  const body3 = z11.object({
+    note: z11.string().max(300).optional(),
+    expectedAt: z11.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    lines: z11.array(z11.object({ lineId: z11.string().uuid(), newPacks: z11.number().int().nonnegative(), replacementOfferId: z11.string().uuid().nullable().optional(), replacementPacks: z11.number().int().positive().optional() })).min(1)
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
@@ -11169,7 +11219,7 @@ Acceptez ou refusez en un clic dans Achats.`);
   return c.json({ order: { ...upd, proofPhoto: void 0, proofSignature: void 0 }, proposal });
 });
 vendorRoutes2.post("/vendor/orders/:id/refuse", async (c) => {
-  const body3 = z10.object({ reason: z10.string().min(2).max(300) }).safeParse(await c.req.json());
+  const body3 = z11.object({ reason: z11.string().min(2).max(300) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Motif requis" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11212,7 +11262,7 @@ vendorRoutes2.get("/vendor/picking", async (c) => {
   return c.json({ date: day ?? null, dates, products: [...byProduct.values()].sort((a, b) => a.productName.localeCompare(b.productName)), orders: [...ordersMap.values()] });
 });
 vendorRoutes2.post("/vendor/orders/:id/fulfillment", async (c) => {
-  const body3 = z10.object({ step: z10.enum(["en_preparation", "en_livraison", "livree"]), deliverySlot: z10.string().max(40).optional(), driverName: z10.string().max(80).optional(), receiverName: z10.string().max(80).optional(), photo: z10.string().max(6e5).optional(), signature: z10.string().max(2e5).optional(), note: z10.string().max(300).optional() }).safeParse(await c.req.json());
+  const body3 = z11.object({ step: z11.enum(["en_preparation", "en_livraison", "livree"]), deliverySlot: z11.string().max(40).optional(), driverName: z11.string().max(80).optional(), receiverName: z11.string().max(80).optional(), photo: z11.string().max(6e5).optional(), signature: z11.string().max(2e5).optional(), note: z11.string().max(300).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11276,7 +11326,7 @@ vendorRoutes2.get("/vendor/pricing", async (c) => {
   return c.json({ tiers: tiers.map((x) => x.t), customers: customers.map((x) => ({ ...x.p, restaurantName: x.restaurantName, city: x.city })), clients: clients.map((x) => ({ ...x, orders: n11(x.orders), gmv: n11(x.gmv) })) });
 });
 vendorRoutes2.put("/vendor/offers/:id/tiers", async (c) => {
-  const body3 = z10.object({ tiers: z10.array(z10.object({ minPacks: z10.number().int().min(2), packPriceEur: z10.number().positive() })).max(6) }).safeParse(await c.req.json());
+  const body3 = z11.object({ tiers: z11.array(z11.object({ minPacks: z11.number().int().min(2), packPriceEur: z11.number().positive() })).max(6) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11293,7 +11343,7 @@ vendorRoutes2.put("/vendor/offers/:id/tiers", async (c) => {
   return c.json({ tiers: sorted });
 });
 vendorRoutes2.post("/vendor/customer-prices", async (c) => {
-  const body3 = z10.object({ restaurantId: z10.string().uuid(), vendorOfferId: z10.string().uuid().nullable().optional(), packPriceEur: z10.number().positive().optional(), discountPct: z10.number().min(0.5).max(60).optional(), validUntil: z10.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), note: z10.string().max(200).optional() }).safeParse(await c.req.json());
+  const body3 = z11.object({ restaurantId: z11.string().uuid(), vendorOfferId: z11.string().uuid().nullable().optional(), packPriceEur: z11.number().positive().optional(), discountPct: z11.number().min(0.5).max(60).optional(), validUntil: z11.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), note: z11.string().max(200).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11331,7 +11381,7 @@ vendorRoutes2.get("/vendor/group-buys", async (c) => {
   }) });
 });
 vendorRoutes2.post("/vendor/group-buys", async (c) => {
-  const body3 = z10.object({ vendorOfferId: z10.string().uuid(), zone: z10.string().min(2), targetPacks: z10.number().int().min(2), discountPct: z10.number().min(1).max(50), closesInDays: z10.number().int().min(1).max(30).default(7), deliveryDate: z10.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), title: z10.string().max(120).optional() }).safeParse(await c.req.json());
+  const body3 = z11.object({ vendorOfferId: z11.string().uuid(), zone: z11.string().min(2), targetPacks: z11.number().int().min(2), discountPct: z11.number().min(1).max(50), closesInDays: z11.number().int().min(1).max(30).default(7), deliveryDate: z11.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), title: z11.string().max(120).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11402,7 +11452,7 @@ vendorRoutes2.post("/vendor/billing/setup", async (c) => {
   }
 });
 vendorRoutes2.post("/vendor/billing/sync", async (c) => {
-  const body3 = z10.object({ sessionId: z10.string().optional() }).parse(await c.req.json().catch(() => ({})));
+  const body3 = z11.object({ sessionId: z11.string().optional() }).parse(await c.req.json().catch(() => ({})));
   if (!stripeConfigured()) return c.json({ synced: false });
   if (!body3.sessionId) return c.json({ synced: false, error: "sessionId manquant" }, 400);
   try {
@@ -11453,7 +11503,7 @@ vendorAdminRoutes.get("/admin/vendors", async (c) => {
 });
 vendorAdminRoutes.put("/admin/vendors/:id", async (c) => {
   if (!isPlatformAdmin(c.get("user"))) return c.json({ error: "Acc\xE8s r\xE9serv\xE9" }, 403);
-  const body3 = z10.object({ status: z10.enum(["en_attente", "actif", "suspendu"]).optional(), commissionPct: z10.number().min(0).max(20).optional() }).safeParse(await c.req.json());
+  const body3 = z11.object({ status: z11.enum(["en_attente", "actif", "suspendu"]).optional(), commissionPct: z11.number().min(0).max(20).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const [v] = await db.update(vendors).set({ status: body3.data.status, commissionPct: body3.data.commissionPct?.toFixed(2) }).where(eq27(vendors.id, c.req.param("id"))).returning();
@@ -11461,7 +11511,7 @@ vendorAdminRoutes.put("/admin/vendors/:id", async (c) => {
 
 Votre espace ${v.name} est actif : ${APP_URL3()}/fournisseur
 Ajoutez votre catalogue, les restaurants de votre zone vous verront d\xE8s aujourd'hui.
-Commission plateforme : ${n11(v.commissionPct)} % sur les commandes confirm\xE9es, factur\xE9e mensuellement.`, html: `<p>Votre espace <b>${v.name}</b> est actif : <a href="${APP_URL3()}/fournisseur">${APP_URL3()}/fournisseur</a></p><p>Commission plateforme : ${n11(v.commissionPct)} % sur les commandes confirm\xE9es.</p>`, tags: { type: "vendor_activated" } });
+Commission plateforme : ${n11(v.commissionPct)} % sur les commandes confirm\xE9es, factur\xE9e mensuellement.`, html: h`<p>Votre espace <b>${v.name}</b> est actif : <a href="${APP_URL3()}/fournisseur">${APP_URL3()}/fournisseur</a></p><p>Commission plateforme : ${n11(v.commissionPct)} % sur les commandes confirmées.</p>`, tags: { type: "vendor_activated" } });
   await audit("vendor.update", { actorEmail: c.get("user").email, target: v?.id, meta: body3.data });
   return c.json({ vendor: v });
 });
@@ -11470,7 +11520,7 @@ async function refProducts() {
   return (await db.select({ id: products.id, name: products.name, aliases: products.aliases, baseUnit: products.baseUnit }).from(products).where(sql23`${products.restaurantId} is null`)).map((p) => ({ ...p, baseUnit: p.baseUnit }));
 }
 vendorRoutes2.post("/vendor/catalog/parse", async (c) => {
-  const body3 = z10.object({ text: z10.string().max(2e5).optional(), image: z10.string().startsWith("data:image/").max(8e6).optional() }).refine((b) => b.text || b.image, "text ou image requis").safeParse(await c.req.json());
+  const body3 = z11.object({ text: z11.string().max(2e5).optional(), image: z11.string().startsWith("data:image/").max(8e6).optional() }).refine((b) => b.text || b.image, "text ou image requis").safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Collez un texte ou envoyez une photo" }, 400);
   let lines = [];
   let source = "texte";
@@ -11490,7 +11540,7 @@ vendorRoutes2.post("/vendor/catalog/parse", async (c) => {
   return c.json({ source, lines: out, matched: out.filter((l) => l.match).length, total: out.length, hint: out.length ? void 0 : "Aucune ligne reconnue. Format libre : \xAB Riz bris\xE9 sac 25 kg 29,90 \xBB (une ligne par produit)." });
 });
 vendorRoutes2.post("/vendor/catalog/apply", async (c) => {
-  const body3 = z10.object({ lines: z10.array(z10.object({ productId: z10.string().uuid(), packLabel: z10.string().min(1).max(60), packQty: z10.number().positive(), packPrice: z10.number().positive(), inStock: z10.boolean().default(true) })).min(1).max(2e3), replaceMissing: z10.boolean().default(false) }).safeParse(await c.req.json());
+  const body3 = z11.object({ lines: z11.array(z11.object({ productId: z11.string().uuid(), packLabel: z11.string().min(1).max(60), packQty: z11.number().positive(), packPrice: z11.number().positive(), inStock: z11.boolean().default(true) })).min(1).max(2e3), replaceMissing: z11.boolean().default(false) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11527,7 +11577,7 @@ vendorRoutes2.post("/vendor/catalog/apply", async (c) => {
   return c.json({ created, updated, priceChanges, outOfStock, propagatedTo: linked.length, message: `Catalogue publi\xE9 : ${created} nouveau(x), ${updated} mis \xE0 jour (${priceChanges} changement(s) de prix)${outOfStock ? `, ${outOfStock} pass\xE9(s) en rupture` : ""}${linked.length ? ` \xB7 r\xE9percut\xE9 chez ${linked.length} restaurant(s)` : ""}.` });
 });
 vendorRoutes2.post("/vendor/offers/quick", async (c) => {
-  const body3 = z10.object({ text: z10.string().min(2).max(300) }).safeParse(await c.req.json());
+  const body3 = z11.object({ text: z11.string().min(2).max(300) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Texte requis" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11574,8 +11624,8 @@ vendorRoutes2.get("/vendor/analytics", async (c) => {
   const monthly = await db.select({ month: sql23`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`, revenue: sql23`sum(${orders.totalEur})`, orders: sql23`count(*)`, restaurants: sql23`count(distinct ${orders.restaurantId})` }).from(orders).where(and25(eq27(orders.vendorId, vid), okStatus, sql23`${orders.createdAt} >= date_trunc('month', now()) - interval '5 months'`)).groupBy(sql23`1`).orderBy(sql23`1`);
   const [funnel] = await db.select({ total: sql23`count(*)`, refused: sql23`count(*) filter (where ${orders.status} = 'annulee')`, avgDecisionH: sql23`coalesce(avg(extract(epoch from (${orders.vendorDecisionAt} - ${orders.sentAt}))/3600) filter (where ${orders.vendorDecisionAt} is not null), 0)` }).from(orders).where(and25(eq27(orders.vendorId, vid), since));
   const allR = await db.select({ id: restaurants.id, city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants);
-  const myZones = v.deliveryZones.map((z22) => z22.trim().toLowerCase());
-  const inZone = allR.filter((r) => myZones.length === 0 || [...restaurantZones(r)].some((z22) => myZones.includes(z22.toLowerCase()))).map((r) => r.id);
+  const myZones = v.deliveryZones.map((z23) => z23.trim().toLowerCase());
+  const inZone = allR.filter((r) => myZones.length === 0 || [...restaurantZones(r)].some((z23) => myZones.includes(z23.toLowerCase()))).map((r) => r.id);
   let uncovered = [];
   if (inZone.length) {
     const mine = new Set((await db.select({ productId: vendorOffers.productId }).from(vendorOffers).where(eq27(vendorOffers.vendorId, vid))).map((x) => x.productId));
@@ -11627,9 +11677,9 @@ vendorRoutes2.get("/vendor/orders/:id/pdf", async (c) => {
   if (!r || r.order.vendorId !== c.get("vendorId")) return c.json({ error: "Commande introuvable" }, 404);
   return new Response(new Uint8Array(r.doc), { headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="${r.order.reference}-${kind}.pdf"` } });
 });
-var routeFields = { name: z10.string().min(2).max(60), weekday: z10.number().int().min(0).max(6), zones: z10.array(z10.string().min(1).max(40)).max(50), slots: z10.array(z10.string().min(2).max(20)).max(8), cutoffDaysBefore: z10.number().int().min(0).max(7), cutoffTime: z10.string().regex(/^\d{2}:\d{2}$/), capacity: z10.number().int().positive().max(500).nullable().optional(), active: z10.boolean() };
-var routeSchema = z10.object({ ...routeFields, zones: routeFields.zones.default([]), slots: routeFields.slots.default([]), cutoffDaysBefore: routeFields.cutoffDaysBefore.default(1), cutoffTime: routeFields.cutoffTime.default("14:00"), active: routeFields.active.default(true) });
-var routeUpdateSchema = z10.object(routeFields).partial();
+var routeFields = { name: z11.string().min(2).max(60), weekday: z11.number().int().min(0).max(6), zones: z11.array(z11.string().min(1).max(40)).max(50), slots: z11.array(z11.string().min(2).max(20)).max(8), cutoffDaysBefore: z11.number().int().min(0).max(7), cutoffTime: z11.string().regex(/^\d{2}:\d{2}$/), capacity: z11.number().int().positive().max(500).nullable().optional(), active: z11.boolean() };
+var routeSchema = z11.object({ ...routeFields, zones: routeFields.zones.default([]), slots: routeFields.slots.default([]), cutoffDaysBefore: routeFields.cutoffDaysBefore.default(1), cutoffTime: routeFields.cutoffTime.default("14:00"), active: routeFields.active.default(true) });
+var routeUpdateSchema = z11.object(routeFields).partial();
 vendorRoutes2.get("/vendor/routes", async (c) => {
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11679,7 +11729,7 @@ vendorRoutes2.get("/vendor/credit", async (c) => {
   return c.json({ clients: rows, receivables: items, totalEur: Math.round(items.reduce((a, r) => a + r.dueEur, 0) * 100) / 100, overdueEur: Math.round(items.filter((r) => r.overdue).reduce((a, r) => a + r.dueEur, 0) * 100) / 100 });
 });
 vendorRoutes2.put("/vendor/credit/:restaurantId", async (c) => {
-  const body3 = z10.object({ paymentDays: z10.number().int().min(0).max(90).optional(), creditLimitEur: z10.number().min(0).max(1e6).nullable().optional(), blocked: z10.boolean().optional(), note: z10.string().max(300).nullable().optional() }).safeParse(await c.req.json());
+  const body3 = z11.object({ paymentDays: z11.number().int().min(0).max(90).optional(), creditLimitEur: z11.number().min(0).max(1e6).nullable().optional(), blocked: z11.boolean().optional(), note: z11.string().max(300).nullable().optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Conditions invalides (d\xE9lai 0\u201390 jours)" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11691,7 +11741,7 @@ vendorRoutes2.put("/vendor/credit/:restaurantId", async (c) => {
   return c.json({ terms: row });
 });
 vendorRoutes2.post("/vendor/orders/:id/payment", async (c) => {
-  const body3 = z10.object({ amountEur: z10.number().positive().max(1e6).optional(), method: z10.enum(["virement", "cb", "especes", "cheque", "prelevement", "avoir"]).default("virement"), paidAt: z10.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z11.object({ amountEur: z11.number().positive().max(1e6).optional(), method: z11.enum(["virement", "cb", "especes", "cheque", "prelevement", "avoir"]).default("virement"), paidAt: z11.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -11732,6 +11782,7 @@ init_order_events();
 init_orders();
 init_restaurant();
 init_tenant();
+init_html();
 var manageRoutes = new Hono12();
 manageRoutes.use("*", requireAuth, requireRestaurant);
 manageRoutes.on(["POST"], "/suppliers", requireMinRole("manager"));
@@ -11753,22 +11804,22 @@ var n12 = (v) => v === null || v === void 0 ? 0 : Number(v);
 var CHANNELS = ["email", "whatsapp", "telephone", "plateforme"];
 var MAX_PACKS_PER_LINE4 = 1e3;
 var CATEGORIES = ["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"];
-var supplierBody = z11.object({
-  name: z11.string().min(2),
-  contactName: z11.string().nullable().optional(),
-  email: z11.string().email().nullable().optional().or(z11.literal("")),
-  phone: z11.string().nullable().optional(),
-  whatsapp: z11.string().nullable().optional(),
-  city: z11.string().nullable().optional(),
-  categories: z11.array(z11.enum(CATEGORIES)).optional(),
-  leadTimeHours: z11.number().int().positive().optional(),
-  deliveryDays: z11.array(z11.number().int().min(1).max(7)).optional(),
-  minOrderEur: z11.number().nonnegative().optional(),
-  deliveryFeeEur: z11.number().nonnegative().optional(),
-  preferredChannel: z11.enum(CHANNELS).optional(),
-  rating: z11.number().min(0).max(5).nullable().optional(),
-  notes: z11.string().nullable().optional(),
-  isActive: z11.boolean().optional()
+var supplierBody = z12.object({
+  name: z12.string().min(2),
+  contactName: z12.string().nullable().optional(),
+  email: z12.string().email().nullable().optional().or(z12.literal("")),
+  phone: z12.string().nullable().optional(),
+  whatsapp: z12.string().nullable().optional(),
+  city: z12.string().nullable().optional(),
+  categories: z12.array(z12.enum(CATEGORIES)).optional(),
+  leadTimeHours: z12.number().int().positive().optional(),
+  deliveryDays: z12.array(z12.number().int().min(1).max(7)).optional(),
+  minOrderEur: z12.number().nonnegative().optional(),
+  deliveryFeeEur: z12.number().nonnegative().optional(),
+  preferredChannel: z12.enum(CHANNELS).optional(),
+  rating: z12.number().min(0).max(5).nullable().optional(),
+  notes: z12.string().nullable().optional(),
+  isActive: z12.boolean().optional()
 });
 manageRoutes.put("/suppliers/:id", async (c) => {
   const rid2 = c.get("restaurantId");
@@ -11794,9 +11845,9 @@ manageRoutes.delete("/suppliers/:id", async (c) => {
   await db.update(supplierOffers).set({ inStock: false }).where(eq28(supplierOffers.supplierId, row.id));
   return c.json({ ok: true });
 });
-var offerFields = { packLabel: z11.string().min(1), packQty: z11.number().positive(), packPrice: z11.number().positive() };
-var offerBody = z11.object({ productId: z11.string().uuid(), ...offerFields, inStock: z11.boolean().default(true) });
-var offerUpdateBody = z11.object({ ...offerFields, inStock: z11.boolean() }).partial();
+var offerFields = { packLabel: z12.string().min(1), packQty: z12.number().positive(), packPrice: z12.number().positive() };
+var offerBody = z12.object({ productId: z12.string().uuid(), ...offerFields, inStock: z12.boolean().default(true) });
+var offerUpdateBody = z12.object({ ...offerFields, inStock: z12.boolean() }).partial();
 manageRoutes.post("/suppliers/:id/offers", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
@@ -11816,7 +11867,7 @@ manageRoutes.post("/suppliers/:id/offers/batch", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
   const supplierId = c.req.param("id");
-  const body3 = z11.object({ items: z11.array(offerBody).min(1).max(50) }).safeParse(await c.req.json());
+  const body3 = z12.object({ items: z12.array(offerBody).min(1).max(50) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const [sup] = await db.select({ id: suppliers.id }).from(suppliers).where(and26(eq28(suppliers.id, supplierId), eq28(suppliers.restaurantId, rid2)));
   if (!sup) return c.json({ error: "Fournisseur introuvable" }, 404);
@@ -11876,12 +11927,12 @@ manageRoutes.get("/prices/:productId/history", async (c) => {
   });
   return c.json({ days: days2, series: out });
 });
-var recipeBody = z11.object({
-  name: z11.string().min(2),
-  sellingPriceEur: z11.number().nonnegative().nullable().optional(),
-  targetMarginPct: z11.number().min(0).max(100).optional(),
-  isActive: z11.boolean().optional(),
-  ingredients: z11.array(z11.object({ productId: z11.string().uuid(), quantity: z11.number().positive() })).min(1)
+var recipeBody = z12.object({
+  name: z12.string().min(2),
+  sellingPriceEur: z12.number().nonnegative().nullable().optional(),
+  targetMarginPct: z12.number().min(0).max(100).optional(),
+  isActive: z12.boolean().optional(),
+  ingredients: z12.array(z12.object({ productId: z12.string().uuid(), quantity: z12.number().positive() })).min(1)
 });
 manageRoutes.post("/recipes", async (c) => {
   const rid2 = c.get("restaurantId");
@@ -11930,7 +11981,7 @@ manageRoutes.delete("/recipes/:id", async (c) => {
 manageRoutes.put("/stock/:itemId", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z11.object({ criticalLevel: z11.number().nonnegative().optional(), targetLevel: z11.number().nonnegative().nullable().optional(), preferredSupplierId: z11.string().uuid().nullable().optional() }).safeParse(await c.req.json());
+  const body3 = z12.object({ criticalLevel: z12.number().nonnegative().optional(), targetLevel: z12.number().nonnegative().nullable().optional(), preferredSupplierId: z12.string().uuid().nullable().optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const d = body3.data;
   if (d.preferredSupplierId && !await ownsSupplier(rid2, d.preferredSupplierId)) return c.json({ error: "Fournisseur introuvable" }, 404);
@@ -11946,11 +11997,11 @@ manageRoutes.put("/stock/:itemId", async (c) => {
 manageRoutes.post("/stock/thresholds", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z11.object({
-    items: z11.array(z11.object({
-      itemId: z11.string().uuid(),
-      criticalLevel: z11.number().nonnegative(),
-      targetLevel: z11.number().nonnegative().nullable().optional()
+  const body3 = z12.object({
+    items: z12.array(z12.object({
+      itemId: z12.string().uuid(),
+      criticalLevel: z12.number().nonnegative(),
+      targetLevel: z12.number().nonnegative().nullable().optional()
     })).min(1).max(200)
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
@@ -11976,7 +12027,7 @@ manageRoutes.post("/stock/inventory", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
   const user = c.get("user");
-  const body3 = z11.object({ counts: z11.array(z11.object({ itemId: z11.string().uuid(), quantity: z11.number().nonnegative() })).min(1), note: z11.string().optional() }).safeParse(await c.req.json());
+  const body3 = z12.object({ counts: z12.array(z12.object({ itemId: z12.string().uuid(), quantity: z12.number().nonnegative() })).min(1), note: z12.string().optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const ids = body3.data.counts.map((x) => x.itemId);
   const items = await db.select().from(inventoryItems).where(and26(eq28(inventoryItems.restaurantId, rid2), inArray16(inventoryItems.id, ids)));
@@ -12026,7 +12077,7 @@ manageRoutes.get("/orders/:id/message", async (c) => {
 manageRoutes.put("/orders/:id", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z11.object({ status: z11.enum(["preparee", "envoyee", "confirmee", "annulee"]).optional(), expectedAt: z11.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), notes: z11.string().max(2e3).nullable().optional(), channel: z11.enum(CHANNELS).optional() }).safeParse(await c.req.json());
+  const body3 = z12.object({ status: z12.enum(["preparee", "envoyee", "confirmee", "annulee"]).optional(), expectedAt: z12.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), notes: z12.string().max(2e3).nullable().optional(), channel: z12.enum(CHANNELS).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const [cur] = await db.select().from(orders).where(and26(eq28(orders.id, c.req.param("id")), eq28(orders.restaurantId, rid2)));
   if (!cur) return c.json({ error: "Commande introuvable" }, 404);
@@ -12044,7 +12095,7 @@ manageRoutes.put("/orders/:id", async (c) => {
 manageRoutes.put("/orders/:id/lines", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z11.object({ lines: z11.array(z11.object({ lineId: z11.string().uuid(), packs: z11.number().int().nonnegative().max(MAX_PACKS_PER_LINE4) })).min(1) }).safeParse(await c.req.json());
+  const body3 = z12.object({ lines: z12.array(z12.object({ lineId: z12.string().uuid(), packs: z12.number().int().nonnegative().max(MAX_PACKS_PER_LINE4) })).min(1) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const [cur] = await db.select().from(orders).where(and26(eq28(orders.id, c.req.param("id")), eq28(orders.restaurantId, rid2)));
   if (!cur) return c.json({ error: "Commande introuvable" }, 404);
@@ -12093,7 +12144,7 @@ manageRoutes.get("/discrepancies", async (c) => {
 manageRoutes.post("/discrepancies/:id/resolve", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z11.object({ resolution: z11.enum(["avoir", "relivraison", "abandon"]).default("avoir"), note: z11.string().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z12.object({ resolution: z12.enum(["avoir", "relivraison", "abandon"]).default("avoir"), note: z12.string().optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const [row] = await db.select({ d: deliveryDiscrepancies, rid: deliveries.restaurantId }).from(deliveryDiscrepancies).innerJoin(deliveries, eq28(deliveries.id, deliveryDiscrepancies.deliveryId)).where(eq28(deliveryDiscrepancies.id, c.req.param("id")));
   if (!row || row.rid !== rid2) return c.json({ error: "\xC9cart introuvable" }, 404);
@@ -12109,7 +12160,7 @@ manageRoutes.get("/orders/:id/timeline", async (c) => {
   return c.json({ order: o, events: await orderTimeline(o.id) });
 });
 manageRoutes.post("/orders/:id/proposal", async (c) => {
-  const body3 = z11.object({ action: z11.enum(["accept", "decline"]) }).safeParse(await c.req.json());
+  const body3 = z12.object({ action: z12.enum(["accept", "decline"]) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const rid2 = c.get("restaurantId");
@@ -12121,7 +12172,7 @@ manageRoutes.post("/orders/:id/proposal", async (c) => {
   if (body3.data.action === "decline") {
     const [upd2] = await db.update(orders).set({ status: "annulee", vendorDecisionAt: /* @__PURE__ */ new Date(), vendorNote: "Proposition de modification refus\xE9e par le restaurant", proposal: null }).where(eq28(orders.id, o.id)).returning();
     void logOrderEvent(o.id, "cancelled", "Proposition refus\xE9e par le restaurant \u2014 commande annul\xE9e", "restaurant");
-    if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `\u274C ${o.reference} : proposition refus\xE9e, commande annul\xE9e`, text: `Le restaurant a refus\xE9 votre proposition de modification pour la commande ${o.reference}. La commande est annul\xE9e.`, html: `<p>Le restaurant a refus\xE9 votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annul\xE9e.</p>`, tags: { type: "order_proposal" } });
+    if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `\u274C ${o.reference} : proposition refus\xE9e, commande annul\xE9e`, text: `Le restaurant a refus\xE9 votre proposition de modification pour la commande ${o.reference}. La commande est annul\xE9e.`, html: h`<p>Le restaurant a refusé votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annulée.</p>`, tags: { type: "order_proposal" } });
     return c.json({ order: upd2 });
   }
   const p = o.proposal;
@@ -12144,7 +12195,7 @@ manageRoutes.post("/orders/:id/proposal", async (c) => {
     await db.insert(commissions).values({ vendorId: v.id, orderId: o.id, orderTotalEur: p.newTotalEur.toFixed(2), pct: v.commissionPct, amountEur: amount.toFixed(2), period: (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) }).onConflictDoNothing();
   }
   void logOrderEvent(o.id, "confirmed", `Modification accept\xE9e par le restaurant \u2014 commande confirm\xE9e (${p.newTotalEur.toFixed(2).replace(".", ",")} \u20AC)`, "restaurant", { by: user.email });
-  if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `\u2705 ${o.reference} : modification accept\xE9e \u2014 \xE0 pr\xE9parer`, text: `Le restaurant a accept\xE9 votre proposition pour la commande ${o.reference}. Nouveau total ${p.newTotalEur.toFixed(2)} \u20AC. La commande est confirm\xE9e : pr\xE9parez-la depuis votre espace.`, html: `<p>Le restaurant a accept\xE9 votre proposition pour la commande <b>${o.reference}</b>. Nouveau total <b>${p.newTotalEur.toFixed(2)} \u20AC</b>. La commande est confirm\xE9e.</p>`, tags: { type: "order_proposal" } });
+  if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `\u2705 ${o.reference} : modification accept\xE9e \u2014 \xE0 pr\xE9parer`, text: `Le restaurant a accept\xE9 votre proposition pour la commande ${o.reference}. Nouveau total ${p.newTotalEur.toFixed(2)} \u20AC. La commande est confirm\xE9e : pr\xE9parez-la depuis votre espace.`, html: h`<p>Le restaurant a accepté votre proposition pour la commande <b>${o.reference}</b>. Nouveau total <b>${p.newTotalEur.toFixed(2)} €</b>. La commande est confirmée.</p>`, tags: { type: "order_proposal" } });
   return c.json({ order: { ...upd, proofPhoto: void 0, proofSignature: void 0 } });
 });
 
@@ -12155,7 +12206,7 @@ init_public();
 init_reliability();
 init_src();
 import { Hono as Hono13 } from "hono";
-import { z as z12 } from "zod";
+import { z as z13 } from "zod";
 import { and as and27, eq as eq29, isNull as isNull11, sql as sql25 } from "drizzle-orm";
 var storefrontRoutes = new Hono13();
 var n13 = (v) => Number(v ?? 0);
@@ -12211,7 +12262,7 @@ storefrontRoutes.get("/public/vendors", async (c) => {
   return c.json({ vendors: vs.map((v) => ({ reliability: rel.get(v.id) ?? emptyReliability, id: v.id, name: v.name, slug: v.slug, description: v.description, city: v.city, deliveryZones: v.deliveryZones, categories: v.categories, leadTimeHours: v.leadTimeHours, minOrderEur: n13(v.minOrderEur), deliveryFeeEur: n13(v.deliveryFeeEur), offerCount: cm.get(v.id) ?? 0 })) });
 });
 storefrontRoutes.post("/public/product-alert", async (c) => {
-  const body3 = z12.object({ productId: z12.string().uuid(), email: z12.string().email(), restaurantName: z12.string().min(2).max(120).optional(), city: z12.string().max(80).optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z13.object({ productId: z13.string().uuid(), email: z13.string().email(), restaurantName: z13.string().min(2).max(120).optional(), city: z13.string().max(80).optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const [p] = await db.select({ name: products.name }).from(products).where(eq29(products.id, body3.data.productId));
@@ -12225,13 +12276,13 @@ init_src();
 init_auth();
 init_ops();
 import { Hono as Hono14 } from "hono";
-import { z as z13 } from "zod";
+import { z as z14 } from "zod";
 import { and as and28, desc as desc13, eq as eq30, ilike as ilike3, isNull as isNull12, or as or5, sql as sql26 } from "drizzle-orm";
 var CATS = ["feculents", "frais", "viandes_poissons", "epicerie", "boissons", "emballages"];
 var UNITS2 = ["kg", "g", "L", "mL", "piece", "botte", "sac", "carton"];
-var fields = { name: z13.string().min(2).max(120), aliases: z13.array(z13.string().min(1).max(60)).max(30), category: z13.enum(CATS), baseUnit: z13.enum(UNITS2), origin: z13.string().max(120).nullable().optional(), shelfLifeDays: z13.number().int().positive().nullable().optional(), imageUrl: z13.string().url().nullable().optional().or(z13.literal("")) };
-var body2 = z13.object({ ...fields, aliases: fields.aliases.default([]) });
-var updateBody = z13.object(fields).partial();
+var fields = { name: z14.string().min(2).max(120), aliases: z14.array(z14.string().min(1).max(60)).max(30), category: z14.enum(CATS), baseUnit: z14.enum(UNITS2), origin: z14.string().max(120).nullable().optional(), shelfLifeDays: z14.number().int().positive().nullable().optional(), imageUrl: z14.string().url().nullable().optional().or(z14.literal("")) };
+var body2 = z14.object({ ...fields, aliases: fields.aliases.default([]) });
+var updateBody = z14.object(fields).partial();
 var referenceAdminRoutes = new Hono14();
 referenceAdminRoutes.use("/admin/reference", requireAuth);
 referenceAdminRoutes.use("/admin/reference/*", requireAuth);
@@ -12276,7 +12327,7 @@ referenceAdminRoutes.put("/admin/reference/:id", async (c) => {
   return c.json({ product: p });
 });
 referenceAdminRoutes.post("/admin/reference/:id/merge", async (c) => {
-  const b = z13.object({ into: z13.string().uuid() }).safeParse(await c.req.json());
+  const b = z14.object({ into: z14.string().uuid() }).safeParse(await c.req.json());
   if (!b.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const from = c.req.param("id");
@@ -12307,7 +12358,7 @@ referenceAdminRoutes.post("/admin/reference/requests/:id/dismiss", async (c) => 
 });
 var referenceRequestRoutes = new Hono14();
 referenceRequestRoutes.post("/reference/request", requireAuth, async (c) => {
-  const b = z13.object({ product: z13.string().min(2).max(120), details: z13.string().max(500).optional(), from: z13.string().max(120).optional() }).safeParse(await c.req.json());
+  const b = z14.object({ product: z14.string().min(2).max(120), details: z14.string().max(500).optional(), from: z14.string().max(120).optional() }).safeParse(await c.req.json());
   if (!b.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const u = c.get("user");
@@ -12399,8 +12450,9 @@ init_mailer();
 init_sms();
 init_order_events();
 init_ops();
+init_html();
 import { Hono as Hono16 } from "hono";
-import { z as z14 } from "zod";
+import { z as z15 } from "zod";
 import { and as and29, desc as desc15, eq as eq32, sql as sql28 } from "drizzle-orm";
 var APP_URL4 = () => process.env.APP_URL ?? "http://localhost:5173";
 var n15 = (v) => v === null || v === void 0 ? 0 : Number(v);
@@ -12417,7 +12469,7 @@ async function notifyVendor(vendorId, subject, text2, kind = "order.confirmed") 
   const db = await getDb();
   const [v] = await db.select().from(vendors).where(eq32(vendors.id, vendorId));
   if (!v) return;
-  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p><p><a href="${APP_URL4()}/fournisseur">Ouvrir mon espace</a></p>`, tags: { type: "claim" } });
+  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject, text: text2, html: h`<p>${nl2br(text2)}</p><p><a href="${APP_URL4()}/fournisseur">Ouvrir mon espace</a></p>`, tags: { type: "claim" } });
   const phone = v.whatsapp || v.contactPhone;
   if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? "whatsapp" : "sms", kind, vendorId, body: `AFRISUPPLY \u2014 ${subject}
 ${text2}
@@ -12427,7 +12479,7 @@ async function notifyRestaurant2(restaurantId, subject, text2) {
   const db = await getDb();
   const [r] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq32(restaurants.id, restaurantId));
   const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq32(users.id, restaurantMembers.userId)).where(eq32(restaurantMembers.restaurantId, restaurantId));
-  for (const x of rcpts) void sendMail({ to: x.email, subject, text: text2, html: `<p>${text2.replace(/\n/g, "<br>")}</p><p><a href="${APP_URL4()}/app/achats/ecarts">Voir mes litiges</a></p>`, tags: { type: "claim" } });
+  for (const x of rcpts) void sendMail({ to: x.email, subject, text: text2, html: h`<p>${nl2br(text2)}</p><p><a href="${APP_URL4()}/app/achats/ecarts">Voir mes litiges</a></p>`, tags: { type: "claim" } });
   if (r?.settings?.notifyPhone) void sendMessage({ to: r.settings.notifyPhone, kind: "order.confirmed", restaurantId, body: `AFRISUPPLY \u2014 ${subject}
 ${text2}` });
 }
@@ -12453,7 +12505,7 @@ claimRoutes.get("/claims/:id/photo", async (c) => {
   return c.json({ photo: cl.photo });
 });
 claimRoutes.post("/claims", async (c) => {
-  const body3 = z14.object({ orderId: z14.string().uuid().optional(), discrepancyId: z14.string().uuid().optional(), productName: z14.string().min(1).max(120).optional(), kind: z14.enum(["manquant", "abime", "erreur_produit", "qualite", "autre"]).default("manquant"), claimedEur: z14.number().nonnegative().optional(), message: z14.string().max(600).optional(), photo: z14.string().max(6e5).optional() }).safeParse(await c.req.json());
+  const body3 = z15.object({ orderId: z15.string().uuid().optional(), discrepancyId: z15.string().uuid().optional(), productName: z15.string().min(1).max(120).optional(), kind: z15.enum(["manquant", "abime", "erreur_produit", "qualite", "autre"]).default("manquant"), claimedEur: z15.number().nonnegative().optional(), message: z15.string().max(600).optional(), photo: z15.string().max(6e5).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
   const rid2 = c.get("restaurantId");
@@ -12490,7 +12542,7 @@ R\xE9pondez sous 48 h : avoir, relivraison ou refus motiv\xE9.`);
   return c.json({ claim: publicClaim(cl), message: `Litige ${reference} envoy\xE9 \xE0 votre fournisseur. R\xE9ponse attendue sous 48 h.` }, 201);
 });
 claimRoutes.post("/claims/:id/close", async (c) => {
-  const body3 = z14.object({ action: z14.enum(["accept", "escalate"]), message: z14.string().max(600).optional() }).safeParse(await c.req.json());
+  const body3 = z15.object({ action: z15.enum(["accept", "escalate"]), message: z15.string().max(600).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const rid2 = c.get("restaurantId");
@@ -12512,7 +12564,7 @@ claimRoutes.post("/claims/:id/close", async (c) => {
   for (const to of admins) void sendMail({ to, subject: `\u{1F6A8} Litige escalad\xE9 ${cl.reference} (${eur11(n15(cl.claimedEur))})`, text: `Le restaurant conteste la r\xE9ponse du grossiste.
 Litige : ${cl.reference} \u2014 ${cl.productName} \u2014 r\xE9clam\xE9 ${eur11(n15(cl.claimedEur))}, propos\xE9 ${cl.resolution ?? "\u2014"} ${cl.creditEur ? eur11(n15(cl.creditEur)) : ""}.
 Message : ${body3.data.message ?? "\u2014"}
-${APP_URL4()}/app/admin/litiges`, html: `<p>Litige <b>${cl.reference}</b> escalad\xE9 \u2014 ${cl.productName}, r\xE9clam\xE9 ${eur11(n15(cl.claimedEur))}.</p><p><a href="${APP_URL4()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: "claim" } });
+${APP_URL4()}/app/admin/litiges`, html: h`<p>Litige <b>${cl.reference}</b> escaladé — ${cl.productName}, réclamé ${eur11(n15(cl.claimedEur))}.</p><p><a href="${APP_URL4()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: "claim" } });
   return c.json({ claim: publicClaim(upd), message: "AFRISUPPLY a \xE9t\xE9 pr\xE9venu et arbitrera sous 3 jours ouvr\xE9s." });
 });
 var vendorClaimRoutes = new Hono16();
@@ -12535,7 +12587,7 @@ vendorClaimRoutes.get("/vendor/claims", async (c) => {
   return c.json({ items, openCount: items.filter((i) => i.status === "ouvert" || i.status === "escalade").length, creditsEur: Math.round(items.reduce((a, i) => a + n15(i.creditEur), 0) * 100) / 100 });
 });
 vendorClaimRoutes.post("/vendor/claims/:id/respond", async (c) => {
-  const body3 = z14.object({ resolution: z14.enum(["avoir", "relivraison", "refus"]), creditEur: z14.number().nonnegative().optional(), message: z14.string().max(600).optional() }).safeParse(await c.req.json());
+  const body3 = z15.object({ resolution: z15.enum(["avoir", "relivraison", "refus"]), creditEur: z15.number().nonnegative().optional(), message: z15.string().max(600).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -12573,7 +12625,7 @@ adminClaimRoutes.get("/admin/claims", async (c) => {
   return c.json({ items: rows.map((r) => ({ ...publicClaim(r.cl), photo: r.cl.photo, restaurantName: r.restaurantName, vendorName: r.vendorName, orderReference: r.reference })) });
 });
 adminClaimRoutes.post("/admin/claims/:id/arbitrate", async (c) => {
-  const body3 = z14.object({ resolution: z14.enum(["avoir", "relivraison", "refus"]), creditEur: z14.number().nonnegative().optional(), message: z14.string().min(2).max(600) }).safeParse(await c.req.json());
+  const body3 = z15.object({ resolution: z15.enum(["avoir", "relivraison", "refus"]), creditEur: z15.number().nonnegative().optional(), message: z15.string().min(2).max(600) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const d = body3.data;
@@ -12597,7 +12649,7 @@ init_auth();
 init_order_events();
 init_reliability();
 import { Hono as Hono17 } from "hono";
-import { z as z15 } from "zod";
+import { z as z16 } from "zod";
 import { and as and30, desc as desc16, eq as eq33, sql as sql29 } from "drizzle-orm";
 var pub = (r, restaurantName) => ({ id: r.id, rating: r.rating, onTime: r.onTime, conform: r.conform, comment: r.comment, vendorReply: r.vendorReply, createdAt: r.createdAt, restaurantName: restaurantName.length > 2 ? `${restaurantName.slice(0, 1)}${"*".repeat(Math.min(6, restaurantName.length - 2))}${restaurantName.slice(-1)}` : restaurantName, city: null });
 var publicReviewRoutes = new Hono17();
@@ -12619,7 +12671,7 @@ reviewRoutes.get("/reviews/pending", async (c) => {
   return c.json({ pending: rows.filter((r) => !r.reviewed && (["livree", "livree_partiel"].includes(r.status) || r.deliveredAt)).slice(0, 10), reviewedOrderIds: rows.filter((r) => r.reviewed).map((r) => r.id) });
 });
 reviewRoutes.post("/orders/:id/review", async (c) => {
-  const body3 = z15.object({ rating: z15.number().int().min(1).max(5), onTime: z15.boolean().optional(), conform: z15.boolean().optional(), comment: z15.string().max(500).optional() }).safeParse(await c.req.json());
+  const body3 = z16.object({ rating: z16.number().int().min(1).max(5), onTime: z16.boolean().optional(), conform: z16.boolean().optional(), comment: z16.string().max(500).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const db = await getDb();
   const rid2 = c.get("restaurantId");
@@ -12652,7 +12704,7 @@ vendorReviewRoutes.get("/vendor/reviews", async (c) => {
   return c.json({ reliability: (await reliabilityFor([vid])).get(vid) ?? emptyReliability, reviews: rows.map((x) => ({ ...x.r, restaurantName: x.name, orderReference: x.reference })) });
 });
 vendorReviewRoutes.post("/vendor/reviews/:id/reply", async (c) => {
-  const body3 = z15.object({ reply: z15.string().min(2).max(500) }).safeParse(await c.req.json());
+  const body3 = z16.object({ reply: z16.string().min(2).max(500) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "R\xE9ponse requise" }, 400);
   const db = await getDb();
   const vid = c.get("vendorId");
@@ -12672,8 +12724,9 @@ init_mailer();
 init_notify();
 init_job_runs();
 init_security();
+init_html();
 import { Hono as Hono18 } from "hono";
-import { z as z16 } from "zod";
+import { z as z17 } from "zod";
 import { eq as eq34 } from "drizzle-orm";
 var jobsRoutes = new Hono18();
 var cronCheck = (c) => cronSecretCheck({ cron: c.req.header("x-cron-secret"), authorization: c.req.header("authorization") }, c.req.query("secret"));
@@ -12773,22 +12826,22 @@ settingsRoutes.get("/settings", async (c) => {
   });
 });
 settingsRoutes.put("/settings", async (c) => {
-  const body3 = z16.object({
-    name: z16.string().min(2).optional(),
-    city: z16.string().nullable().optional(),
-    coversPerDay: z16.number().int().positive().nullable().optional(),
-    priceIncreaseAlertPct: z16.number().min(1).max(50).optional(),
-    forecastHorizonDays: z16.number().int().min(3).max(14).optional(),
-    autoReorderEnabled: z16.boolean().optional(),
-    dailyDigestEnabled: z16.boolean().optional(),
-    immediateAlertEmails: z16.boolean().optional(),
-    digestRecipients: z16.array(z16.string().email()).max(10).optional(),
-    closedWeekdays: z16.array(z16.number().int().min(0).max(6)).optional(),
-    notifyPhone: z16.string().max(30).optional(),
-    peakMonths: z16.array(z16.number().int().min(1).max(12)).max(12).optional(),
-    peakCoef: z16.number().min(1).max(2).optional(),
+  const body3 = z17.object({
+    name: zNomAffiche.optional(),
+    city: z17.string().nullable().optional(),
+    coversPerDay: z17.number().int().positive().nullable().optional(),
+    priceIncreaseAlertPct: z17.number().min(1).max(50).optional(),
+    forecastHorizonDays: z17.number().int().min(3).max(14).optional(),
+    autoReorderEnabled: z17.boolean().optional(),
+    dailyDigestEnabled: z17.boolean().optional(),
+    immediateAlertEmails: z17.boolean().optional(),
+    digestRecipients: z17.array(z17.string().email()).max(10).optional(),
+    closedWeekdays: z17.array(z17.number().int().min(0).max(6)).optional(),
+    notifyPhone: z17.string().max(30).optional(),
+    peakMonths: z17.array(z17.number().int().min(1).max(12)).max(12).optional(),
+    peakCoef: z17.number().min(1).max(2).optional(),
     // Chantier 7 de l'audit 2 : adresse qui reçoit les factures AFRISUPPLY (vide = propriétaire du compte).
-    billingEmail: z16.union([z16.string().email(), z16.literal("")]).optional()
+    billingEmail: z17.union([z17.string().email(), z17.literal("")]).optional()
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
@@ -12832,7 +12885,7 @@ settingsRoutes.post("/settings/test-sms", async (c) => {
 });
 settingsRoutes.post("/settings/test-email", async (c) => {
   const startedAt = /* @__PURE__ */ new Date();
-  const body3 = z16.object({ to: z16.string().email().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z17.object({ to: z17.string().email().optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Adresse e-mail invalide" }, 400);
   const user = c.get("user");
   const rid2 = c.get("restaurantId");
@@ -12850,7 +12903,7 @@ Date du test : ${sentAt}
 Type d'envoi : ${mc.transport}
 
 L'\xE9quipe AFRISUPPLY`;
-  const html = `<p>Bonjour ${user.fullName},</p><p>Vous avez demand\xE9 un <b>test des notifications</b> depuis AFRISUPPLY.</p><p style="padding:10px;background:#f5f5f4;border-radius:8px">Si ce message s'affiche, les alertes de rupture, les \xE9carts de livraison et le mail du matin arriveront bien \xE0 <b>${to}</b>.</p><p style="color:#78716c">Restaurant : ${r.name}<br>Date du test : ${sentAt}<br>Type d'envoi : ${mc.transport}</p><p>L'\xE9quipe AFRISUPPLY</p>`;
+  const html = h`<p>Bonjour ${user.fullName},</p><p>Vous avez demandé un <b>test des notifications</b> depuis AFRISUPPLY.</p><p style="padding:10px;background:#f5f5f4;border-radius:8px">Si ce message s'affiche, les alertes de rupture, les écarts de livraison et le mail du matin arriveront bien à <b>${to}</b>.</p><p style="color:#78716c">Restaurant : ${r.name}<br>Date du test : ${sentAt}<br>Type d'envoi : ${mc.transport}</p><p>L'équipe AFRISUPPLY</p>`;
   const res = await sendMail({ to, subject: "\u2705 Test des notifications AFRISUPPLY", text: text2, html, tags: { type: "mail_test", restaurant: rid2 } });
   const delivered = res.ok && res.delivered;
   await recordJobRun({
@@ -12879,7 +12932,7 @@ init_src();
 init_auth();
 init_ops();
 import { Hono as Hono19 } from "hono";
-import { z as z17 } from "zod";
+import { z as z18 } from "zod";
 import { and as and31, eq as eq35, inArray as inArray17 } from "drizzle-orm";
 import { deleteCookie as deleteCookie2 } from "hono/cookie";
 var accountRoutes = new Hono19();
@@ -12920,7 +12973,7 @@ accountRoutes.get("/account/export", async (c) => {
   return c.json({ exportedAt: (/* @__PURE__ */ new Date()).toISOString(), user: me, restaurants: out });
 });
 accountRoutes.delete("/account", async (c) => {
-  const body3 = z17.object({ password: z17.string(), confirm: z17.literal("SUPPRIMER") }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z18.object({ password: z18.string(), confirm: z18.literal("SUPPRIMER") }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Mot de passe et confirmation \xAB SUPPRIMER \xBB requis" }, 400);
   const db = await getDb();
   const u = c.get("user");
@@ -12948,11 +13001,12 @@ init_src();
 init_auth();
 init_billing();
 import { Hono as Hono20 } from "hono";
-import { z as z18 } from "zod";
+import { z as z19 } from "zod";
 import { and as and32, eq as eq36, ne as ne2, sql as sql30 } from "drizzle-orm";
 import { randomBytes as randomBytes2 } from "node:crypto";
 init_mailer();
 init_ops();
+init_html();
 var memberRoutes = new Hono20();
 memberRoutes.use("*", requireAuth, requireRestaurant);
 var ROLES = ["owner", "manager", "staff"];
@@ -12984,11 +13038,13 @@ memberRoutes.get("/members", async (c) => {
     }))
   });
 });
-memberRoutes.post("/members", requireMinRole("owner"), async (c) => {
-  const body3 = z18.object({
-    email: z18.string().email(),
-    fullName: z18.string().min(2).optional(),
-    role: z18.enum(ROLES).default("staff")
+var ROLE_LABEL = { owner: "Propri\xE9taire", manager: "Responsable", staff: "\xC9quipe (quotidien)" };
+var freinInvitations = rateLimit({ windowMs: 60 * 6e4, max: 20, key: (c) => `invitations:${c.get("restaurantId")}` });
+memberRoutes.post("/members", requireMinRole("owner"), freinInvitations, async (c) => {
+  const body3 = z19.object({
+    email: z19.string().email(),
+    fullName: zNomAffiche.optional(),
+    role: z19.enum(ROLES).default("staff")
   }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const db = await getDb();
@@ -13026,13 +13082,13 @@ memberRoutes.post("/members", requireMinRole("owner"), async (c) => {
       subject: `${me.fullName} vous invite sur AFRISUPPLY \u2014 ${r?.name ?? "restaurant"}`,
       text: `Bonjour,
 
-${me.fullName} vous ouvre l'acc\xE8s \xE0 AFRISUPPLY pour \xAB ${r?.name ?? "le restaurant"} \xBB avec le r\xF4le ${body3.data.role}.
+${me.fullName} vous ouvre l'acc\xE8s \xE0 AFRISUPPLY pour \xAB ${r?.name ?? "le restaurant"} \xBB avec le r\xF4le \xAB ${ROLE_LABEL[body3.data.role]} \xBB.
 
 Choisissez votre mot de passe (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours) : ${link}
 
 \xC0 bient\xF4t,
 AFRISUPPLY`,
-      html: `<p>Bonjour,</p><p><b>${me.fullName}</b> vous ouvre l\u2019acc\xE8s \xE0 AFRISUPPLY pour \xAB ${r?.name ?? "le restaurant"} \xBB avec le r\xF4le <b>${body3.data.role}</b>.</p><p><a href="${link}">Choisir mon mot de passe</a> (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours).</p><p>\xC0 bient\xF4t,<br/>AFRISUPPLY</p>`,
+      html: h`<p>Bonjour,</p><p><b>${me.fullName}</b> vous ouvre l’accès à AFRISUPPLY pour « ${r?.name ?? "le restaurant"} » avec le rôle <b>${ROLE_LABEL[body3.data.role]}</b>.</p><p><a href="${link}">Choisir mon mot de passe</a> (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours).</p><p>À bientôt,<br/>AFRISUPPLY</p>`,
       tags: { type: "member_invite" }
     });
     delivered = res.ok && res.transport !== "log";
@@ -13051,7 +13107,7 @@ AFRISUPPLY`,
   }, 201);
 });
 memberRoutes.patch("/members/:userId", requireMinRole("owner"), async (c) => {
-  const body3 = z18.object({ role: z18.enum(ROLES) }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z19.object({ role: z19.enum(ROLES) }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "R\xF4le invalide" }, 400);
   const db = await getDb();
   const rid2 = c.get("restaurantId");
@@ -13084,7 +13140,7 @@ memberRoutes.delete("/members/:userId", requireMinRole("owner"), async (c) => {
 init_src();
 init_auth();
 import { Hono as Hono21 } from "hono";
-import { z as z19 } from "zod";
+import { z as z20 } from "zod";
 import { and as and33, eq as eq37, inArray as inArray18, sql as sql31 } from "drizzle-orm";
 var quickRoutes = new Hono21();
 quickRoutes.use("*", requireAuth, requireRestaurant);
@@ -13098,17 +13154,17 @@ async function entities(rid2) {
   return { recipes: recs, products: items.map((i) => ({ id: i.id, name: i.name, aliases: i.aliases, unit: i.unit })) };
 }
 quickRoutes.post("/quick/parse", async (c) => {
-  const body3 = z19.object({ text: z19.string().min(2).max(500), kind: z19.enum(["vente", "comptage", "reception", "perte"]).optional() }).safeParse(await c.req.json());
+  const body3 = z20.object({ text: z20.string().min(2).max(500), kind: z20.enum(["vente", "comptage", "reception", "perte"]).optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Texte requis" }, 400);
   const ctx = await entities(c.get("restaurantId"));
   return c.json(parseQuick(body3.data.text, ctx, body3.data.kind));
 });
 quickRoutes.post("/quick/apply", async (c) => {
-  const body3 = z19.object({
-    kind: z19.enum(["vente", "comptage", "reception", "perte"]),
-    day: z19.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    note: z19.string().max(200).optional(),
-    lines: z19.array(z19.object({ id: z19.string().uuid(), qty: z19.number().nonnegative() })).min(1).max(60)
+  const body3 = z20.object({
+    kind: z20.enum(["vente", "comptage", "reception", "perte"]),
+    day: z20.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    note: z20.string().max(200).optional(),
+    lines: z20.array(z20.object({ id: z20.string().uuid(), qty: z20.number().nonnegative() })).min(1).max(60)
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const rid2 = c.get("restaurantId");
@@ -13167,7 +13223,7 @@ quickRoutes.get("/quick/inventory", async (c) => {
   return c.json({ items, total: items.length, countedLast7Days: n16(counted7) });
 });
 quickRoutes.post("/quick/invoice", async (c) => {
-  const body3 = z19.object({ image: z19.string().startsWith("data:image/").max(8e6) }).safeParse(await c.req.json());
+  const body3 = z20.object({ image: z20.string().startsWith("data:image/").max(8e6) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Image requise (data URL, \u2264 6 Mo)" }, 400);
   const rid2 = c.get("restaurantId");
   const db = await getDb();
@@ -13183,11 +13239,11 @@ quickRoutes.post("/quick/invoice", async (c) => {
   return c.json({ supplierName: res.data.supplierName ?? null, supplier, date: res.data.date ?? null, total: res.data.total ?? null, lines, matched: lines.filter((l) => l.match).length });
 });
 quickRoutes.post("/quick/invoice/apply", async (c) => {
-  const body3 = z19.object({
-    supplierId: z19.string().uuid().optional(),
-    date: z19.string().optional(),
-    note: z19.string().max(200).optional(),
-    lines: z19.array(z19.object({ inventoryItemId: z19.string().uuid(), qty: z19.number().positive(), unitPrice: z19.number().positive().optional() })).min(1).max(80)
+  const body3 = z20.object({
+    supplierId: z20.string().uuid().optional(),
+    date: z20.string().optional(),
+    note: z20.string().max(200).optional(),
+    lines: z20.array(z20.object({ inventoryItemId: z20.string().uuid(), qty: z20.number().positive(), unitPrice: z20.number().positive().optional() })).min(1).max(80)
   }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides", details: body3.error.flatten() }, 400);
   const rid2 = c.get("restaurantId");
@@ -13226,7 +13282,7 @@ init_marketplace();
 init_src();
 init_auth();
 import { Hono as Hono22 } from "hono";
-import { z as z20 } from "zod";
+import { z as z21 } from "zod";
 import { and as and34, desc as desc17, eq as eq38, inArray as inArray19, isNull as isNull14, or as or6, sql as sql32 } from "drizzle-orm";
 init_marketplace();
 var shoppingRoutes = new Hono22();
@@ -13258,7 +13314,7 @@ function rankProducts(label, prods, mine, withOffers) {
 shoppingRoutes.post("/shopping/parse", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z20.object({ text: z20.string().min(1).max(2e3) }).safeParse(await c.req.json());
+  const body3 = z21.object({ text: z21.string().min(1).max(2e3) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Texte requis" }, 400);
   const [r] = await db.select().from(restaurants).where(eq38(restaurants.id, rid2));
   const zones = restaurantZones(r);
@@ -13321,7 +13377,7 @@ shoppingRoutes.get("/shopping/lists", async (c) => {
 shoppingRoutes.post("/shopping/lists", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z20.object({ name: z20.string().min(1).max(60), text: z20.string().min(1).max(2e3) }).safeParse(await c.req.json());
+  const body3 = z21.object({ name: z21.string().min(1).max(60), text: z21.string().min(1).max(2e3) }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Nom et contenu requis" }, 400);
   const [list] = await db.insert(shoppingLists).values({ restaurantId: rid2, ...body3.data }).returning();
   return c.json({ list, message: `Liste \xAB ${list.name} \xBB enregistr\xE9e.` }, 201);
@@ -13329,7 +13385,7 @@ shoppingRoutes.post("/shopping/lists", async (c) => {
 shoppingRoutes.put("/shopping/lists/:id", async (c) => {
   const rid2 = c.get("restaurantId");
   const db = await getDb();
-  const body3 = z20.object({ name: z20.string().min(1).max(60).optional(), text: z20.string().min(1).max(2e3).optional(), used: z20.boolean().optional() }).safeParse(await c.req.json());
+  const body3 = z21.object({ name: z21.string().min(1).max(60).optional(), text: z21.string().min(1).max(2e3).optional(), used: z21.boolean().optional() }).safeParse(await c.req.json());
   if (!body3.success) return c.json({ error: "Donn\xE9es invalides" }, 400);
   const set = { updatedAt: /* @__PURE__ */ new Date() };
   if (body3.data.name) set.name = body3.data.name;
@@ -13452,7 +13508,7 @@ init_mailer();
 init_sms();
 init_job_runs();
 import { Hono as Hono24 } from "hono";
-import { z as z21 } from "zod";
+import { z as z22 } from "zod";
 import { and as and35, desc as desc19, eq as eq39, ilike as ilike4, or as or7, sql as sql34 } from "drizzle-orm";
 var opsRoutes = new Hono24();
 opsRoutes.get("/backup/export", requireAuth, requireRestaurant, requireMinRole("owner"), async (c) => {
@@ -13498,7 +13554,7 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
   const mc = mailerConfig();
   const sc = smsConfig();
   const problems = [
-    ...Object.entries(jobs).filter(([, h]) => h.state === "degraded" || h.state === "stale").map(([job, h]) => `Job \xAB ${job} \xBB : ${h.state === "stale" ? `aucun passage depuis ${h.lastRun?.hoursAgo ?? "?"} h (max ${h.maxHours} h)` : `dernier passage en \xE9chec (${h.lastRun?.error ?? "sans d\xE9tail"})`}`),
+    ...Object.entries(jobs).filter(([, h2]) => h2.state === "degraded" || h2.state === "stale").map(([job, h2]) => `Job \xAB ${job} \xBB : ${h2.state === "stale" ? `aucun passage depuis ${h2.lastRun?.hoursAgo ?? "?"} h (max ${h2.maxHours} h)` : `dernier passage en \xE9chec (${h2.lastRun?.error ?? "sans d\xE9tail"})`}`),
     ...storage.files === 0 ? ["Aucune sauvegarde sur disque : lancez-en une et v\xE9rifiez le dossier BACKUP_DIR."] : [],
     ...storage.last && (Date.now() - new Date(storage.last.createdAt).getTime()) / 36e5 > 36 ? [`Derni\xE8re sauvegarde il y a ${Math.round((Date.now() - new Date(storage.last.createdAt).getTime()) / 36e5)} h : le job de sauvegarde ne tourne plus.`] : [],
     // Chantier 13 (audit n°3) : sans copie hors site, la sauvegarde disparaît avec l'instance.
@@ -13534,7 +13590,7 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
   });
 });
 adminOpsRoutes.post("/admin/backups/run", requireAuth, adminOnly, async (c) => {
-  const body3 = z21.object({ restaurantId: z21.string().uuid().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z22.object({ restaurantId: z22.string().uuid().optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Requ\xEAte invalide", details: body3.error.flatten() }, 400);
   const startedAt = /* @__PURE__ */ new Date();
   const res = await backupAllRestaurants({ restaurantId: body3.data.restaurantId });
@@ -13550,7 +13606,7 @@ adminOpsRoutes.post("/admin/backups/run", requireAuth, adminOnly, async (c) => {
 });
 adminOpsRoutes.get("/admin/backups", requireAuth, adminOnly, async (c) => c.json({ backups: await listBackups(), stats: await backupStorageStats() }));
 adminOpsRoutes.post("/admin/backups/verify", requireAuth, adminOnly, async (c) => {
-  const body3 = z21.object({ name: z21.string().optional(), backup: z21.unknown().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z22.object({ name: z22.string().optional(), backup: z22.unknown().optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Requ\xEAte invalide" }, 400);
   try {
     const backup = body3.data.backup ?? (body3.data.name ? await readBackupFile(body3.data.name) : null);
@@ -13561,7 +13617,7 @@ adminOpsRoutes.post("/admin/backups/verify", requireAuth, adminOnly, async (c) =
   }
 });
 adminOpsRoutes.post("/admin/backups/drill", requireAuth, adminOnly, async (c) => {
-  const body3 = z21.object({ name: z21.string().optional(), backup: z21.unknown().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z22.object({ name: z22.string().optional(), backup: z22.unknown().optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Requ\xEAte invalide" }, 400);
   try {
     const backup = body3.data.backup ?? (body3.data.name ? await readBackupFile(body3.data.name) : null);
@@ -13588,7 +13644,7 @@ adminOpsRoutes.get("/admin/backups/:name", requireAuth, adminOnly, async (c) => 
   }
 });
 adminOpsRoutes.post("/admin/backups/offsite", requireAuth, adminOnly, async (c) => {
-  const body3 = z21.object({ names: z21.array(z21.string()).optional(), keep: z21.number().int().min(1).max(365).optional(), prune: z21.boolean().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z22.object({ names: z22.array(z22.string()).optional(), keep: z22.number().int().min(1).max(365).optional(), prune: z22.boolean().optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Requ\xEAte invalide", details: body3.error.flatten() }, 400);
   const startedAt = /* @__PURE__ */ new Date();
   const res = await offsiteSweep({ names: body3.data.names, keep: body3.data.keep, prune: body3.data.prune });
@@ -13603,7 +13659,7 @@ adminOpsRoutes.post("/admin/backups/offsite", requireAuth, adminOnly, async (c) 
   return c.json(res, res.configured ? 200 : 400);
 });
 adminOpsRoutes.post("/admin/backups/offsite-drill", requireAuth, adminOnly, async (c) => {
-  const body3 = z21.object({ name: z21.string().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z22.object({ name: z22.string().optional() }).safeParse(await c.req.json().catch(() => ({})));
   const cfg = offsiteConfig();
   if (!cfg.configured) return c.json({ ok: false, configured: false, error: cfg.why }, 400);
   const nom = body3.success && body3.data.name ? body3.data.name : (await offsiteStats()).lastBackupName ?? "";
@@ -13613,7 +13669,7 @@ adminOpsRoutes.post("/admin/backups/offsite-drill", requireAuth, adminOnly, asyn
   return c.json(rapport, rapport.ok ? 200 : 400);
 });
 adminOpsRoutes.post("/admin/backups/offsite-download", requireAuth, adminOnly, async (c) => {
-  const body3 = z21.object({ name: z21.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z22.object({ name: z22.string().min(1) }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Nom de sauvegarde requis" }, 400);
   const cfg = offsiteConfig();
   if (!cfg.configured) return c.json({ ok: false, configured: false, error: cfg.why }, 400);
@@ -13622,7 +13678,7 @@ adminOpsRoutes.post("/admin/backups/offsite-download", requireAuth, adminOnly, a
   return c.json({ ...res, body: void 0 }, res.ok ? 200 : 400);
 });
 adminOpsRoutes.post("/admin/backups/restore", requireAuth, adminOnly, async (c) => {
-  const body3 = z21.object({ name: z21.string().optional(), backup: z21.unknown().optional(), confirm: z21.string(), force: z21.boolean().optional() }).safeParse(await c.req.json().catch(() => ({})));
+  const body3 = z22.object({ name: z22.string().optional(), backup: z22.unknown().optional(), confirm: z22.string(), force: z22.boolean().optional() }).safeParse(await c.req.json().catch(() => ({})));
   if (!body3.success) return c.json({ error: "Requ\xEAte invalide", details: body3.error.flatten() }, 400);
   if (body3.data.confirm !== "RESTAURER") return c.json({ error: 'Confirmation manquante : envoyez { "confirm": "RESTAURER" }.' }, 400);
   try {
@@ -13649,8 +13705,8 @@ adminOpsRoutes.get("/admin/audit", requireAuth, adminOnly, async (c) => {
   if (action) conds.push(ilike4(auditLog.action, `${action}%`));
   const rows = await db.select().from(auditLog).where(conds.length ? and35(...conds) : void 0).orderBy(desc19(auditLog.at)).limit(limit);
   if (c.req.query("format") === "csv") {
-    const esc2 = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = ["horodatage;acteur;action;cible;details", ...rows.map((r) => [r.at instanceof Date ? r.at.toISOString() : r.at, r.actorEmail, r.action, r.target, JSON.stringify(r.meta ?? {})].map(esc2).join(";"))].join("\n");
+    const esc3 = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = ["horodatage;acteur;action;cible;details", ...rows.map((r) => [r.at instanceof Date ? r.at.toISOString() : r.at, r.actorEmail, r.action, r.target, JSON.stringify(r.meta ?? {})].map(esc3).join(";"))].join("\n");
     c.header("Content-Type", "text/csv; charset=utf-8");
     c.header("Content-Disposition", `attachment; filename="journal-audit-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.csv"`);
     return c.body(csv);

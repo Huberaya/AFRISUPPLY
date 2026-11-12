@@ -24,6 +24,7 @@
     "check:bundle": "node scripts/check-bundle.mjs",
     "check:bundle:run": "node scripts/fumee-bundle.mjs",
     "verifs:e2e": "bash scripts/verifications/toutes.sh",
+    "verifs:navigateur": "npm --prefix scripts/navigateur ci --no-audit --no-fund && node scripts/navigateur/parcours.mjs",
     "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run check:bundle && npm run check:bundle:run"
   },
   "devDependencies": {

@@ -16,6 +16,7 @@ import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
 import { checkLineEdit, checkStatusChange, isReceived } from '../lib/orders.js';
 import { assertPlausibleQuantity } from './restaurant.js';
 import { unusableProductIds, ownsSupplier, PRODUCT_NOT_FOUND } from '../lib/tenant.js';
+import { h } from '../lib/html.js';
 
 export const manageRoutes = new Hono<Env>();
 manageRoutes.use('*', requireAuth, requireRestaurant);
@@ -429,7 +430,7 @@ manageRoutes.post('/orders/:id/proposal', async (c) => {
   if (body.data.action === 'decline') {
     const [upd] = await db.update(orders).set({ status: 'annulee', vendorDecisionAt: new Date(), vendorNote: 'Proposition de modification refusée par le restaurant', proposal: null }).where(eq(orders.id, o.id)).returning();
     void logOrderEvent(o.id, 'cancelled', 'Proposition refusée par le restaurant — commande annulée', 'restaurant');
-    if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `❌ ${o.reference} : proposition refusée, commande annulée`, text: `Le restaurant a refusé votre proposition de modification pour la commande ${o.reference}. La commande est annulée.`, html: `<p>Le restaurant a refusé votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annulée.</p>`, tags: { type: 'order_proposal' } });
+    if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `❌ ${o.reference} : proposition refusée, commande annulée`, text: `Le restaurant a refusé votre proposition de modification pour la commande ${o.reference}. La commande est annulée.`, html: h`<p>Le restaurant a refusé votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annulée.</p>`, tags: { type: 'order_proposal' } });
     return c.json({ order: upd });
   }
   const p = o.proposal;
@@ -443,6 +444,6 @@ manageRoutes.post('/orders/:id/proposal', async (c) => {
   const [upd] = await db.update(orders).set({ status: 'confirmee', totalEur: p.newTotalEur.toFixed(2), expectedAt: p.expectedAt ?? o.expectedAt, vendorDecisionAt: new Date(), vendorNote: p.note ?? 'Modification acceptée par le restaurant', proposal: null }).where(eq(orders.id, o.id)).returning();
   if (v) { const amount = p.newTotalEur * Number(v.commissionPct) / 100; await db.insert(commissions).values({ vendorId: v.id, orderId: o.id, orderTotalEur: p.newTotalEur.toFixed(2), pct: v.commissionPct, amountEur: amount.toFixed(2), period: new Date().toISOString().slice(0, 7) }).onConflictDoNothing(); }
   void logOrderEvent(o.id, 'confirmed', `Modification acceptée par le restaurant — commande confirmée (${p.newTotalEur.toFixed(2).replace('.', ',')} €)`, 'restaurant', { by: user.email });
-  if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `✅ ${o.reference} : modification acceptée — à préparer`, text: `Le restaurant a accepté votre proposition pour la commande ${o.reference}. Nouveau total ${p.newTotalEur.toFixed(2)} €. La commande est confirmée : préparez-la depuis votre espace.`, html: `<p>Le restaurant a accepté votre proposition pour la commande <b>${o.reference}</b>. Nouveau total <b>${p.newTotalEur.toFixed(2)} €</b>. La commande est confirmée.</p>`, tags: { type: 'order_proposal' } });
+  if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `✅ ${o.reference} : modification acceptée — à préparer`, text: `Le restaurant a accepté votre proposition pour la commande ${o.reference}. Nouveau total ${p.newTotalEur.toFixed(2)} €. La commande est confirmée : préparez-la depuis votre espace.`, html: h`<p>Le restaurant a accepté votre proposition pour la commande <b>${o.reference}</b>. Nouveau total <b>${p.newTotalEur.toFixed(2)} €</b>. La commande est confirmée.</p>`, tags: { type: 'order_proposal' } });
   return c.json({ order: { ...upd, proofPhoto: undefined, proofSignature: undefined } });
 });

@@ -4,6 +4,9 @@
   "buildCommand": "node scripts/deploy-migrate.mjs && npm run build -w apps/web && node api/build.mjs",
   "outputDirectory": "apps/web/dist",
   "framework": null,
+  "regions": [
+    "fra1"
+  ],
   "functions": {
     "api/index.js": {
       "maxDuration": 60,

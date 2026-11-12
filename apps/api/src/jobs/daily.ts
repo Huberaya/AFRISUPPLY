@@ -22,6 +22,7 @@ import { offsiteConfig, offsiteSweep, pruneOffsite, listObjects } from '../lib/o
 import { recordJobRun, statusFrom } from '../lib/job-runs.js';
 import { watchdog } from '../lib/ops-health.js';
 import { remindPayments } from '../lib/credit.js';
+import { h } from '../lib/html.js';
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 export const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -411,7 +412,7 @@ export async function runDailyForAll(opts: { dryRun?: boolean; now?: Date; force
       const sw = await sweepTrials(now);
       if (!opts.dryRun) for (const r of sw.reminders) {
         const recips = await recipientsFor(r.id);
-        for (const { email: to } of recips) await sendMail({ to, subject: r.daysLeft === 1 ? `Dernier jour d'essai AFRISUPPLY pour ${r.name}` : `Plus que ${r.daysLeft} jours d'essai AFRISUPPLY`, text: `Bonjour,\n\nVotre essai gratuit AFRISUPPLY pour ${r.name} se termine dans ${r.daysLeft} jour(s). Pour garder votre stock, vos fournisseurs et vos alertes, choisissez une formule ici : ${APP_URL()}/app/abonnement\n\nBesoin d'aide ? Répondez simplement à cet e-mail.\n\nL'équipe AFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY pour <b>${r.name}</b> se termine dans <b>${r.daysLeft} jour(s)</b>.</p><p>Pour garder votre stock, vos fournisseurs et vos alertes : <a href="${APP_URL()}/app/abonnement">choisir ma formule</a>.</p><p>Besoin d'aide ? Répondez simplement à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`, tags: { type: 'trial-reminder' } });
+        for (const { email: to } of recips) await sendMail({ to, subject: r.daysLeft === 1 ? `Dernier jour d'essai AFRISUPPLY pour ${r.name}` : `Plus que ${r.daysLeft} jours d'essai AFRISUPPLY`, text: `Bonjour,\n\nVotre essai gratuit AFRISUPPLY pour ${r.name} se termine dans ${r.daysLeft} jour(s). Pour garder votre stock, vos fournisseurs et vos alertes, choisissez une formule ici : ${APP_URL()}/app/abonnement\n\nBesoin d'aide ? Répondez simplement à cet e-mail.\n\nL'équipe AFRISUPPLY`, html: h`<p>Bonjour,</p><p>Votre essai gratuit AFRISUPPLY pour <b>${r.name}</b> se termine dans <b>${r.daysLeft} jour(s)</b>.</p><p>Pour garder votre stock, vos fournisseurs et vos alertes : <a href="${APP_URL()}/app/abonnement">choisir ma formule</a>.</p><p>Besoin d'aide ? Répondez simplement à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`, tags: { type: 'trial-reminder' } });
       }
       const billing: Record<string, unknown> = { trialsExpired: sw.expired.length, reminders: sw.reminders.length, enforced: billingEnforced() };
       if (now.getUTCDate() === 1) { const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)); const inv = await invoiceCommissions(prev.toISOString().slice(0, 7), { dryRun: opts.dryRun }); billing.commissionInvoices = inv.invoices.length; }

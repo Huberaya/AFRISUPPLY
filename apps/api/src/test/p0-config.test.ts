@@ -315,6 +315,20 @@ describe('5. Les fonctions tournent-elles près de la base ?', () => {
     expect(memes.warnings.some((x) => /Région de fonctions conseillée/.test(x))).toBe(false);
   });
 
+  it('le dépôt place les fonctions dans la région de la base annoncée par les mentions légales (Francfort)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const vercel = JSON.parse(readFileSync(path.join(racine, 'vercel.json'), 'utf8')) as { regions?: string[] };
+    const mentions = readFileSync(path.join(racine, 'apps/web/src/pages/site/Legal.tsx'), 'utf8');
+    // Ce que le site publie : base à Francfort (eu-central-1), serveurs dans l'Union européenne.
+    expect(mentions).toMatch(/eu-central-1/);
+    expect(mentions).toMatch(/Union\s+européenne|Union<\/b>|européenne/);
+    // Une seule région de fonctions, et c'est celle qui est voisine de cette base.
+    expect(vercel.regions).toEqual(['fra1']);
+    expect(regionCheck({ VERCEL_REGION: vercel.regions![0], DATABASE_URL: 'postgresql://u:p@ep-x-1.eu-central-1.aws.neon.tech/db' }).voisines).toBe(true);
+    // « iad1 » (États-Unis), la région par défaut de la plateforme, contredirait les deux.
+    expect(regionCheck({ VERCEL_REGION: 'iad1', DATABASE_URL: 'postgresql://u:p@ep-x-1.eu-central-1.aws.neon.tech/db' }).voisines).toBe(false);
+  });
+
   it('la page de statut publie la latence d’UN aller-retour et le voisinage (inconnu sur un poste local)', async () => {
     _resetSchemaCache();
     const r = await appel('GET', '/api/status');

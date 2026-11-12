@@ -4,25 +4,29 @@ npm run lint       : code de sortie 0 (avant la mission : 1, deux erreurs)
 npm run typecheck  : code de sortie 0
 npm test           : code de sortie 0
   packages/db      :   5 tests réussis sur 5   (1 fichier)
-  apps/api         : 627 tests réussis sur 627 (45 fichiers)
-  apps/web         :  80 tests réussis sur 80  (21 fichiers)
-  total            : 712 réussis, 0 échoué     (avant la mission : 518 = 5 + 433 + 80)
+  apps/api         : 636 tests réussis sur 636 (46 fichiers)
+  apps/web         :  83 tests réussis sur 83  (22 fichiers)
+  total            : 724 réussis, 0 échoué     (avant la mission : 518 = 5 + 433 + 80)
 npm run build      : code de sortie 0
 npm run check:bundle, check:bundle:run : code de sortie 0
 npm audit --omit=dev : 0 vulnérabilité (avant : 4 — 1 critique, 1 haute, 2 modérées)
 
-Tests ajoutés dans apps/api/src/test (196 ; les 2 anciens tests de clerk-sync, qui validaient le défaut, sont remplacés) :
+Tests ajoutés (208 : 205 pour l'API, 3 pour le site ; les 2 anciens tests de clerk-sync, qui validaient le défaut, sont remplacés) :
   clerk-sync.test.ts            22  défaut critique : attaque d'origine, variantes, connexions légitimes, Clerk muet
   p0-cloisonnement.test.ts      22  deux restaurants et deux grossistes réels, balayage de toutes les routes à paramètre
   p0-roles.test.ts              79  matrice des rôles : chaque route d'écriture classée et vérifiée pour trois rôles
   p0-api-robustesse.test.ts     20  401 sans session, JSON mal formé, corps vide, taille, défauts route par route
-  p0-config.test.ts             27  secret de session, garde de configuration, prévisualisation, migrations, régions
+  p0-config.test.ts             28  secret de session, garde de configuration, prévisualisation, migrations, régions
   p0-passe-quotidienne.test.ts  22  une passe par jour, tranches, reprise, bail, jeton, unités écartées, enchaînement HTTP réel
   p0-appels-sortants.test.ts     4  chaque appel sortant a un délai, inférieur à la durée d'une fonction
+  p0-courriels-html.test.ts      8  HTML des e-mails échappé, noms montrés à des tiers, frein sur les invitations
+  (site) Modal.render.test.tsx   3  fenêtre de dialogue rattachée au document, animation sans transformation
 
 Les tests détectent-ils une régression ? Vérifié par retrait d'une règle à la fois, puis relance :
   passe quotidienne : 8 règles retirées, 8 détectées (détail : P0_4_passe_quotidienne.txt, point 5)
   délai du service d'identité retiré : le test « Clerk muet » échoue (la requête ne revient pas en 15 s)
+
+Parcours dans un vrai navigateur (hors de ce total) : 72 vérifications réussies sur 72 — P0_6_navigateur.txt.
 
 Tous ces tests s'exécutent sur une base PostgreSQL embarquée ; Clerk y est simulé (faux-clerk.ts).
 Ils prouvent le code. Ils ne prouvent ni la configuration de Vercel, ni l'état de la base Neon, ni l'instance Clerk réelle.

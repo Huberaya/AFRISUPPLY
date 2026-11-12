@@ -1,5 +1,10 @@
 Vérifications de bout en bout — 13 scripts contre une API réellement démarrée (base PostgreSQL embarquée, faux stockage S3)
 
+PASSAGE 3 — après l'échappement du HTML des e-mails, la règle sur les noms, le frein sur les invitations,
+la correction des fenêtres de dialogue et le réglage de la région (base neuve, code courant)
+Début 2026-11-12T18:28:50Z — fin 2026-11-12T18:44:50Z — code de sortie 0
+TOTAL : 535/535 vérifications · 13/13 scripts OK (mêmes comptes par script que le passage 2)
+
 PASSAGE 2 — arbre de travail de la branche arena/326bcc8c-afrisupply, après le chantier P0.4
 (passe quotidienne par tranches, délais des appels sortants, contrôle des régions)
 Début 2026-11-12T17:51:11Z — fin 2026-11-12T18:04:59Z — code de sortie 0
@@ -37,4 +42,5 @@ Référence avant corrections (commit 15c8b81, 2026-11-12 09:22–09:36Z) : 530/
 Intégration continue (GitHub Actions, demande de fusion n° 1) — mêmes 13 scripts, sur les serveurs de GitHub :
   45fc754  exécution 43252514046  Qualité : réussi (2 min 56 s) · Bout en bout : réussi (14 min 51 s)
   2bf98b2  exécution 43256024698  Qualité : réussi (2 min 26 s) · Bout en bout : réussi (14 min 39 s)
-Ce sont les deux premières exécutions réussies de l'intégration continue depuis le 2026-09-23.
+  dc0d382  exécution 43276393451  Qualité : réussi (1 min 52 s) · Bout en bout : réussi (14 min 45 s)
+Ce sont les premières exécutions réussies de l'intégration continue depuis le 2026-09-23.

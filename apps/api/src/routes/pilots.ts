@@ -9,6 +9,7 @@ import { requireAuth, requireRestaurant, isPlatformAdmin, type Env } from '../li
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 import { FOUNDER_OFFER } from './public.js';
+import { h, nl2br } from '../lib/html.js';
 
 const APP = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const n = (v: unknown) => Number(v ?? 0);
@@ -97,7 +98,7 @@ pilotRoutes.post('/feedback', async (c) => {
   const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   if (admins.length && (b.kind === 'bug' || (b.kind === 'nps' && (b.score ?? 10) <= 6) || b.kind === 'question')) {
     const subject = b.kind === 'bug' ? `🐛 Bug signalé par ${r.name}` : b.kind === 'question' ? `❓ Question de ${r.name}` : `⚠️ NPS ${b.score}/10 — ${r.name}`;
-    for (const to of admins) void sendMail({ to, subject, text: `${r.name} (${u.email}) — page ${b.page ?? '?'}\n\n${b.message ?? '(sans message)'}\n\n${APP()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) — page ${b.page ?? '?'}</p><p>${(b.message ?? '(sans message)').replace(/\n/g, '<br>')}</p><p><a href="${APP()}/app/admin/pilotes">Cockpit pilotes</a></p>`, tags: { type: 'feedback' } });
+    for (const to of admins) void sendMail({ to, subject, text: `${r.name} (${u.email}) — page ${b.page ?? '?'}\n\n${b.message ?? '(sans message)'}\n\n${APP()}/app/admin/pilotes`, html: h`<p><b>${r.name}</b> (${u.email}) — page ${b.page ?? '?'}</p><p>${nl2br(b.message ?? '(sans message)')}</p><p><a href="${APP()}/app/admin/pilotes">Cockpit pilotes</a></p>`, tags: { type: 'feedback' } });
   }
   return c.json({ feedback: row, message: b.kind === 'nps' ? 'Merci ! Votre avis compte vraiment.' : 'Bien reçu — on vous répond sous 24 h ouvrées.' }, 201);
 });
@@ -183,7 +184,7 @@ pilotAdminRoutes.post('/admin/pilots/invite', async (c) => {
   const link = `${APP()}/inscription?code=${code}`; const first = lead.contactName.split(' ')[0];
   const mail = await sendMail({ to: lead.email, subject: `${first}, votre accès pilote AFRISUPPLY est prêt 🎁`, tags: { type: 'invite' },
     text: `Bonjour ${first},\n\nBienvenue parmi les ${FOUNDER_OFFER.seats} restaurants pilotes fondateurs d'AFRISUPPLY !\n\nVotre code : ${code}\nCréez votre compte ici (2 minutes) : ${link}\n\nCe que ça vous donne :\n- ${FOUNDER_OFFER.trialDays} jours gratuits, sans carte bancaire\n- puis −${FOUNDER_OFFER.discountPct} % à vie sur la formule de votre choix\n- une ligne directe avec l'équipe (on répond sous 24 h)\n\nEn échange : vous utilisez l'app au quotidien et vous nous dites franchement ce qui coince.\n\nÀ très vite,\nL'équipe AFRISUPPLY`,
-    html: `<p>Bonjour ${first},</p><p>Bienvenue parmi les <b>${FOUNDER_OFFER.seats} restaurants pilotes fondateurs</b> d'AFRISUPPLY !</p><p>Votre code : <b style="font-size:18px">${code}</b><br><a href="${link}" style="display:inline-block;margin-top:8px;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Créer mon compte (2 minutes)</a></p><ul><li>${FOUNDER_OFFER.trialDays} jours gratuits, sans carte bancaire</li><li>puis <b>−${FOUNDER_OFFER.discountPct} % à vie</b> sur la formule de votre choix</li><li>une ligne directe avec l'équipe (réponse sous 24 h)</li></ul><p>En échange : vous utilisez l'app au quotidien et vous nous dites franchement ce qui coince.</p><p>À très vite,<br>L'équipe AFRISUPPLY</p>` });
+    html: h`<p>Bonjour ${first},</p><p>Bienvenue parmi les <b>${FOUNDER_OFFER.seats} restaurants pilotes fondateurs</b> d'AFRISUPPLY !</p><p>Votre code : <b style="font-size:18px">${code}</b><br><a href="${link}" style="display:inline-block;margin-top:8px;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Créer mon compte (2 minutes)</a></p><ul><li>${FOUNDER_OFFER.trialDays} jours gratuits, sans carte bancaire</li><li>puis <b>−${FOUNDER_OFFER.discountPct} % à vie</b> sur la formule de votre choix</li><li>une ligne directe avec l'équipe (réponse sous 24 h)</li></ul><p>En échange : vous utilisez l'app au quotidien et vous nous dites franchement ce qui coince.</p><p>À très vite,<br>L'équipe AFRISUPPLY</p>` });
   await audit('pilot.invite', { actorEmail: c.get('user').email, target: lead.id, meta: { code, mail: mail.ok } });
   return c.json({ code, link, mail: mail.ok ? 'envoyé' : `non envoyé (${(mail as { error?: string }).error ?? mail.transport})`, lead: { ...lead, inviteCode: code } });
 });
@@ -206,5 +207,5 @@ export async function buildWeeklyPilotReport(now = new Date()) {
   const newFb = await db.select({ f: feedback, restaurantName: restaurants.name }).from(feedback).innerJoin(restaurants, eq(restaurants.id, feedback.restaurantId)).where(gte(feedback.createdAt, since7)).orderBy(desc(feedback.createdAt));
   const line = (p: Awaited<ReturnType<typeof pilotHealth>>) => `${p.status === 'vert' ? '🟢' : p.status === 'orange' ? '🟠' : '🔴'} ${p.name} (J${p.dayNumber}, checklist ${p.checklist.done}/${p.checklist.total}, ${p.week.sales} ventes · ${p.week.movements} mvts · ${p.week.orders} cmd)${p.reasons.length ? ' — ' + p.reasons.join(', ') : ''}`;
   const text = [`Rapport pilotes — semaine du ${now.toLocaleDateString('fr-FR')}`, '', `${pilots.length} restaurants · ${pilots.filter((p) => p.status === 'vert').length} 🟢 · ${pilots.filter((p) => p.status === 'orange').length} 🟠 · ${pilots.filter((p) => p.status === 'rouge').length} 🔴`, `Actifs cette semaine : ${pilots.filter((p) => p.week.sales + p.week.movements + p.week.orders > 0).length}`, '', ...pilots.sort((a, b) => ['rouge', 'orange', 'vert'].indexOf(a.status) - ['rouge', 'orange', 'vert'].indexOf(b.status)).map(line), '', `Retours de la semaine (${newFb.length}) :`, ...newFb.map(({ f, restaurantName }) => `- [${f.kind}${f.score !== null ? ` ${f.score}/10` : ''}] ${restaurantName} : ${f.message ?? ''}`), '', `${APP()}/app/admin/pilotes`].join('\n');
-  return { text, html: `<pre style="font-family:ui-sans-serif,system-ui;white-space:pre-wrap">${text.replace(/</g, '&lt;')}</pre>`, pilots: pilots.length };
+  return { text, html: h`<pre style="font-family:ui-sans-serif,system-ui;white-space:pre-wrap">${text}</pre>`, pilots: pilots.length };
 }

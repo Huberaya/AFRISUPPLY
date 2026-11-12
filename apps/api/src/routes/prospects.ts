@@ -8,6 +8,7 @@ import { audit } from '../lib/ops.js';
 import { SignJWT, jwtVerify } from 'jose';
 import { sendMail } from '../lib/mailer.js';
 import { APP_URL } from '../jobs/daily.js';
+import { h, brut, nl2br, esc } from '../lib/html.js';
 
 // ---- Chantier 14 : invitation fournisseur pré-remplie (lien signé 30 jours) ----
 const inviteSecret = () => new TextEncoder().encode(`invite:${process.env.JWT_SECRET ?? 'dev-secret-change-me-in-production'}`);
@@ -84,7 +85,7 @@ prospectRoutes.post('/admin/prospects/:id/invite-vendor', async (c) => {
   const text = `${first},\n\nAFRISUPPLY est la marketplace des restaurants africains de France : ils y comparent les grossistes et commandent en un clic.\n\nVotre fiche « ${p.name} » est déjà préparée. Il vous suffit de cliquer, de créer un mot de passe et de coller votre tarif (Excel, texte ou photo) : vous êtes en ligne en 10 minutes, sans engagement, commission uniquement sur les ventes.\n\n👉 ${url}\n\nLe lien est valable 30 jours. Répondez à ce message pour toute question.\n\nL'équipe AFRISUPPLY`;
   const whatsapp = `${first}, c'est AFRISUPPLY, la marketplace des restaurants africains. Votre fiche « ${p.name} » est prête : cliquez, créez un mot de passe, collez votre tarif et vous êtes en ligne en 10 min 👉 ${url}`;
   let mail: { ok: boolean; error?: string } = { ok: false, error: 'Pas d\'e-mail' };
-  if (email && body.data.send) mail = await sendMail({ to: email, subject: `${p.name} : votre catalogue devant 200 restaurants africains — fiche déjà prête`, text, html: `<p>${text.replace(/\n/g, '<br/>').replace(url, `<a href="${url}">${url}</a>`)}</p>`, tags: { type: 'vendor-invite' } });
+  if (email && body.data.send) mail = await sendMail({ to: email, subject: `${p.name} : votre catalogue devant 200 restaurants africains — fiche déjà prête`, text, html: h`<p>${brut(nl2br(text, '<br/>').html.replace(esc(url), h`<a href="${url}">${url}</a>`))}</p>`, tags: { type: 'vendor-invite' } });
   await db.update(prospects).set({ status: p.status === 'a_contacter' ? 'contacte' : p.status, notes: `${p.notes ? p.notes + '\n' : ''}[${new Date().toLocaleDateString('fr-FR')}] Invitation fournisseur ${mail.ok ? 'envoyée par e-mail' : 'générée'}${email ? ` (${email})` : ''}`, updatedAt: new Date() }).where(eq(prospects.id, p.id));
   await audit('prospect.invite_vendor', { actorEmail: c.get('user').email, target: p.id, meta: { email, sent: mail.ok } });
   return c.json({ url, whatsapp, email, sent: mail.ok, mailError: mail.ok ? null : mail.error ?? null, message: mail.ok ? `Invitation envoyée à ${email}.` : 'Lien généré : copiez-le ou envoyez le message WhatsApp.' });
