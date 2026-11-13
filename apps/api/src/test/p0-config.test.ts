@@ -113,8 +113,10 @@ describe('2. Même règle sur Vercel que sur le serveur autonome', () => {
 
   it('avertissements Clerk : clé de test en production, clé publique sans clé secrète, aucune origine autorisée', () => {
     const w = (env: NodeJS.ProcessEnv) => checkSecureConfig(env).warnings.join(' | ');
-    expect(w({ ...prod, CLERK_SECRET_KEY: 'sk_test_abc' })).toMatch(/clé de test/);
-    expect(w({ ...prod, VITE_CLERK_PUBLISHABLE_KEY: 'pk_test_abc', CLERK_SECRET_KEY: 'sk_live_abc' })).toMatch(/clé publique Clerk est une clé de test/);
+    // Levée des réserves : en production, des clés de développement ne valent plus un simple
+    // avertissement « à remplacer » — la connexion Clerk est coupée, et l'avertissement le dit.
+    expect(w({ ...prod, CLERK_SECRET_KEY: 'sk_test_abc' })).toMatch(/Clés Clerk de développement .* en production : connexion Clerk coupée/);
+    expect(w({ ...prod, VITE_CLERK_PUBLISHABLE_KEY: 'pk_test_abc', CLERK_SECRET_KEY: 'sk_live_abc' })).toMatch(/ne sont pas de la même sorte/);
     expect(w({ ...prod, VITE_CLERK_PUBLISHABLE_KEY: 'pk_live_abc' })).toMatch(/CLERK_SECRET_KEY absent/);
     expect(w({ ...prod, APP_URL: undefined, CLERK_SECRET_KEY: 'sk_live_abc' })).toMatch(/sans origine autorisée/);
     expect(w({ ...prod, CLERK_SECRET_KEY: 'sk_live_abc', VITE_CLERK_PUBLISHABLE_KEY: 'pk_live_abc' })).not.toMatch(/Clerk/);

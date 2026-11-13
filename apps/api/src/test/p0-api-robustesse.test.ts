@@ -36,7 +36,9 @@ const PUBLIQUES = new Set([
   'GET /api/public/products/:id', 'POST /api/public/product-alert',
 ]);
 /** Routes des tâches planifiées : protégées par CRON_SECRET (jamais par une session). */
-const PLANIFIEES = new Set(['GET /api/jobs/daily', 'POST /api/jobs/daily', 'GET /api/jobs/reminders', 'POST /api/jobs/reminders', 'GET /api/jobs/notify', 'POST /api/jobs/notify', 'GET /api/status/jobs']);
+const PLANIFIEES = new Set(['GET /api/jobs/daily', 'POST /api/jobs/daily', 'GET /api/jobs/reminders', 'POST /api/jobs/reminders', 'GET /api/jobs/notify', 'POST /api/jobs/notify', 'GET /api/status/jobs',
+  // Levée des réserves : diagnostic de configuration, réservé à l'exploitant (même secret).
+  'GET /api/status/config']);
 
 const routes = () => {
   const vues = new Set<string>(); const out: { cle: string; method: string; path: string }[] = [];
@@ -84,12 +86,12 @@ beforeAll(async () => {
 }, 120_000);
 
 describe('1. Accès sans session', () => {
-  it('le registre compte 251 routes, dont 23 publiques et 7 planifiées — toutes les autres exigent une session', () => {
+  it('le registre compte 252 routes, dont 23 publiques et 8 protégées par le secret des tâches — toutes les autres exigent une session', () => {
     const toutes = routes();
-    expect(toutes).toHaveLength(251);
+    expect(toutes).toHaveLength(252);
     expect(toutes.filter((r) => PUBLIQUES.has(r.cle))).toHaveLength(PUBLIQUES.size);
     expect(toutes.filter((r) => PLANIFIEES.has(r.cle))).toHaveLength(PLANIFIEES.size);
-    expect(PUBLIQUES.size).toBe(23); expect(PLANIFIEES.size).toBe(7);
+    expect(PUBLIQUES.size).toBe(23); expect(PLANIFIEES.size).toBe(8);
   });
 
   it('toute route protégée répond 401 sans session — y compris les routes à paramètre (avant : 404 sur 86 routes)', async () => {

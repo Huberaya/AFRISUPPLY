@@ -5,7 +5,10 @@
 import { Hono } from 'hono';
 import { desc, sql } from 'drizzle-orm';
 import { getDb, jobRuns, migrationStatus, regionCheck, type MigrationStatus } from '@afrisupply/db';
-import { cronSecretCheck } from '../lib/security.js';
+import { cronSecretCheck, jwtSecretProblem, usesTestSender } from '../lib/security.js';
+import { clerkSettings } from '../lib/clerk.js';
+import { clerkKeyFacts } from '../lib/clerk-config.js';
+import { configDiagnostic } from '../lib/config-diagnostic.js';
 import { buildInfo, sentryEnabled } from '../lib/ops.js';
 import { SUPPORT, jobHealth, publicJobHealth } from '../lib/ops-health.js';
 import { backupStorageStats } from '../lib/backup.js';
@@ -48,6 +51,9 @@ statusRoutes.get('/status', async (c) => {
   // Une base en retard sur le code (migration attendue mais absente) est une panne annoncée : le statut le dit.
   const schemaBehind = schema.state === 'en_retard' || schema.state === 'non_initialisee';
   const ok = dbOk && !degraded && !schemaBehind;
+  // Levée des réserves (chantier B) : la connexion Clerk est-elle réellement en service ici, avec
+  // quelle sorte d'instance, et sinon pourquoi (code seulement : aucune clé, aucun domaine).
+  const clerk = clerkSettings(); const clerkFacts = clerkKeyFacts();
   return c.json({
     ok, ...buildInfo(), checkedAt: new Date().toISOString(),
     checks: {
@@ -58,10 +64,16 @@ statusRoutes.get('/status', async (c) => {
       jobs,
       // Compatibilité : l'ancien champ dailyJob reste exposé (supervision externe existante).
       dailyJob: jobs.daily ?? { state: 'never', maxHours: 30, lastRun: null },
-      mail: { transport: mc.transport, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', from: mc.from, stats: mailStats(), outboxCount: mc.transport === 'file' ? await outboxCount() : null },
+      // `testSender` : l'expéditeur est l'adresse d'essai du prestataire — les messages ne sont remis
+      // qu'au titulaire du compte du prestataire, pas aux clients.
+      mail: { transport: mc.transport, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', from: mc.from, testSender: mc.transport === 'resend' && usesTestSender(mc.from), stats: mailStats(), outboxCount: mc.transport === 'file' ? await outboxCount() : null },
       sms: { configured: sc.enabled, whatsapp: sc.whatsapp, delivered: sc.enabled, stats: smsStats() },
       errorTracking: { configured: sentryEnabled() },
       cron: { configured: !!process.env.CRON_SECRET, jobs: ['/api/jobs/daily', '/api/jobs/reminders'] },
+      auth: {
+        sessionSecret: jwtSecretProblem(process.env.JWT_SECRET) === null ? 'ok' : 'a_corriger',
+        clerk: { enabled: clerk.enabled, mode: clerkFacts.server.mode ?? clerkFacts.site.mode, problem: clerk.problem?.code ?? null },
+      },
       backups: { files: backup.files, lastAt: backup.lastAt, ageHours: backup.ageHours, retentionDays: backup.keep, ok: backup.files > 0 && (backup.ageHours ?? 999) <= 36 },
     },
     support: { email: SUPPORT.email(), hours: SUPPORT.hours, responseTime: SUPPORT.responseTime, phone: SUPPORT.phone() },
@@ -73,4 +85,14 @@ statusRoutes.get('/status/jobs', async (c) => {
   if (cronSecretCheck({ cron: c.req.header('x-cron-secret'), authorization: c.req.header('authorization') }, undefined) !== 'ok') return c.json({ error: 'Non autorisé' }, 401);
   const db = await getDb();
   return c.json({ runs: await db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(Math.min(100, Number(c.req.query('limit') ?? 30))) });
+});
+
+/**
+ * Diagnostic de configuration : GET /api/status/config — protégé par CRON_SECRET (en-tête uniquement).
+ * Ne renvoie aucune valeur de variable : présence, conformité, sorte des clés, rôle et hôte de la base.
+ */
+statusRoutes.get('/status/config', async (c) => {
+  if (cronSecretCheck({ cron: c.req.header('x-cron-secret'), authorization: c.req.header('authorization') }, undefined) !== 'ok') return c.json({ error: 'Non autorisé' }, 401);
+  c.header('Cache-Control', 'no-store');
+  return c.json(await configDiagnostic());
 });

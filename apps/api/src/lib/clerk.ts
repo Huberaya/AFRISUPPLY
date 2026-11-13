@@ -11,6 +11,7 @@
 // =============================================================
 import { createClerkClient, verifyToken, type ClerkClient } from '@clerk/backend';
 import { allowedOrigins, isProd } from './security.js';
+import { clerkConfigProblem, clerkKeyFacts, type ClerkConfigProblem, type ClerkKeyFacts } from './clerk-config.js';
 
 export type ClerkIdentity = {
   /** Identifiant Clerk de la personne (revendication `sub` du jeton vérifié). */
@@ -40,7 +41,11 @@ export function clerkSettings(env: NodeJS.ProcessEnv = process.env) {
   const publishableKey = clean(env.VITE_CLERK_PUBLISHABLE_KEY) ?? clean(env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) ?? clean(env.CLERK_PUBLISHABLE_KEY);
   // Adresse de l'API Clerk : modifiable uniquement hors production (tests avec un faux service).
   const apiUrl = isProd(env) ? undefined : clean(env.CLERK_API_URL);
-  return { secretKey, jwtKey, publishableKey, apiUrl, enabled: !!secretKey };
+  // Levée des réserves (chantier B) : des clés qui ne conviennent pas à l'environnement (instance de
+  // développement en production, instance de production sur une prévisualisation, clés de deux
+  // sortes) coupent la connexion Clerk — comme si elle n'était pas configurée.
+  const problem = secretKey ? clerkConfigProblem(env) : null;
+  return { secretKey, jwtKey, publishableKey, apiUrl, problem, enabled: !!secretKey && !problem };
 }
 
 /** Clerk est-il utilisable par le serveur ? (la clé publique seule ne suffit pas) */
@@ -88,6 +93,7 @@ const SERVER_SIDE_REASONS = /^(jwk-remote-failed-to-load|jwk-remote-invalid|jwk-
  */
 export async function verifyClerkSessionToken(token: string, env: NodeJS.ProcessEnv = process.env): Promise<{ clerkId: string; sessionId: string | null }> {
   const s = clerkSettings(env);
+  if (s.problem) throw new ClerkAuthError(503, s.problem.code, 'La connexion par Clerk n\'est pas disponible sur ce serveur. Utilisez votre e-mail et votre mot de passe.');
   if (!s.enabled) throw new ClerkAuthError(503, 'clerk_not_configured', 'La connexion par Clerk n\'est pas configurée sur ce serveur.');
   const parties = clerkAuthorizedParties(env);
   if (!parties.length) throw new ClerkAuthError(503, 'clerk_misconfigured', 'La connexion par Clerk est mal configurée (aucune origine autorisée : APP_URL ou CLERK_AUTHORIZED_PARTIES).');
@@ -143,4 +149,53 @@ export async function clerkIdentityFromRequest(req: Request, env: NodeJS.Process
   if (!token) throw new ClerkAuthError(401, 'clerk_token_required', 'Jeton de session Clerk requis.');
   const { clerkId } = await verifyClerkSessionToken(token, env);
   return fetchClerkIdentity(clerkId, env);
+}
+
+// -------------------------------------------------------------
+// Diagnostic (levée des réserves, chantier B) — réservé à l'exploitant.
+// Répond, sans afficher aucune clé, aux questions qu'on ne peut pas trancher en lisant les variables :
+// quelles clés sont en place, de quelle sorte, pour quelle instance — et la clé du site et la clé du
+// serveur appartiennent-elles à la MÊME instance ?
+// -------------------------------------------------------------
+export type ClerkDiagnostic = ClerkKeyFacts & {
+  enabled: boolean;
+  problem: ClerkConfigProblem | null;
+  authorizedParties: string[];
+  /**
+   * Identifiants d'instance (« kid » des clés de signature) vus des deux côtés : par le domaine que
+   * désigne la clé du site (public) et par l'API Clerk interrogée avec la clé du serveur.
+   * `same` : true = même instance ; false = deux instances différentes ; null = comparaison impossible.
+   */
+  instance: { site: string[] | null; server: string[] | null; same: boolean | null; detail: string | null };
+};
+
+async function kids(url: string, headers: Record<string, string>, ms: number): Promise<string[]> {
+  const r = await fetch(url, { headers, signal: AbortSignal.timeout(ms) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const body = await r.json() as { keys?: { kid?: unknown }[] };
+  return (body.keys ?? []).map((k) => String(k.kid ?? '')).filter(Boolean).sort();
+}
+
+export async function clerkDiagnostic(env: NodeJS.ProcessEnv = process.env): Promise<ClerkDiagnostic> {
+  const facts = clerkKeyFacts(env);
+  const s = clerkSettings(env);
+  const instance: ClerkDiagnostic['instance'] = { site: null, server: null, same: null, detail: null };
+  const ms = Math.min(clerkTimeoutMs(env), 8_000);
+  const errors: string[] = [];
+  // Adresses de Clerk : modifiables uniquement hors production (tests avec un faux service).
+  const frontendBase = (!isProd(env) && clean(env.CLERK_FRONTEND_API_URL)) || (facts.site.frontendApi ? `https://${facts.site.frontendApi}` : null);
+  const apiBase = s.apiUrl ?? 'https://api.clerk.com';
+  await Promise.all([
+    (async () => {
+      if (!frontendBase) { errors.push('clé du site absente ou illisible'); return; }
+      try { instance.site = await kids(`${frontendBase.replace(/\/$/, '')}/.well-known/jwks.json`, {}, ms); } catch (e) { errors.push(`instance de la clé du site injoignable (${(e as Error).message})`); }
+    })(),
+    (async () => {
+      if (!s.secretKey) { errors.push('CLERK_SECRET_KEY absente'); return; }
+      try { instance.server = await kids(`${apiBase.replace(/\/$/, '')}/v1/jwks`, { authorization: `Bearer ${s.secretKey}` }, ms); } catch (e) { errors.push(`API Clerk refusée ou injoignable avec la clé du serveur (${(e as Error).message})`); }
+    })(),
+  ]);
+  if (instance.site && instance.server) instance.same = instance.site.length > 0 && instance.site.some((k) => instance.server!.includes(k));
+  instance.detail = errors.length ? errors.join(' ; ') : null;
+  return { ...facts, enabled: s.enabled, problem: s.problem, authorizedParties: clerkAuthorizedParties(env), instance };
 }

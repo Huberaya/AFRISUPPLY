@@ -2912,6 +2912,79 @@ var init_billing = __esm({
   }
 });
 
+// apps/api/src/lib/environment.ts
+function deploymentKind(env = process.env) {
+  if (env.VERCEL || env.VERCEL_ENV) {
+    return env.VERCEL_ENV === "production" ? "production" : env.VERCEL_ENV === "preview" ? "preview" : "development";
+  }
+  return env.NODE_ENV === "production" ? "production" : "development";
+}
+var init_environment = __esm({
+  "apps/api/src/lib/environment.ts"() {
+    "use strict";
+  }
+});
+
+// apps/api/src/lib/clerk-config.ts
+function publishableKeyFacts(raw) {
+  const key = clean2(raw) ?? "";
+  const m = /^pk_(test|live)_(.+)$/.exec(key);
+  if (!m) return { mode: null, frontendApi: null };
+  let host = null;
+  try {
+    const decoded = Buffer.from(m[2], "base64").toString("utf8");
+    const h2 = decoded.endsWith("$") ? decoded.slice(0, -1) : "";
+    if (/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(h2) && h2.includes(".")) host = h2.toLowerCase();
+  } catch {
+  }
+  return { mode: m[1], frontendApi: host };
+}
+function secretKeyMode(raw) {
+  const key = clean2(raw) ?? "";
+  return key.startsWith("sk_test_") ? "test" : key.startsWith("sk_live_") ? "live" : null;
+}
+function clerkKeyFacts(env = process.env) {
+  const set = SITE_KEY_VARIABLES.map((variable) => ({ variable, value: clean2(env[variable]) })).filter((x) => !!x.value);
+  const used = set[0] ?? null;
+  return {
+    kind: deploymentKind(env),
+    site: used ? { variable: used.variable, ...publishableKeyFacts(used.value) } : { variable: null, mode: null, frontendApi: null },
+    others: set.slice(1).map((x) => ({ variable: x.variable, ...publishableKeyFacts(x.value), same: x.value === used.value })),
+    server: { present: !!clean2(env.CLERK_SECRET_KEY), mode: secretKeyMode(env.CLERK_SECRET_KEY) },
+    jwtKey: !!clean2(env.CLERK_JWT_KEY)
+  };
+}
+function clerkConfigProblem(env = process.env) {
+  const f = clerkKeyFacts(env);
+  if (!f.server.present) return null;
+  if (f.kind !== "development" && f.server.mode === null) {
+    return { code: "clerk_key_unrecognized", message: "CLERK_SECRET_KEY ne ressemble pas \xE0 une cl\xE9 Clerk (pr\xE9fixe sk_test_ ou sk_live_ attendu) : connexion Clerk coup\xE9e." };
+  }
+  if (f.site.mode && f.server.mode && f.site.mode !== f.server.mode) {
+    return { code: "clerk_keys_mismatch", message: `La cl\xE9 Clerk du site (${f.site.variable}) et CLERK_SECRET_KEY ne sont pas de la m\xEAme sorte (${f.site.mode === "test" ? "d\xE9veloppement" : "production"} / ${f.server.mode === "test" ? "d\xE9veloppement" : "production"}) : elles ne peuvent pas appartenir \xE0 la m\xEAme instance. Connexion Clerk coup\xE9e.` };
+  }
+  const modes = [f.site.mode, f.server.mode];
+  if (f.kind === "production" && modes.includes("test")) {
+    return { code: "clerk_dev_instance_in_production", message: "Cl\xE9s Clerk de d\xE9veloppement (pk_test_ / sk_test_) en production : connexion Clerk coup\xE9e. Elle sera r\xE9tablie avec les cl\xE9s d'une instance Clerk de production (pk_live_ / sk_live_). La connexion par e-mail et mot de passe n'est pas touch\xE9e." };
+  }
+  if (f.kind === "preview" && modes.includes("live")) {
+    return { code: "clerk_live_instance_in_preview", message: "Cl\xE9s Clerk de production (pk_live_ / sk_live_) sur une pr\xE9visualisation : connexion Clerk coup\xE9e. Une pr\xE9visualisation utilise les cl\xE9s de l'instance de d\xE9veloppement." };
+  }
+  return null;
+}
+var clean2, SITE_KEY_VARIABLES;
+var init_clerk_config = __esm({
+  "apps/api/src/lib/clerk-config.ts"() {
+    "use strict";
+    init_environment();
+    clean2 = (v) => {
+      const s = v?.trim();
+      return s ? s : void 0;
+    };
+    SITE_KEY_VARIABLES = ["VITE_CLERK_PUBLISHABLE_KEY", "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_PUBLISHABLE_KEY"];
+  }
+});
+
 // apps/api/src/lib/security.ts
 import { createHash, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 function jwtSecretProblem(raw) {
@@ -2941,6 +3014,9 @@ function checkSecureConfig(env = process.env) {
   if (prod && !env.ADMIN_EMAILS?.trim()) warnings2.push("ADMIN_EMAILS absent : aucune personne ne peut valider les fournisseurs plateforme ni voir les leads.");
   if (prod && env.VENDOR_AUTO_APPROVE === "true") warnings2.push("VENDOR_AUTO_APPROVE=true : tout fournisseur qui s\u2019inscrit est publi\xE9 sans v\xE9rification.");
   if (prod && !env.RESEND_API_KEY?.trim()) warnings2.push("RESEND_API_KEY absent : les e-mails (r\xE9initialisation de mot de passe incluse) ne partiront pas.");
+  if (prod && env.RESEND_API_KEY?.trim() && usesTestSender(env.MAIL_FROM)) {
+    warnings2.push("MAIL_FROM utilise l'adresse d'essai du prestataire d'e-mails (\u2026@resend.dev) : seuls les messages adress\xE9s au titulaire du compte du prestataire sont remis. Les clients ne re\xE7oivent ni confirmation d'adresse, ni mail du matin, ni alerte. V\xE9rifiez un domaine d'envoi chez le prestataire, puis renseignez MAIL_FROM avec une adresse de ce domaine.");
+  }
   if (prod && !env.ALLOWED_ORIGINS?.trim() && !env.APP_URL?.trim()) warnings2.push("ALLOWED_ORIGINS/APP_URL non d\xE9finis : aucune origine tierce ne pourra appeler l\u2019API (le site sur le m\xEAme domaine fonctionne).");
   if (env.BILLING_ENFORCE === "false" && env.STRIPE_SECRET_KEY?.trim()) warnings2.push("BILLING_ENFORCE=false : la facturation Stripe est configur\xE9e mais non appliqu\xE9e.");
   const regions = regionCheck(env);
@@ -2950,8 +3026,15 @@ function checkSecureConfig(env = process.env) {
   const clerkSecret = env.CLERK_SECRET_KEY?.trim();
   const clerkPublic = (env.VITE_CLERK_PUBLISHABLE_KEY ?? env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ?? env.CLERK_PUBLISHABLE_KEY)?.trim();
   if (prod && clerkPublic && !clerkSecret) warnings2.push("Cl\xE9 publique Clerk pr\xE9sente mais CLERK_SECRET_KEY absent : la connexion Clerk affich\xE9e par le site sera refus\xE9e par le serveur.");
-  if (prod && clerkSecret?.startsWith("sk_test_")) warnings2.push("CLERK_SECRET_KEY est une cl\xE9 de test (instance Clerk de d\xE9veloppement) : \xE0 remplacer par l'instance de production avant d'accueillir des clients.");
-  if (prod && clerkPublic?.startsWith("pk_test_")) warnings2.push("La cl\xE9 publique Clerk est une cl\xE9 de test (instance de d\xE9veloppement) : \xE0 remplacer par celle de l'instance de production.");
+  const clerkProblem = clerkConfigProblem(env);
+  if (clerkProblem) warnings2.push(clerkProblem.message);
+  const clerkFacts = clerkKeyFacts(env);
+  for (const o of clerkFacts.others) {
+    warnings2.push(o.same ? `${o.variable} r\xE9p\xE8te la cl\xE9 Clerk du site : seule ${clerkFacts.site.variable} est lue. Variable \xE0 retirer.` : `${o.variable} porte une AUTRE cl\xE9 Clerk que ${clerkFacts.site.variable}${o.frontendApi && clerkFacts.site.frontendApi ? ` (instances \xAB ${o.frontendApi} \xBB et \xAB ${clerkFacts.site.frontendApi} \xBB)` : ""} : seule ${clerkFacts.site.variable} est lue. Variable \xE0 retirer, apr\xE8s avoir v\xE9rifi\xE9 laquelle est la bonne.`);
+  }
+  if (clerkFacts.site.variable && clerkFacts.site.variable !== "VITE_CLERK_PUBLISHABLE_KEY") {
+    warnings2.push(`La cl\xE9 Clerk du site est fournie par ${clerkFacts.site.variable}, que le site ne lit pas (il ne lit que VITE_CLERK_PUBLISHABLE_KEY, au build) : la connexion Clerk n'est pas propos\xE9e aux visiteurs.`);
+  }
   if (prod && clerkSecret && !allowedOrigins(env).length && !env.CLERK_AUTHORIZED_PARTIES?.trim() && !env.VERCEL_PROJECT_PRODUCTION_URL?.trim() && !env.VERCEL_URL?.trim()) {
     warnings2.push("Clerk est configur\xE9 sans origine autoris\xE9e (APP_URL, ALLOWED_ORIGINS ou CLERK_AUTHORIZED_PARTIES) : toute connexion Clerk sera refus\xE9e.");
   }
@@ -3003,11 +3086,12 @@ function isKnownPath(path6) {
   if (!knownMatchers) return true;
   return knownMatchers.some((r) => r.test(path6.replace(/\/$/, "") || "/"));
 }
-var DEV_SECRETS, isProd, adminEmails, COMMON_PASSWORDS, PASSWORD_MIN_LENGTH, knownMatchers, escapeRe, ROLE_RANK, roleAtLeast;
+var DEV_SECRETS, isProd, adminEmails, usesTestSender, COMMON_PASSWORDS, PASSWORD_MIN_LENGTH, knownMatchers, escapeRe, ROLE_RANK, roleAtLeast;
 var init_security = __esm({
   "apps/api/src/lib/security.ts"() {
     "use strict";
     init_src();
+    init_clerk_config();
     DEV_SECRETS = /* @__PURE__ */ new Set([
       "dev-secret-change-me-in-production",
       "dev-secret-local",
@@ -3019,6 +3103,7 @@ var init_security = __esm({
     ]);
     isProd = (env = process.env) => env.NODE_ENV === "production" || env.VERCEL_ENV === "production";
     adminEmails = (env = process.env) => (env.ADMIN_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    usesTestSender = (from) => /@resend\.dev\b/i.test(from ?? "");
     COMMON_PASSWORDS = /* @__PURE__ */ new Set([
       "12345678",
       "123456789",
@@ -9301,6 +9386,7 @@ init_ops();
 
 // apps/api/src/lib/clerk.ts
 init_security();
+init_clerk_config();
 import { createClerkClient, verifyToken as verifyToken2 } from "@clerk/backend";
 var ClerkAuthError = class extends Error {
   constructor(status, code, message) {
@@ -9310,16 +9396,17 @@ var ClerkAuthError = class extends Error {
     this.name = "ClerkAuthError";
   }
 };
-var clean2 = (v) => {
+var clean3 = (v) => {
   const s = v?.trim();
   return s ? s : void 0;
 };
 function clerkSettings(env = process.env) {
-  const secretKey = clean2(env.CLERK_SECRET_KEY);
-  const jwtKey = clean2(env.CLERK_JWT_KEY)?.replace(/\\n/g, "\n");
-  const publishableKey = clean2(env.VITE_CLERK_PUBLISHABLE_KEY) ?? clean2(env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) ?? clean2(env.CLERK_PUBLISHABLE_KEY);
-  const apiUrl = isProd(env) ? void 0 : clean2(env.CLERK_API_URL);
-  return { secretKey, jwtKey, publishableKey, apiUrl, enabled: !!secretKey };
+  const secretKey = clean3(env.CLERK_SECRET_KEY);
+  const jwtKey = clean3(env.CLERK_JWT_KEY)?.replace(/\\n/g, "\n");
+  const publishableKey = clean3(env.VITE_CLERK_PUBLISHABLE_KEY) ?? clean3(env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) ?? clean3(env.CLERK_PUBLISHABLE_KEY);
+  const apiUrl = isProd(env) ? void 0 : clean3(env.CLERK_API_URL);
+  const problem = secretKey ? clerkConfigProblem(env) : null;
+  return { secretKey, jwtKey, publishableKey, apiUrl, problem, enabled: !!secretKey && !problem };
 }
 function clerkAuthorizedParties(env = process.env) {
   const list = new Set(allowedOrigins(env));
@@ -9328,7 +9415,7 @@ function clerkAuthorizedParties(env = process.env) {
     if (s) list.add(s);
   }
   const host = (h2) => {
-    const s = clean2(h2);
+    const s = clean3(h2);
     if (s) list.add(`https://${s.replace(/^https?:\/\//, "").replace(/\/$/, "")}`);
   };
   if (env.VERCEL_ENV === "production") host(env.VERCEL_PROJECT_PRODUCTION_URL);
@@ -9367,6 +9454,7 @@ var avecDelai = (p, ms) => new Promise((ok, ko) => {
 var SERVER_SIDE_REASONS = /^(jwk-remote-failed-to-load|jwk-remote-invalid|jwk-failed-to-resolve|jwk-local-missing|secret-key-invalid)$/;
 async function verifyClerkSessionToken(token, env = process.env) {
   const s = clerkSettings(env);
+  if (s.problem) throw new ClerkAuthError(503, s.problem.code, "La connexion par Clerk n'est pas disponible sur ce serveur. Utilisez votre e-mail et votre mot de passe.");
   if (!s.enabled) throw new ClerkAuthError(503, "clerk_not_configured", "La connexion par Clerk n'est pas configur\xE9e sur ce serveur.");
   const parties = clerkAuthorizedParties(env);
   if (!parties.length) throw new ClerkAuthError(503, "clerk_misconfigured", "La connexion par Clerk est mal configur\xE9e (aucune origine autoris\xE9e : APP_URL ou CLERK_AUTHORIZED_PARTIES).");
@@ -9415,6 +9503,48 @@ async function clerkIdentityFromRequest(req, env = process.env) {
   if (!token) throw new ClerkAuthError(401, "clerk_token_required", "Jeton de session Clerk requis.");
   const { clerkId } = await verifyClerkSessionToken(token, env);
   return fetchClerkIdentity(clerkId, env);
+}
+async function kids(url, headers, ms) {
+  const r = await fetch(url, { headers, signal: AbortSignal.timeout(ms) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const body3 = await r.json();
+  return (body3.keys ?? []).map((k) => String(k.kid ?? "")).filter(Boolean).sort();
+}
+async function clerkDiagnostic(env = process.env) {
+  const facts = clerkKeyFacts(env);
+  const s = clerkSettings(env);
+  const instance = { site: null, server: null, same: null, detail: null };
+  const ms = Math.min(clerkTimeoutMs(env), 8e3);
+  const errors2 = [];
+  const frontendBase = !isProd(env) && clean3(env.CLERK_FRONTEND_API_URL) || (facts.site.frontendApi ? `https://${facts.site.frontendApi}` : null);
+  const apiBase = s.apiUrl ?? "https://api.clerk.com";
+  await Promise.all([
+    (async () => {
+      if (!frontendBase) {
+        errors2.push("cl\xE9 du site absente ou illisible");
+        return;
+      }
+      try {
+        instance.site = await kids(`${frontendBase.replace(/\/$/, "")}/.well-known/jwks.json`, {}, ms);
+      } catch (e) {
+        errors2.push(`instance de la cl\xE9 du site injoignable (${e.message})`);
+      }
+    })(),
+    (async () => {
+      if (!s.secretKey) {
+        errors2.push("CLERK_SECRET_KEY absente");
+        return;
+      }
+      try {
+        instance.server = await kids(`${apiBase.replace(/\/$/, "")}/v1/jwks`, { authorization: `Bearer ${s.secretKey}` }, ms);
+      } catch (e) {
+        errors2.push(`API Clerk refus\xE9e ou injoignable avec la cl\xE9 du serveur (${e.message})`);
+      }
+    })()
+  ]);
+  if (instance.site && instance.server) instance.same = instance.site.length > 0 && instance.site.some((k) => instance.server.includes(k));
+  instance.detail = errors2.length ? errors2.join(" ; ") : null;
+  return { ...facts, enabled: s.enabled, problem: s.problem, authorizedParties: clerkAuthorizedParties(env), instance };
 }
 
 // apps/api/src/routes/auth.ts
@@ -9842,9 +9972,9 @@ function pick(row, key) {
   return "";
 }
 var toNumber = (s) => {
-  const clean3 = s.replace(/[€\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
-  const n18 = Number(clean3);
-  return Number.isFinite(n18) && clean3 !== "" ? n18 : null;
+  const clean4 = s.replace(/[€\s]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
+  const n18 = Number(clean4);
+  return Number.isFinite(n18) && clean4 !== "" ? n18 : null;
 };
 function parsePack(label) {
   const s = label.toLowerCase().replace(",", ".");
@@ -13426,13 +13556,152 @@ shoppingRoutes.get("/shopping/suggestions", async (c) => {
 // apps/api/src/routes/status.ts
 init_src();
 init_security();
+import { Hono as Hono23 } from "hono";
+import { desc as desc18, sql as sql34 } from "drizzle-orm";
+init_clerk_config();
+
+// apps/api/src/lib/config-diagnostic.ts
+init_src();
+init_security();
+init_environment();
+import { sql as sql33 } from "drizzle-orm";
+init_ops();
+init_mailer();
+init_offsite();
+var VARIABLES_SUIVIES = [
+  // base et environnement
+  "DATABASE_URL",
+  "PREVIEW_DATABASE_URL",
+  "MIGRATE_ON_BUILD",
+  "AUTO_MIGRATE",
+  "SKIP_MIGRATE",
+  "SEED_DEMO",
+  "ALLOW_DEMO_SEED",
+  "ALLOW_INSECURE_CONFIG",
+  // sessions, origines, exploitation
+  "JWT_SECRET",
+  "AUTH_TOKEN_TTL",
+  "CRON_SECRET",
+  "ADMIN_EMAILS",
+  "APP_URL",
+  "ALLOWED_ORIGINS",
+  "TRUST_PROXY",
+  "JOBS_SELF_URL",
+  "VENDOR_AUTO_APPROVE",
+  // Clerk
+  "VITE_CLERK_PUBLISHABLE_KEY",
+  "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+  "CLERK_PUBLISHABLE_KEY",
+  "CLERK_SECRET_KEY",
+  "CLERK_JWT_KEY",
+  "CLERK_AUTHORIZED_PARTIES",
+  // e-mail, SMS
+  "RESEND_API_KEY",
+  "MAIL_FROM",
+  "SUPPORT_EMAIL",
+  "TWILIO_ACCOUNT_SID",
+  "TWILIO_AUTH_TOKEN",
+  "TWILIO_SMS_FROM",
+  "TWILIO_WHATSAPP_FROM",
+  // paiement, factures
+  "STRIPE_SECRET_KEY",
+  "STRIPE_WEBHOOK_SECRET",
+  "BILLING_ENFORCE",
+  "INVOICE_COMPANY",
+  "INVOICE_SIRET",
+  "INVOICE_VAT",
+  // sauvegardes, supervision, assistant
+  "BACKUP_S3_ENDPOINT",
+  "BACKUP_S3_BUCKET",
+  "BACKUP_S3_ACCESS_KEY_ID",
+  "BACKUP_S3_SECRET_ACCESS_KEY",
+  "BACKUP_S3_REGION",
+  "SENTRY_DSN",
+  "LLM_API_KEY"
+];
+async function databaseDiagnostic(env = process.env) {
+  const url = getDatabaseUrl(env);
+  let host = null;
+  try {
+    host = url ? new URL(url).hostname : null;
+  } catch {
+    host = null;
+  }
+  const r = databaseRegion(env);
+  const out = {
+    driver: url ? "neon" : "pglite",
+    host,
+    region: r ? `${r.provider}/${r.region}` : null,
+    role: null,
+    superuser: null,
+    bypassRls: null,
+    canCreateTables: null,
+    tables: null,
+    rlsTables: null,
+    rlsForced: null,
+    policies: null,
+    migrations: null,
+    error: null
+  };
+  try {
+    const db = await getDb();
+    const res = await db.execute(sql33`
+      select current_user::text as role,
+             (select rolsuper from pg_roles where rolname = current_user) as superuser,
+             (select rolbypassrls from pg_roles where rolname = current_user) as bypass_rls,
+             has_schema_privilege(current_user, 'public', 'CREATE') as can_create,
+             (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r') as tables,
+             (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity) as rls_tables,
+             (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and c.relforcerowsecurity) as rls_forced,
+             (select count(*)::int from pg_policies where schemaname = 'public') as policies`);
+    const row = (res.rows ?? [])[0];
+    if (row) {
+      const bool = (v) => v === null || v === void 0 ? null : v === true || v === "t" || v === "true";
+      out.role = row.role === null || row.role === void 0 ? null : String(row.role);
+      out.superuser = bool(row.superuser);
+      out.bypassRls = bool(row.bypass_rls);
+      out.canCreateTables = bool(row.can_create);
+      out.tables = Number(row.tables);
+      out.rlsTables = Number(row.rls_tables);
+      out.rlsForced = Number(row.rls_forced);
+      out.policies = Number(row.policies);
+    }
+    const m = await migrationStatus();
+    out.migrations = { state: m.state, expected: m.expected, applied: m.applied };
+  } catch (e) {
+    out.error = e.message.slice(0, 200);
+  }
+  return out;
+}
+async function configDiagnostic(env = process.env) {
+  const check = checkSecureConfig(env);
+  const mc = mailerConfig();
+  const from = mc.from ?? "";
+  return {
+    ...buildInfo(),
+    environment: deploymentKind(env),
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    // Conforme = présent, 32 caractères au moins, pas une valeur d'exemple. Ni la valeur ni sa longueur ne sortent d'ici.
+    sessionSecret: { ok: jwtSecretProblem(env.JWT_SECRET) === null },
+    config: { errors: check.errors.length, warnings: check.warnings },
+    admins: { declared: adminEmails(env).length },
+    clerk: await clerkDiagnostic(env),
+    database: await databaseDiagnostic(env),
+    regions: regionCheck(env),
+    mail: { transport: mc.transport, from, testSender: mc.transport === "resend" && usesTestSender(from) },
+    backups: { offsiteConfigured: offsiteConfigured() },
+    errorTracking: { configured: sentryEnabled() },
+    cron: { configured: !!env.CRON_SECRET?.trim() },
+    variables: Object.fromEntries(VARIABLES_SUIVIES.map((name) => [name, !!env[name]?.trim()]))
+  };
+}
+
+// apps/api/src/routes/status.ts
 init_ops();
 init_ops_health();
 init_backup();
 init_mailer();
 init_sms();
-import { Hono as Hono23 } from "hono";
-import { desc as desc18, sql as sql33 } from "drizzle-orm";
 var statusRoutes = new Hono23();
 var schemaCache = null;
 async function schemaStatus() {
@@ -13454,10 +13723,10 @@ statusRoutes.get("/status", async (c) => {
   }
   try {
     const db = await getDb();
-    await db.execute(sql33`select 1`);
+    await db.execute(sql34`select 1`);
     dbOk = true;
     const t1 = Date.now();
-    await db.execute(sql33`select 1`);
+    await db.execute(sql34`select 1`);
     dbMs = Date.now() - t1;
     jobs = publicJobHealth(await jobHealth());
     const st = await backupStorageStats();
@@ -13470,6 +13739,8 @@ statusRoutes.get("/status", async (c) => {
   const degraded = Object.values(jobs).some((j) => j.state === "degraded");
   const schemaBehind = schema.state === "en_retard" || schema.state === "non_initialisee";
   const ok = dbOk && !degraded && !schemaBehind;
+  const clerk = clerkSettings();
+  const clerkFacts = clerkKeyFacts();
   return c.json({
     ok,
     ...buildInfo(),
@@ -13482,10 +13753,16 @@ statusRoutes.get("/status", async (c) => {
       jobs,
       // Compatibilité : l'ancien champ dailyJob reste exposé (supervision externe existante).
       dailyJob: jobs.daily ?? { state: "never", maxHours: 30, lastRun: null },
-      mail: { transport: mc.transport, configured: mc.transport === "resend", delivered: mc.transport !== "log", from: mc.from, stats: mailStats(), outboxCount: mc.transport === "file" ? await outboxCount() : null },
+      // `testSender` : l'expéditeur est l'adresse d'essai du prestataire — les messages ne sont remis
+      // qu'au titulaire du compte du prestataire, pas aux clients.
+      mail: { transport: mc.transport, configured: mc.transport === "resend", delivered: mc.transport !== "log", from: mc.from, testSender: mc.transport === "resend" && usesTestSender(mc.from), stats: mailStats(), outboxCount: mc.transport === "file" ? await outboxCount() : null },
       sms: { configured: sc.enabled, whatsapp: sc.whatsapp, delivered: sc.enabled, stats: smsStats() },
       errorTracking: { configured: sentryEnabled() },
       cron: { configured: !!process.env.CRON_SECRET, jobs: ["/api/jobs/daily", "/api/jobs/reminders"] },
+      auth: {
+        sessionSecret: jwtSecretProblem(process.env.JWT_SECRET) === null ? "ok" : "a_corriger",
+        clerk: { enabled: clerk.enabled, mode: clerkFacts.server.mode ?? clerkFacts.site.mode, problem: clerk.problem?.code ?? null }
+      },
       backups: { files: backup.files, lastAt: backup.lastAt, ageHours: backup.ageHours, retentionDays: backup.keep, ok: backup.files > 0 && (backup.ageHours ?? 999) <= 36 }
     },
     support: { email: SUPPORT.email(), hours: SUPPORT.hours, responseTime: SUPPORT.responseTime, phone: SUPPORT.phone() }
@@ -13495,6 +13772,11 @@ statusRoutes.get("/status/jobs", async (c) => {
   if (cronSecretCheck({ cron: c.req.header("x-cron-secret"), authorization: c.req.header("authorization") }, void 0) !== "ok") return c.json({ error: "Non autoris\xE9" }, 401);
   const db = await getDb();
   return c.json({ runs: await db.select().from(jobRuns).orderBy(desc18(jobRuns.startedAt)).limit(Math.min(100, Number(c.req.query("limit") ?? 30))) });
+});
+statusRoutes.get("/status/config", async (c) => {
+  if (cronSecretCheck({ cron: c.req.header("x-cron-secret"), authorization: c.req.header("authorization") }, void 0) !== "ok") return c.json({ error: "Non autoris\xE9" }, 401);
+  c.header("Cache-Control", "no-store");
+  return c.json(await configDiagnostic());
 });
 
 // apps/api/src/routes/ops.ts
@@ -13509,7 +13791,7 @@ init_sms();
 init_job_runs();
 import { Hono as Hono24 } from "hono";
 import { z as z22 } from "zod";
-import { and as and35, desc as desc19, eq as eq39, ilike as ilike4, or as or7, sql as sql34 } from "drizzle-orm";
+import { and as and35, desc as desc19, eq as eq39, ilike as ilike4, or as or7, sql as sql35 } from "drizzle-orm";
 var opsRoutes = new Hono24();
 opsRoutes.get("/backup/export", requireAuth, requireRestaurant, requireMinRole("owner"), async (c) => {
   const rid2 = c.get("restaurantId");
@@ -13548,7 +13830,7 @@ adminOpsRoutes.get("/admin/ops", requireAuth, adminOnly, async (c) => {
   const [lastBackupRun] = await db.select().from(jobRuns).where(eq39(jobRuns.job, "backup")).orderBy(desc19(jobRuns.startedAt)).limit(1);
   const horsSite = await offsiteStats();
   const t0 = Date.now();
-  await db.execute(sql34`select 1`);
+  await db.execute(sql35`select 1`);
   const dbMs = Date.now() - t0;
   const regions = regionCheck();
   const mc = mailerConfig();
@@ -13711,7 +13993,7 @@ adminOpsRoutes.get("/admin/audit", requireAuth, adminOnly, async (c) => {
     c.header("Content-Disposition", `attachment; filename="journal-audit-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.csv"`);
     return c.body(csv);
   }
-  const [count] = await db.select({ n: sql34`count(*)` }).from(auditLog);
+  const [count] = await db.select({ n: sql35`count(*)` }).from(auditLog);
   return c.json({ rows, total: Number(count.n), filters: { q: q2 ?? null, action: action ?? null, limit } });
 });
 adminOpsRoutes.get("/admin/ops/jobs", requireAuth, adminOnly, async (c) => {

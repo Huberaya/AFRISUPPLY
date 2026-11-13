@@ -11,6 +11,7 @@
 
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { getDatabaseUrl, databaseUnavailableReason, regionCheck } from '@afrisupply/db';
+import { clerkConfigProblem, clerkKeyFacts } from './clerk-config.js';
 
 const DEV_SECRETS = new Set([
   'dev-secret-change-me-in-production', 'dev-secret-local', 'test-secret', 'secret', 'changeme',
@@ -33,6 +34,9 @@ export function jwtSecretProblem(raw: string | undefined): string | null {
 /** Adresses des exploitants de la plateforme (ADMIN_EMAILS), en minuscules. */
 export const adminEmails = (env: NodeJS.ProcessEnv = process.env): string[] =>
   (env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+/** L'expéditeur est-il l'adresse d'essai du prestataire d'e-mails (remise limitée au titulaire du compte) ? */
+export const usesTestSender = (from: string | undefined): boolean => /@resend\.dev\b/i.test(from ?? '');
 
 export type ConfigCheck = { errors: string[]; warnings: string[] };
 
@@ -66,6 +70,11 @@ export function checkSecureConfig(env: NodeJS.ProcessEnv = process.env): ConfigC
   if (prod && !env.ADMIN_EMAILS?.trim()) warnings.push('ADMIN_EMAILS absent : aucune personne ne peut valider les fournisseurs plateforme ni voir les leads.');
   if (prod && env.VENDOR_AUTO_APPROVE === 'true') warnings.push('VENDOR_AUTO_APPROVE=true : tout fournisseur qui s’inscrit est publié sans vérification.');
   if (prod && !env.RESEND_API_KEY?.trim()) warnings.push('RESEND_API_KEY absent : les e-mails (réinitialisation de mot de passe incluse) ne partiront pas.');
+  // Levée des réserves (chantier F) : avec l'adresse d'essai du prestataire, seuls les messages
+  // adressés au titulaire du compte du prestataire sont remis — aucun client ne reçoit rien.
+  if (prod && env.RESEND_API_KEY?.trim() && usesTestSender(env.MAIL_FROM)) {
+    warnings.push('MAIL_FROM utilise l\'adresse d\'essai du prestataire d\'e-mails (…@resend.dev) : seuls les messages adressés au titulaire du compte du prestataire sont remis. Les clients ne reçoivent ni confirmation d\'adresse, ni mail du matin, ni alerte. Vérifiez un domaine d\'envoi chez le prestataire, puis renseignez MAIL_FROM avec une adresse de ce domaine.');
+  }
   if (prod && !env.ALLOWED_ORIGINS?.trim() && !env.APP_URL?.trim()) warnings.push('ALLOWED_ORIGINS/APP_URL non définis : aucune origine tierce ne pourra appeler l’API (le site sur le même domaine fonctionne).');
   if (env.BILLING_ENFORCE === 'false' && env.STRIPE_SECRET_KEY?.trim()) warnings.push('BILLING_ENFORCE=false : la facturation Stripe est configurée mais non appliquée.');
 
@@ -81,8 +90,19 @@ export function checkSecureConfig(env: NodeJS.ProcessEnv = process.env): ConfigC
   const clerkSecret = env.CLERK_SECRET_KEY?.trim();
   const clerkPublic = (env.VITE_CLERK_PUBLISHABLE_KEY ?? env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ?? env.CLERK_PUBLISHABLE_KEY)?.trim();
   if (prod && clerkPublic && !clerkSecret) warnings.push('Clé publique Clerk présente mais CLERK_SECRET_KEY absent : la connexion Clerk affichée par le site sera refusée par le serveur.');
-  if (prod && clerkSecret?.startsWith('sk_test_')) warnings.push('CLERK_SECRET_KEY est une clé de test (instance Clerk de développement) : à remplacer par l\'instance de production avant d\'accueillir des clients.');
-  if (prod && clerkPublic?.startsWith('pk_test_')) warnings.push('La clé publique Clerk est une clé de test (instance de développement) : à remplacer par celle de l\'instance de production.');
+  // Levée des réserves (chantier B) : des clés qui ne conviennent pas à l'environnement coupent la
+  // connexion Clerk (lib/clerk-config.ts) ; l'avertissement dit pourquoi, sans jamais afficher une clé.
+  const clerkProblem = clerkConfigProblem(env);
+  if (clerkProblem) warnings.push(clerkProblem.message);
+  const clerkFacts = clerkKeyFacts(env);
+  for (const o of clerkFacts.others) {
+    warnings.push(o.same
+      ? `${o.variable} répète la clé Clerk du site : seule ${clerkFacts.site.variable} est lue. Variable à retirer.`
+      : `${o.variable} porte une AUTRE clé Clerk que ${clerkFacts.site.variable}${o.frontendApi && clerkFacts.site.frontendApi ? ` (instances « ${o.frontendApi} » et « ${clerkFacts.site.frontendApi} »)` : ''} : seule ${clerkFacts.site.variable} est lue. Variable à retirer, après avoir vérifié laquelle est la bonne.`);
+  }
+  if (clerkFacts.site.variable && clerkFacts.site.variable !== 'VITE_CLERK_PUBLISHABLE_KEY') {
+    warnings.push(`La clé Clerk du site est fournie par ${clerkFacts.site.variable}, que le site ne lit pas (il ne lit que VITE_CLERK_PUBLISHABLE_KEY, au build) : la connexion Clerk n'est pas proposée aux visiteurs.`);
+  }
   if (prod && clerkSecret && !allowedOrigins(env).length && !env.CLERK_AUTHORIZED_PARTIES?.trim() && !env.VERCEL_PROJECT_PRODUCTION_URL?.trim() && !env.VERCEL_URL?.trim()) {
     warnings.push('Clerk est configuré sans origine autorisée (APP_URL, ALLOWED_ORIGINS ou CLERK_AUTHORIZED_PARTIES) : toute connexion Clerk sera refusée.');
   }
