@@ -22,8 +22,12 @@
     "build:api": "node api/build.mjs",
     "deploy:migrate": "node scripts/deploy-migrate.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
+    "check:depot": "node scripts/controle-depot-public.mjs --auto-test && node scripts/controle-depot-public.mjs",
+    "check:base-neuve": "node scripts/base-neuve.mjs --check",
+    "check:bundle:run": "node scripts/fumee-bundle.mjs",
     "verifs:e2e": "bash scripts/verifications/toutes.sh",
-    "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run check:bundle"
+    "verifs:navigateur": "npm --prefix scripts/navigateur ci --no-audit --no-fund && node scripts/navigateur/parcours.mjs",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run check:bundle && npm run check:bundle:run && npm run check:depot && npm run check:base-neuve"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
@@ -40,13 +44,16 @@
   },
   "dependencies": {
     "@afrisupply/api": "*",
-    "drizzle-orm": "^0.45.2",
-    "hono": "^4.6.14"
+    "@hono/node-server": "^2.1.8",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.18",
+    "zod": "^4.6.7"
   },
   "overrides": {
     "esbuild": "^0.25.12",
     "@esbuild-kit/core-utils": {
       "esbuild": "^0.25.12"
-    }
+    },
+    "shell-quote": "^1.11.0"
   }
 }

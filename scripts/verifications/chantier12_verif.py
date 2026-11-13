@@ -144,6 +144,16 @@ if st != 201:
     st, admin, _ = call("POST", "/auth/login", body={"email": "admin@afrisupply.fr", "password": PWD})
 T_ADMIN = (admin or {}).get("token")
 check("compte administrateur plateforme disponible", bool(T_ADMIN), f"HTTP {st}")
+# Chantier P0.2 : les droits d'exploitant exigent une adresse prouvée. On suit le vrai parcours : le
+# lien de confirmation reçu à l'inscription (ou renvoyé si le compte existait déjà).
+lien_admin = ((admin or {}).get("emailVerification") or {}).get("devLink")
+if not lien_admin:
+    _st, renvoi, _ = call("POST", "/auth/resend-verification", T_ADMIN)
+    lien_admin = (renvoi or {}).get("devLink")
+if lien_admin:
+    call("POST", "/auth/verify-email", body={"token": lien_admin.split("token=")[-1]})
+st, moi, _ = call("GET", "/auth/me", T_ADMIN)
+check("l'exploitant a prouvé son adresse : ses droits sont ouverts", st == 200 and ((moi or {}).get("user") or {}).get("isAdmin") is True, f"HTTP {st}")
 
 st, run, _ = call("POST", "/admin/backups/run", T_ADMIN, body={})
 ecrits = (run or {}).get("written") or []
@@ -249,7 +259,8 @@ check("la surveillance croisée s'exécute et dit combien de tâches elle a rega
       st == 200 and (wd1 or {}).get("checked") == len(attendus),
       f"HTTP {st} · {len((wd1 or {}).get('late') or [])} en problème sur {len(attendus)} supervisée(s)")
 
-st, cron, _ = call("GET", "/jobs/daily", headers={"X-Cron-Secret": CRON})
+# « force=1 » : une passe par jour sinon (chantier P0.4) — ici on veut la voir tourner maintenant.
+st, cron, _ = call("GET", "/jobs/daily?force=1", headers={"X-Cron-Secret": CRON})
 check("le job quotidien réel tourne (digest, essais, relances, sauvegarde)",
       st == 200 and (cron or {}).get("count", 0) >= 1, f"HTTP {st} · {(cron or {}).get('count')} restaurant(s)")
 check("il écrit réellement les sauvegardes (pas seulement le bloc « digest »)",

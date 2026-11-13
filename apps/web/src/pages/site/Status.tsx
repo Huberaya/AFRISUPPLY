@@ -24,7 +24,9 @@ type S = {
   support: { email: string; hours: string; responseTime: string; phone: string | null };
 };
 
-const JOB_LABEL: Record<string, string> = { daily: 'E-mail du matin', reminders: 'Relances grossistes', 'alerts-notify': 'Alertes urgentes', backup: 'Sauvegardes' };
+const JOB_LABEL: Record<string, string> = { daily: 'E-mail du matin', reminders: 'Relances grossistes', 'alerts-notify': 'Alertes urgentes', backup: 'Sauvegardes', 'offsite-backup': 'Copie externe des sauvegardes' };
+// Résultat du dernier passage, en clair : la page est publique, elle ne montre pas les mots du code.
+const RESULTAT: Record<string, string> = { ok: 'réussi', partial: 'partiel', error: 'en échec', running: 'en cours', interrompue: 'interrompu', incomplete: 'inachevé' };
 const dot = (ok: boolean | 'warn') => <span className={`inline-block h-3 w-3 rounded-full ${ok === true ? 'bg-emerald-500' : ok === 'warn' ? 'bg-amber-500' : 'bg-red-500'}`} />;
 
 export default function Status() {
@@ -50,7 +52,7 @@ export default function Status() {
               label={JOB_LABEL[job] ?? job}
               ok={j.state === 'ok' ? true : j.state === 'never' ? 'warn' : false}
               detail={j.lastRun
-                ? `dernier passage ${j.lastRun.status} il y a ${j.lastRun.hoursAgo} h (maximum accepté : ${j.maxHours} h)`
+                ? `dernier passage ${RESULTAT[j.lastRun.status] ?? j.lastRun.status} il y a ${j.lastRun.hoursAgo} h (maximum accepté : ${j.maxHours} h)`
                 : `aucun passage enregistré — tâche en cours de mise en service`}
             />
           ))}

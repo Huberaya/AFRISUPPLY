@@ -145,8 +145,12 @@ describe('2. Mot de passe oublié : usage unique et sessions révoquées', () =>
     const unknown = await call('POST', '/api/auth/forgot-password', { body: { email: 'personne@nulle-part.fr' } });
     expect(unknown.status).toBe(200);
     expect(unknown.json.ok).toBe(true);
-    expect(unknown.json.delivered).toBeUndefined();                 // aucun envoi : on ne prétend rien
     const forgot = await call('POST', '/api/auth/forgot-password', { body: { email: owner.email } });
+    // Chantier P0.3 : hormis le lien de développement, les deux réponses sont identiques champ pour champ
+    // (avant : `delivered` et `transport` n'apparaissaient que pour une adresse connue).
+    const sansLien = ({ devLink: _lien, ...reste }: Record<string, unknown>) => reste;
+    expect(sansLien(forgot.json)).toEqual(sansLien(unknown.json));
+    expect(unknown.json.devLink).toBeUndefined();
     const weak = await call('POST', '/api/auth/reset-password', { body: { token: tokenOf(forgot.json.devLink), password: 'motdepasse' } });
     expect(weak.status).toBe(400);
     expect(weak.json.code).toBe('weak_password');

@@ -4,9 +4,9 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
-import { getDb, restaurants, auditLog, jobRuns } from '@afrisupply/db';
+import { getDb, restaurants, auditLog, jobRuns, isNeon, onVercel, regionCheck } from '@afrisupply/db';
 import type { MiddlewareHandler } from 'hono';
-import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { buildInfo, sentryEnabled, audit } from '../lib/ops.js';
 import { SUPPORT, jobHealth, watchdog } from '../lib/ops-health.js';
 import {
@@ -18,7 +18,6 @@ import { mailerConfig, mailStats, outboxCount } from '../lib/mailer.js';
 import { smsConfig, smsStats } from '../lib/sms.js';
 import { recordJobRun, statusFrom } from '../lib/job-runs.js';
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 
 export const opsRoutes = new Hono<Env>();
 
@@ -60,7 +59,7 @@ export const adminOpsRoutes = new Hono<Env>();
 // sous /api reviendrait à filtrer TOUTES les requêtes de la plateforme. Chaque route admin se
 // déclare donc elle-même « admin uniquement », sans effet de bord.
 const adminOnly: MiddlewareHandler<Env> = async (c, next) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   await next();
 };
 
@@ -77,6 +76,7 @@ adminOpsRoutes.get('/admin/ops', requireAuth, adminOnly, async (c) => {
   // Chantier 13 : l'état de la copie HORS SITE (aucun secret : ni clé, ni jeton).
   const horsSite = await offsiteStats();
   const t0 = Date.now(); await db.execute(sql`select 1`); const dbMs = Date.now() - t0;
+  const regions = regionCheck();
   const mc = mailerConfig(); const sc = smsConfig();
   const problems = [
     ...Object.entries(jobs).filter(([, h]) => h.state === 'degraded' || h.state === 'stale').map(([job, h]) => `Job « ${job} » : ${h.state === 'stale' ? `aucun passage depuis ${h.lastRun?.hoursAgo ?? '?'} h (max ${h.maxHours} h)` : `dernier passage en échec (${h.lastRun?.error ?? 'sans détail'})`}`),
@@ -91,6 +91,8 @@ adminOpsRoutes.get('/admin/ops', requireAuth, adminOnly, async (c) => {
     ...(horsSite.configured && horsSite.lastUploadAt && (Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 3_600_000 > 36 ? [`Aucune copie hors site depuis ${Math.round((Date.now() - new Date(horsSite.lastUploadAt).getTime()) / 3_600_000)} h : la copie externe ne se fait plus.`] : []),
     ...(mc.transport !== 'resend' ? [`Envoi d'e-mails en mode « ${mc.transport} » : aucun e-mail ne part vers l'extérieur.`] : []),
     ...(sentryEnabled() ? [] : ['Suivi d\'erreurs (Sentry) non configuré : les incidents ne sont visibles que dans les journaux du serveur.']),
+    // Chantier P0.4 : fonctions loin de la base — chaque requête SQL paie la distance (mesurée ci-dessous).
+    ...(regions.voisines === false ? [`Fonctions en « ${regions.fonction} », base en « ${regions.base} » : ${dbMs} ms par requête SQL. Région de fonctions conseillée : « ${regions.conseillee} ».`] : []),
   ];
   return c.json({
     ok: problems.length === 0, checkedAt: new Date().toISOString(), problems,
@@ -102,7 +104,8 @@ adminOpsRoutes.get('/admin/ops', requireAuth, adminOnly, async (c) => {
       sms: { configured: sc.enabled, whatsapp: sc.whatsapp, stats: smsStats() },
       errorTracking: { configured: sentryEnabled() },
     },
-    database: { latencyMs: dbMs, engine: process.env.DATABASE_URL ? 'neon' : 'pglite-local' },
+    // `engine` dit la base RÉELLEMENT utilisée (une prévisualisation ignore DATABASE_URL) ; `regions` dit si les fonctions en sont proches.
+    database: { latencyMs: dbMs, engine: isNeon() ? 'neon' : onVercel() ? 'aucune' : 'pglite-local', regions },
     build: buildInfo(), adminAlerts: alerts, support: { email: SUPPORT.email(), hours: SUPPORT.hours, responseTime: SUPPORT.responseTime, phone: SUPPORT.phone() },
   });
 });

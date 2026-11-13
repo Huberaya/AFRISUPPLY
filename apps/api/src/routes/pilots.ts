@@ -2,19 +2,25 @@
 // mesure d'usage, cockpit admin (santé de chaque pilote) et rapport hebdo.
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { randomInt } from 'node:crypto';
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { getDb, restaurants, restaurantMembers, users, leads, feedback, usageEvents, suppliers, supplierOffers, inventoryItems, recipes, sales, orders, deliveries, stockMovements, alerts } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
 import { FOUNDER_OFFER } from './public.js';
+import { h, nl2br } from '../lib/html.js';
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 const APP = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const n = (v: unknown) => Number(v ?? 0);
 
-/** Code d'invitation lisible : PILOTE-XXXX (sans caractères ambigus). */
-export function makeInviteCode() { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for (let i = 0; i < 4; i++) s += A[Math.floor(Math.random() * A.length)]; return `PILOTE-${s}`; }
+/**
+ * Code d'invitation lisible : PILOTE-XXXXXXXXXX (10 caractères, sans caractères ambigus).
+ * Chantier P0.3 : tirage cryptographique et 32^10 combinaisons. Avant : 4 caractères tirés avec
+ * Math.random (un million de combinaisons, prévisibles) alors que le code ouvre droit à la remise
+ * fondateur et révèle le nom et l'adresse du prospect invité.
+ */
+export function makeInviteCode() { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for (let i = 0; i < 10; i++) s += A[randomInt(A.length)]; return `PILOTE-${s}`; }
 
 /** Étapes de la première semaine : id, libellé, comment on la détecte automatiquement. */
 export const ONBOARDING_STEPS = [
@@ -92,7 +98,7 @@ pilotRoutes.post('/feedback', async (c) => {
   const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   if (admins.length && (b.kind === 'bug' || (b.kind === 'nps' && (b.score ?? 10) <= 6) || b.kind === 'question')) {
     const subject = b.kind === 'bug' ? `🐛 Bug signalé par ${r.name}` : b.kind === 'question' ? `❓ Question de ${r.name}` : `⚠️ NPS ${b.score}/10 — ${r.name}`;
-    for (const to of admins) void sendMail({ to, subject, text: `${r.name} (${u.email}) — page ${b.page ?? '?'}\n\n${b.message ?? '(sans message)'}\n\n${APP()}/app/admin/pilotes`, html: `<p><b>${r.name}</b> (${u.email}) — page ${b.page ?? '?'}</p><p>${(b.message ?? '(sans message)').replace(/\n/g, '<br>')}</p><p><a href="${APP()}/app/admin/pilotes">Cockpit pilotes</a></p>`, tags: { type: 'feedback' } });
+    for (const to of admins) void sendMail({ to, subject, text: `${r.name} (${u.email}) — page ${b.page ?? '?'}\n\n${b.message ?? '(sans message)'}\n\n${APP()}/app/admin/pilotes`, html: h`<p><b>${r.name}</b> (${u.email}) — page ${b.page ?? '?'}</p><p>${nl2br(b.message ?? '(sans message)')}</p><p><a href="${APP()}/app/admin/pilotes">Cockpit pilotes</a></p>`, tags: { type: 'feedback' } });
   }
   return c.json({ feedback: row, message: b.kind === 'nps' ? 'Merci ! Votre avis compte vraiment.' : 'Bien reçu — on vous répond sous 24 h ouvrées.' }, 201);
 });
@@ -109,7 +115,7 @@ pilotRoutes.get('/feedback/nps-due', async (c) => {
 
 /** Mesure d'usage minimaliste : le front envoie des lots d'événements (page vue, action). Pas de tiers, pas de cookie. */
 pilotRoutes.post('/usage', async (c) => {
-  const parsed = z.object({ events: z.array(z.object({ event: z.string().max(80), meta: z.record(z.unknown()).optional(), at: z.string().optional() })).max(50) }).safeParse(await c.req.json().catch(() => null));
+  const parsed = z.object({ events: z.array(z.object({ event: z.string().max(80), meta: z.record(z.string(), z.unknown()).optional(), at: z.string().optional() })).max(50) }).safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: 'Format d’événement invalide', details: parsed.error.flatten() }, 400);
   const b = parsed.data;
   if (!b.events.length) return c.json({ ok: true });
@@ -151,7 +157,7 @@ export async function pilotHealth(rid: string, now = new Date()) {
 }
 
 pilotAdminRoutes.get('/admin/pilots', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const db = await getDb();
   const all = await db.select({ id: restaurants.id }).from(restaurants).orderBy(desc(restaurants.createdAt)).limit(200);
   const pilots = []; for (const r of all) pilots.push(await pilotHealth(r.id));
@@ -164,7 +170,7 @@ pilotAdminRoutes.get('/admin/pilots', async (c) => {
 
 /** Inviter un lead : génère un code, envoie l'e-mail d'invitation avec le lien d'inscription pré-rempli. */
 pilotAdminRoutes.post('/admin/pilots/invite', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ leadId: z.string().uuid().optional(), email: z.string().email().optional(), restaurantName: z.string().min(2).optional(), contactName: z.string().min(2).optional(), city: z.string().optional(), resend: z.boolean().optional() }).parse(await c.req.json());
   const db = await getDb();
   let lead = b.leadId ? (await db.select().from(leads).where(eq(leads.id, b.leadId)))[0] : undefined;
@@ -178,13 +184,13 @@ pilotAdminRoutes.post('/admin/pilots/invite', async (c) => {
   const link = `${APP()}/inscription?code=${code}`; const first = lead.contactName.split(' ')[0];
   const mail = await sendMail({ to: lead.email, subject: `${first}, votre accès pilote AFRISUPPLY est prêt 🎁`, tags: { type: 'invite' },
     text: `Bonjour ${first},\n\nBienvenue parmi les ${FOUNDER_OFFER.seats} restaurants pilotes fondateurs d'AFRISUPPLY !\n\nVotre code : ${code}\nCréez votre compte ici (2 minutes) : ${link}\n\nCe que ça vous donne :\n- ${FOUNDER_OFFER.trialDays} jours gratuits, sans carte bancaire\n- puis −${FOUNDER_OFFER.discountPct} % à vie sur la formule de votre choix\n- une ligne directe avec l'équipe (on répond sous 24 h)\n\nEn échange : vous utilisez l'app au quotidien et vous nous dites franchement ce qui coince.\n\nÀ très vite,\nL'équipe AFRISUPPLY`,
-    html: `<p>Bonjour ${first},</p><p>Bienvenue parmi les <b>${FOUNDER_OFFER.seats} restaurants pilotes fondateurs</b> d'AFRISUPPLY !</p><p>Votre code : <b style="font-size:18px">${code}</b><br><a href="${link}" style="display:inline-block;margin-top:8px;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Créer mon compte (2 minutes)</a></p><ul><li>${FOUNDER_OFFER.trialDays} jours gratuits, sans carte bancaire</li><li>puis <b>−${FOUNDER_OFFER.discountPct} % à vie</b> sur la formule de votre choix</li><li>une ligne directe avec l'équipe (réponse sous 24 h)</li></ul><p>En échange : vous utilisez l'app au quotidien et vous nous dites franchement ce qui coince.</p><p>À très vite,<br>L'équipe AFRISUPPLY</p>` });
+    html: h`<p>Bonjour ${first},</p><p>Bienvenue parmi les <b>${FOUNDER_OFFER.seats} restaurants pilotes fondateurs</b> d'AFRISUPPLY !</p><p>Votre code : <b style="font-size:18px">${code}</b><br><a href="${link}" style="display:inline-block;margin-top:8px;padding:10px 16px;background:#c2410c;color:#fff;border-radius:10px;text-decoration:none">Créer mon compte (2 minutes)</a></p><ul><li>${FOUNDER_OFFER.trialDays} jours gratuits, sans carte bancaire</li><li>puis <b>−${FOUNDER_OFFER.discountPct} % à vie</b> sur la formule de votre choix</li><li>une ligne directe avec l'équipe (réponse sous 24 h)</li></ul><p>En échange : vous utilisez l'app au quotidien et vous nous dites franchement ce qui coince.</p><p>À très vite,<br>L'équipe AFRISUPPLY</p>` });
   await audit('pilot.invite', { actorEmail: c.get('user').email, target: lead.id, meta: { code, mail: mail.ok } });
   return c.json({ code, link, mail: mail.ok ? 'envoyé' : `non envoyé (${(mail as { error?: string }).error ?? mail.transport})`, lead: { ...lead, inviteCode: code } });
 });
 
 pilotAdminRoutes.put('/admin/pilots/feedback/:id', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ status: z.enum(['nouveau', 'traite']).optional(), published: z.boolean().optional() }).parse(await c.req.json());
   if (b.status === undefined && b.published === undefined) return c.json({ error: 'Rien à mettre à jour (status ou published).' }, 400);
   const db = await getDb();
@@ -201,5 +207,5 @@ export async function buildWeeklyPilotReport(now = new Date()) {
   const newFb = await db.select({ f: feedback, restaurantName: restaurants.name }).from(feedback).innerJoin(restaurants, eq(restaurants.id, feedback.restaurantId)).where(gte(feedback.createdAt, since7)).orderBy(desc(feedback.createdAt));
   const line = (p: Awaited<ReturnType<typeof pilotHealth>>) => `${p.status === 'vert' ? '🟢' : p.status === 'orange' ? '🟠' : '🔴'} ${p.name} (J${p.dayNumber}, checklist ${p.checklist.done}/${p.checklist.total}, ${p.week.sales} ventes · ${p.week.movements} mvts · ${p.week.orders} cmd)${p.reasons.length ? ' — ' + p.reasons.join(', ') : ''}`;
   const text = [`Rapport pilotes — semaine du ${now.toLocaleDateString('fr-FR')}`, '', `${pilots.length} restaurants · ${pilots.filter((p) => p.status === 'vert').length} 🟢 · ${pilots.filter((p) => p.status === 'orange').length} 🟠 · ${pilots.filter((p) => p.status === 'rouge').length} 🔴`, `Actifs cette semaine : ${pilots.filter((p) => p.week.sales + p.week.movements + p.week.orders > 0).length}`, '', ...pilots.sort((a, b) => ['rouge', 'orange', 'vert'].indexOf(a.status) - ['rouge', 'orange', 'vert'].indexOf(b.status)).map(line), '', `Retours de la semaine (${newFb.length}) :`, ...newFb.map(({ f, restaurantName }) => `- [${f.kind}${f.score !== null ? ` ${f.score}/10` : ''}] ${restaurantName} : ${f.message ?? ''}`), '', `${APP()}/app/admin/pilotes`].join('\n');
-  return { text, html: `<pre style="font-family:ui-sans-serif,system-ui;white-space:pre-wrap">${text.replace(/</g, '&lt;')}</pre>`, pilots: pilots.length };
+  return { text, html: h`<pre style="font-family:ui-sans-serif,system-ui;white-space:pre-wrap">${text}</pre>`, pilots: pilots.length };
 }

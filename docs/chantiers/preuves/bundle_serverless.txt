@@ -1,0 +1,21 @@
+ESSAI DE FUMÉE DU BUNDLE SERVERLESS (npm run check:bundle:run) — 2026-11-12
+
+  [OK] migrations appliquées sur la base de l'essai
+  [OK] api/index.js se charge et exporte un écouteur (req, res)
+  [OK] GET /api/health → 200, configuration saine — HTTP 200
+  [OK] GET /api/status lit l'état des migrations dans la base — {"ok":true,"state":"a_jour","expected":29,"applied":29,"pending":0}
+  [OK] inscription → 201, cookie de session HttpOnly — HTTP 201
+  [OK] route protégée avec session → 200
+  [OK] route protégée sans session → 401
+  [OK] route protégée à paramètre sans session → 401 (et non 404)
+  [OK] JSON mal formé → 400 — HTTP 400
+  [OK] création validée par le schéma → 201 — HTTP 201
+  [OK] modification vide {} → 400 (et non 500)
+  [OK] connexion Clerk sans preuve d'identité → 401, aucune session — HTTP 401
+  [OK] après déconnexion, l'ancien jeton est refusé
+✓ le bundle serverless démarre et répond correctement.
+
+CONTRÔLE DU BUNDLE (npm run check:bundle)
+✓ api/index.js est à jour (identique au bundle reconstruit).
+✓ le déploiement régénère le bundle (vercel.json → buildCommand).
+✓ les 10 dépendances externes du bundle se résolvent depuis la racine, dans la version testée.

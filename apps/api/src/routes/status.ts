@@ -4,7 +4,11 @@
 // Sans données métier — et sans chiffre inventé : tout vient de job_runs, du disque des sauvegardes et de la base.
 import { Hono } from 'hono';
 import { desc, sql } from 'drizzle-orm';
-import { getDb, jobRuns } from '@afrisupply/db';
+import { getDb, jobRuns, migrationStatus, regionCheck, type MigrationStatus } from '@afrisupply/db';
+import { cronSecretCheck, jwtSecretProblem, usesTestSender } from '../lib/security.js';
+import { clerkSettings } from '../lib/clerk.js';
+import { clerkKeyFacts } from '../lib/clerk-config.js';
+import { configDiagnostic } from '../lib/config-diagnostic.js';
 import { buildInfo, sentryEnabled } from '../lib/ops.js';
 import { SUPPORT, jobHealth, publicJobHealth } from '../lib/ops-health.js';
 import { backupStorageStats } from '../lib/backup.js';
@@ -13,12 +17,28 @@ import { smsConfig, smsStats } from '../lib/sms.js';
 
 export const statusRoutes = new Hono();
 
+// Chantier P0.4 — état RÉEL des migrations de la base, lu dans son journal (lecture seule).
+// Gardé une minute en mémoire par instance : le contrôle de statut ne doit pas charger la base.
+let schemaCache: { at: number; value: MigrationStatus } | null = null;
+export async function schemaStatus(): Promise<MigrationStatus> {
+  if (schemaCache && Date.now() - schemaCache.at < 60_000) return schemaCache.value;
+  const value = await migrationStatus();
+  schemaCache = { at: Date.now(), value };
+  return value;
+}
+export const _resetSchemaCache = () => { schemaCache = null; };
+
 statusRoutes.get('/status', async (c) => {
-  const t0 = Date.now(); let dbOk = false; let dbMs = 0;
+  let dbOk = false; let dbMs = 0;
   let jobs: Awaited<ReturnType<typeof jobHealth>> = {};
   let backup: { lastAt: string | null; ageHours: number | null; files: number; keep: number } = { lastAt: null, ageHours: null, files: 0, keep: 0 };
+  let schema: { state: string; expected: number | null; applied: number | null; pending: number } = { state: 'inconnu', expected: null, applied: null, pending: 0 };
+  try { const s = await schemaStatus(); schema = { state: s.state, expected: s.expected, applied: s.applied, pending: s.pending.length }; } catch { /* base injoignable : signalé par `database` ci-dessous */ }
   try {
-    const db = await getDb(); await db.execute(sql`select 1`); dbMs = Date.now() - t0; dbOk = true;
+    // Latence = durée d'UN aller-retour vers la base, connexion déjà ouverte (la première requête ouvre
+    // la connexion : elle n'est pas comptée). C'est le coût payé par CHAQUE requête SQL de l'application.
+    const db = await getDb(); await db.execute(sql`select 1`); dbOk = true;
+    const t1 = Date.now(); await db.execute(sql`select 1`); dbMs = Date.now() - t1;
     // Chantier 12 : la même source de vérité que le back-office (lib/ops-health.ts) — une seule règle
     // de « job en retard », utilisée ici et dans les alertes admin.
     // Vue PUBLIQUE : état et fraîcheur, sans le détail des passages (chemins internes, volumes).
@@ -28,18 +48,32 @@ statusRoutes.get('/status', async (c) => {
   } catch { dbOk = false; }
   const mc = mailerConfig(); const sc = smsConfig();
   const degraded = Object.values(jobs).some((j) => j.state === 'degraded');
-  const ok = dbOk && !degraded;
+  // Une base en retard sur le code (migration attendue mais absente) est une panne annoncée : le statut le dit.
+  const schemaBehind = schema.state === 'en_retard' || schema.state === 'non_initialisee';
+  const ok = dbOk && !degraded && !schemaBehind;
+  // Levée des réserves (chantier B) : la connexion Clerk est-elle réellement en service ici, avec
+  // quelle sorte d'instance, et sinon pourquoi (code seulement : aucune clé, aucun domaine).
+  const clerk = clerkSettings(); const clerkFacts = clerkKeyFacts();
   return c.json({
     ok, ...buildInfo(), checkedAt: new Date().toISOString(),
     checks: {
-      database: { ok: dbOk, latencyMs: dbMs },
+      // `colocated` : les fonctions tournent-elles dans la région de la base ? (null : impossible à dire)
+      database: { ok: dbOk, latencyMs: dbMs, colocated: regionCheck().voisines },
+      // État des migrations constaté dans la base (et non supposé d'après le dépôt).
+      schema: { ok: !schemaBehind && schema.state !== 'inconnu', ...schema },
       jobs,
       // Compatibilité : l'ancien champ dailyJob reste exposé (supervision externe existante).
       dailyJob: jobs.daily ?? { state: 'never', maxHours: 30, lastRun: null },
-      mail: { transport: mc.transport, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', from: mc.from, stats: mailStats(), outboxCount: mc.transport === 'file' ? await outboxCount() : null },
+      // `testSender` : l'expéditeur est l'adresse d'essai du prestataire — les messages ne sont remis
+      // qu'au titulaire du compte du prestataire, pas aux clients.
+      mail: { transport: mc.transport, configured: mc.transport === 'resend', delivered: mc.transport !== 'log', from: mc.from, testSender: mc.transport === 'resend' && usesTestSender(mc.from), stats: mailStats(), outboxCount: mc.transport === 'file' ? await outboxCount() : null },
       sms: { configured: sc.enabled, whatsapp: sc.whatsapp, delivered: sc.enabled, stats: smsStats() },
       errorTracking: { configured: sentryEnabled() },
       cron: { configured: !!process.env.CRON_SECRET, jobs: ['/api/jobs/daily', '/api/jobs/reminders'] },
+      auth: {
+        sessionSecret: jwtSecretProblem(process.env.JWT_SECRET) === null ? 'ok' : 'a_corriger',
+        clerk: { enabled: clerk.enabled, mode: clerkFacts.server.mode ?? clerkFacts.site.mode, problem: clerk.problem?.code ?? null },
+      },
       backups: { files: backup.files, lastAt: backup.lastAt, ageHours: backup.ageHours, retentionDays: backup.keep, ok: backup.files > 0 && (backup.ageHours ?? 999) <= 36 },
     },
     support: { email: SUPPORT.email(), hours: SUPPORT.hours, responseTime: SUPPORT.responseTime, phone: SUPPORT.phone() },
@@ -48,8 +82,17 @@ statusRoutes.get('/status', async (c) => {
 
 /** Historique des jobs (admin) : GET /api/status/jobs?limit=30 — protégé par CRON_SECRET pour rester simple. */
 statusRoutes.get('/status/jobs', async (c) => {
-  const auth = c.req.header('authorization'); const given = c.req.header('x-cron-secret') ?? (auth?.startsWith('Bearer ') ? auth.slice(7) : undefined);
-  if (!process.env.CRON_SECRET || given !== process.env.CRON_SECRET) return c.json({ error: 'Non autorisé' }, 401);
+  if (cronSecretCheck({ cron: c.req.header('x-cron-secret'), authorization: c.req.header('authorization') }, undefined) !== 'ok') return c.json({ error: 'Non autorisé' }, 401);
   const db = await getDb();
   return c.json({ runs: await db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(Math.min(100, Number(c.req.query('limit') ?? 30))) });
+});
+
+/**
+ * Diagnostic de configuration : GET /api/status/config — protégé par CRON_SECRET (en-tête uniquement).
+ * Ne renvoie aucune valeur de variable : présence, conformité, sorte des clés, rôle et hôte de la base.
+ */
+statusRoutes.get('/status/config', async (c) => {
+  if (cronSecretCheck({ cron: c.req.header('x-cron-secret'), authorization: c.req.header('authorization') }, undefined) !== 'ok') return c.json({ error: 'Non autorisé' }, 401);
+  c.header('Cache-Control', 'no-store');
+  return c.json(await configDiagnostic());
 });

@@ -130,6 +130,18 @@ function expliquer(status: number, corps: string, cfg: OffsiteConfig): string {
 interface Reponse { ok: boolean; status: number; body: Buffer; error?: string }
 
 /**
+ * Délai maximal d'UN appel au stockage externe (chantier P0.4). Sur la plateforme serverless une
+ * fonction dure 60 s au plus : un appel autorisé à durer 60 s, répété trois fois, ne pourrait jamais
+ * aboutir et ferait couper la passe entière. Il y est donc plafonné (12 s par tentative).
+ * `OFFSITE_TIMEOUT_MS` permet de régler ce plafond.
+ */
+export function offsiteTimeoutMs(voulu: number, env: NodeJS.ProcessEnv = process.env): number {
+  const regle = Number(env.OFFSITE_TIMEOUT_MS);
+  const plafond = Number.isFinite(regle) && regle > 0 ? regle : env.VERCEL ? 12_000 : voulu;
+  return Math.min(voulu, plafond);
+}
+
+/**
  * Appel signé avec délai maximum et 2 reprises sur incident passager (réseau, 5xx, 429).
  * Les refus définitifs (403, 404…) ne sont pas réessayés : réessayer ne les corrige pas.
  */
@@ -144,7 +156,7 @@ async function appel(cfg: OffsiteConfig, method: string, key: string, opts: { bo
       const res = await fetch(target.url, {
         method, headers: { ...headers, ...(body.length ? { 'content-type': 'application/octet-stream' } : {}) },
         body: body.length ? new Uint8Array(body) : undefined,
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
+        signal: AbortSignal.timeout(offsiteTimeoutMs(opts.timeoutMs ?? 60_000)),
       });
       const buf = Buffer.from(await res.arrayBuffer());
       if (res.ok) return { ok: true, status: res.status, body: buf };

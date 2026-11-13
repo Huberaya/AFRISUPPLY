@@ -215,7 +215,8 @@ try:
     print("\nE. Relance graduée des ventes non saisies")
     st, acc2, _ = register(API, f"c9-vierge-{stamp}@audit.fr", f"Chez Vierge {stamp}")
     TOK2, RID2 = acc2["token"], acc2["restaurant"]["id"]
-    st, run1, _ = call(API, "POST", f"/jobs/daily?secret=dev-cron", None)
+    # « force=1 » : une passe par jour sinon (chantier P0.4) — le compte vient d'être créé, la passe doit tourner maintenant.
+    st, run1, _ = call(API, "POST", f"/jobs/daily?secret=dev-cron&force=1", None)
     check("le job quotidien tourne (relance + alertes + mail du matin)", st == 200 and run1.get("count", 0) >= 2, f"HTTP {st}, {run1.get('count')} restaurant(s)")
     st, al1, _ = call(API, "GET", "/alerts", TOK2, rid=RID2)
     saisie1 = [a for a in (al1.get("alerts") or []) if a["kind"] == "saisie"]
@@ -239,7 +240,12 @@ try:
           not any("Pensez à saisir vos ventes" in t for t in urgent), f"{len(urgent)} e-mail(s) d’alerte urgente")
     check("le mail du matin rappelle aussi la saisie des ventes quand elle manque",
           any("Ventes d’hier non saisies" in t for t in textes))
-    st, run2, _ = call(API, "POST", f"/jobs/daily?secret=dev-cron", None)
+    # Un second déclenchement ordinaire le même jour ne refait rien (une passe par jour)…
+    st, deja, _ = call(API, "POST", f"/jobs/daily?secret=dev-cron", None)
+    check("second déclenchement du planificateur le même jour : la passe n’est pas refaite",
+          st == 200 and deja.get("alreadyComplete") is True and deja.get("complete") is True, f"HTTP {st}, alreadyComplete={deja.get('alreadyComplete')}")
+    # …et une passe relancée volontairement ne crée pas de doublon pour autant.
+    st, run2, _ = call(API, "POST", f"/jobs/daily?secret=dev-cron&force=1", None)
     st, al3, _ = call(API, "GET", "/alerts", TOK, rid=RID)
     douces2 = [a for a in (al3.get("alerts") or []) if a["kind"] == "saisie" and a["severity"] == "blue"]
     check("deuxième passage le même jour : aucun doublon de rappel", len(douces2) == len(douces), f"{len(douces)} → {len(douces2)}")

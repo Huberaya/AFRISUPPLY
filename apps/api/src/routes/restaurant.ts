@@ -756,6 +756,7 @@ restaurantRoutes.get('/alerts', async (c) => {
 
 restaurantRoutes.post('/alerts/:id/read', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
-  await db.update(alerts).set({ isRead: true }).where(and(eq(alerts.id, c.req.param('id')), eq(alerts.restaurantId, rid)));
+  const upd = await db.update(alerts).set({ isRead: true }).where(and(eq(alerts.id, c.req.param('id')), eq(alerts.restaurantId, rid))).returning({ id: alerts.id });
+  if (!upd.length) return c.json({ error: 'Alerte introuvable' }, 404);
   return c.json({ ok: true });
 });

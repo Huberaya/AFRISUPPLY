@@ -16,6 +16,8 @@ import { loadPricing, priceFor } from '../lib/pricing.js';
 import { nextSlots, WEEKDAYS_FR } from '../lib/routes.js';
 import { checkCredit, exposureFor, termsFor } from '../lib/credit.js';
 import { reliabilityFor, emptyReliability } from '../lib/reliability.js';
+import { vendorOffersProblem } from '../lib/tenant.js';
+import { h, brut } from '../lib/html.js';
 
 export const marketplaceRoutes = new Hono<Env>();
 
@@ -23,6 +25,13 @@ export const marketplaceRoutes = new Hono<Env>();
 marketplaceRoutes.on(['POST'], '/marketplace/vendors/:id/orders', requireMinRole('manager'));
 marketplaceRoutes.on(['POST'], '/marketplace/vendors/:id/link', requireMinRole('manager'));
 marketplaceRoutes.on(['POST'], '/marketplace/group-buys/:id/join', requireMinRole('manager'));
+// Chantier P0.2 — tout ce qui passe ou programme une commande auprès d'un grossiste suit la même règle
+// (envoi d'une commande préparée, « recommander », commandes récurrentes) : responsable requis.
+marketplaceRoutes.on(['POST'], '/marketplace/orders/:id/send', requireMinRole('manager'));
+marketplaceRoutes.on(['POST'], '/orders/:id/reorder', requireMinRole('manager'));
+marketplaceRoutes.on(['POST'], '/recurring', requireMinRole('manager'));
+marketplaceRoutes.on(['PUT', 'DELETE'], '/recurring/:id', requireMinRole('manager'));
+marketplaceRoutes.on(['POST'], '/recurring/:id/run', requireMinRole('manager'));
 
 /** Chantier 1 (audit) : plafonds structurels d'une commande (ligne = colis, panier = lignes). */
 const MAX_PACKS_PER_LINE = 1000;
@@ -151,7 +160,7 @@ export async function notifyVendorNewOrder(order: typeof orders.$inferSelect, li
   const db = await getDb(); const reference = order.reference;
   const linesData = lines;
   const [r] = await db.select({ name: restaurants.name, city: restaurants.city }).from(restaurants).where(eq(restaurants.id, rid));
-  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject: `Nouvelle commande ${reference} — ${r.name}${r.city ? ` (${r.city})` : ''} — ${eur(total)}`, text: `Bonjour,\n\n${r.name} vous passe commande via AFRISUPPLY :\n${linesData.map((l) => `• ${l.packs} × ${l.packLabel} — ${eur(Number(l.lineTotalEur))}`).join('\n')}\nTotal : ${eur(total)}\n\nConfirmez ou refusez en un clic : ${APP_URL()}/fournisseur/commandes\n`, html: `<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${linesData.map((l) => `<li>${l.packs} × ${l.packLabel} — ${eur(Number(l.lineTotalEur))}</li>`).join('')}</ul><p><b>Total : ${eur(total)}</b></p><p><a href="${APP_URL()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: 'vendor_order' } });
+  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject: `Nouvelle commande ${reference} — ${r.name}${r.city ? ` (${r.city})` : ''} — ${eur(total)}`, text: `Bonjour,\n\n${r.name} vous passe commande via AFRISUPPLY :\n${linesData.map((l) => `• ${l.packs} × ${l.packLabel} — ${eur(Number(l.lineTotalEur))}`).join('\n')}\nTotal : ${eur(total)}\n\nConfirmez ou refusez en un clic : ${APP_URL()}/fournisseur/commandes\n`, html: h`<p>Bonjour,</p><p><b>${r.name}</b> vous passe commande via AFRISUPPLY :</p><ul>${brut(linesData.map((l) => h`<li>${l.packs} × ${l.packLabel} — ${eur(Number(l.lineTotalEur))}</li>`).join(''))}</ul><p><b>Total : ${eur(total)}</b></p><p><a href="${APP_URL()}/fournisseur/commandes">Confirmer ou refuser</a></p>`, tags: { type: 'vendor_order' } });
   void logOrderEvent(order.id, 'sent', `Commande envoyée à ${v.name}${source === 'recurrente' ? ' (commande récurrente)' : source === 'recommande' ? ' (recommande)' : ''}`, 'restaurant', { total });
   const phone = v.whatsapp || v.contactPhone;
   if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? 'whatsapp' : 'sms', kind: 'order.new', orderId: order.id, vendorId: v.id, restaurantId: rid, body: `AFRISUPPLY — Nouvelle commande ${reference}\n${r.name}${r.city ? ` (${r.city})` : ''} — ${eur(total)}\n${linesData.slice(0, 6).map((l) => `• ${l.packs} × ${l.packLabel}`).join('\n')}${linesData.length > 6 ? `\n… +${linesData.length - 6} lignes` : ''}\nConfirmer / refuser : ${APP_URL()}/fournisseur/commandes` });
@@ -184,8 +193,16 @@ marketplaceRoutes.post('/marketplace/orders/:id/send', async (c) => {
 });
 
 /** Chantier 29 : mes conditions de paiement et mon encours chez ce grossiste. */
+/** Fournisseur actif de la place de marché, ou null : une réponse « 200 vide » pour un identifiant inconnu masquait les erreurs. */
+async function activeVendor(vid: string) {
+  const db = await getDb();
+  const [v] = await db.select({ id: vendors.id }).from(vendors).where(and(eq(vendors.id, vid), eq(vendors.status, 'actif'))).limit(1);
+  return v ?? null;
+}
+
 marketplaceRoutes.get('/marketplace/vendors/:id/credit', async (c) => {
   const rid = c.get('restaurantId'); const vid = c.req.param('id');
+  if (!(await activeVendor(vid))) return c.json({ error: 'Fournisseur introuvable' }, 404);
   const terms = await termsFor(vid, rid); const exposure = (await exposureFor(vid, [rid])).get(rid)!;
   return c.json({ terms: terms ? { paymentDays: terms.paymentDays, creditLimitEur: terms.creditLimitEur === null ? null : n(terms.creditLimitEur), blocked: terms.blocked } : { paymentDays: 0, creditLimitEur: null, blocked: false }, exposure });
 });
@@ -201,6 +218,7 @@ marketplaceRoutes.get('/marketplace/payables', async (c) => {
 /** Chantier 19 : prochaines dates/créneaux de livraison de ce grossiste pour mon restaurant. */
 marketplaceRoutes.get('/marketplace/vendors/:id/slots', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
+  if (!(await activeVendor(c.req.param('id')))) return c.json({ error: 'Fournisseur introuvable' }, 404);
   const [r] = await db.select({ city: restaurants.city, postalCode: restaurants.postalCode }).from(restaurants).where(eq(restaurants.id, rid));
   const slots = await nextSlots(c.req.param('id'), r);
   return c.json({ slots: slots.map((s) => ({ ...s, weekdayLabel: WEEKDAYS_FR[s.weekday] })), hasRoutes: slots.length > 0 });
@@ -260,6 +278,10 @@ marketplaceRoutes.post('/recurring', async (c) => {
   let { vendorId, lines } = body.data;
   if (body.data.fromOrderId) { const [o] = await db.select().from(orders).where(and(eq(orders.id, body.data.fromOrderId), eq(orders.restaurantId, rid))); if (!o?.vendorId) return c.json({ error: 'Commande introuvable' }, 404); vendorId = o.vendorId; if (!lines) { const prev = await db.select().from(orderLines).where(eq(orderLines.orderId, o.id)); const offers = await db.select().from(vendorOffers).where(eq(vendorOffers.vendorId, o.vendorId)); lines = prev.map((l) => { const off = offers.find((x) => x.productId === l.productId && x.packLabel === l.packLabel) ?? offers.find((x) => x.productId === l.productId); return off ? { vendorOfferId: off.id, packs: n(l.packs) } : null; }).filter((x): x is { vendorOfferId: string; packs: number } => !!x); } }
   if (!vendorId || !lines?.length) return c.json({ error: 'Fournisseur et lignes requis' }, 400);
+  // Chantier P0.3 : le grossiste doit exister et chaque offre lui appartenir (avant : identifiant
+  // inconnu → erreur 500 à l'enregistrement, ou commande récurrente vouée à échouer chaque matin).
+  const problem = await vendorOffersProblem(vendorId, lines.map((l) => l.vendorOfferId));
+  if (problem) return c.json({ error: problem }, 400);
   const [row] = await db.insert(recurringOrders).values({ restaurantId: rid, vendorId, name: body.data.name, weekdays: [...new Set(body.data.weekdays)].sort(), lines, mode: body.data.mode, notes: body.data.notes, nextRunOn: nextRunOn(body.data.weekdays), createdBy: user.id }).returning();
   return c.json({ recurring: row, message: `« ${row.name} » programmée : ${row.weekdays.map((d) => DAYS[d]).join(', ')} (prochaine le ${row.nextRunOn}).` }, 201);
 });
@@ -267,8 +289,13 @@ marketplaceRoutes.put('/recurring/:id', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
   const body = z.object({ name: z.string().min(2).max(60).optional(), weekdays: z.array(z.number().int().min(0).max(6)).min(1).optional(), mode: z.enum(['auto', 'confirm']).optional(), enabled: z.boolean().optional(), notes: z.string().max(300).nullable().optional(), lines: z.array(z.object({ vendorOfferId: z.string().uuid(), packs: z.number().int().positive() })).min(1).optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
-  const patch: Partial<typeof recurringOrders.$inferInsert> = { ...body.data, notes: body.data.notes ?? undefined }; if (body.data.weekdays) { patch.weekdays = [...new Set(body.data.weekdays)].sort(); patch.nextRunOn = nextRunOn(patch.weekdays); }
-  const [row] = await db.update(recurringOrders).set(patch).where(and(eq(recurringOrders.id, c.req.param('id')), eq(recurringOrders.restaurantId, rid))).returning(); if (!row) return c.json({ error: 'Introuvable' }, 404);
+  // Chantier P0.3 : un corps vide est une demande sans objet (400), pas une panne (500).
+  if (!Object.values(body.data).some((v) => v !== undefined)) return c.json({ error: 'Aucune modification fournie : indiquez au moins un champ à changer.', code: 'empty_update' }, 400);
+  const [cur] = await db.select().from(recurringOrders).where(and(eq(recurringOrders.id, c.req.param('id')), eq(recurringOrders.restaurantId, rid))); if (!cur) return c.json({ error: 'Introuvable' }, 404);
+  if (body.data.lines) { const problem = await vendorOffersProblem(cur.vendorId, body.data.lines.map((l) => l.vendorOfferId)); if (problem) return c.json({ error: problem }, 400); }
+  // `notes: null` efface la note ; un champ absent n'est pas modifié.
+  const patch: Partial<typeof recurringOrders.$inferInsert> = { ...body.data, notes: body.data.notes }; if (body.data.weekdays) { patch.weekdays = [...new Set(body.data.weekdays)].sort(); patch.nextRunOn = nextRunOn(patch.weekdays); }
+  const [row] = await db.update(recurringOrders).set(patch).where(eq(recurringOrders.id, cur.id)).returning(); if (!row) return c.json({ error: 'Introuvable' }, 404);
   return c.json({ recurring: row });
 });
 marketplaceRoutes.delete('/recurring/:id', async (c) => {
@@ -297,11 +324,11 @@ export async function runRecurringOrders(now = new Date()) {
     if (res.ok) { await db.update(recurringOrders).set({ lastRunAt: now, lastOrderId: res.order.id, nextRunOn: next }).where(eq(recurringOrders.id, r.id)); out.push({ id: r.id, name: r.name, ok: true, reference: res.order.reference });
       if (r.mode === 'confirm') { // « me demander avant » : e-mail avec lien de validation en 1 clic
         const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, r.restaurantId), inArray(restaurantMembers.role, ['owner', 'manager'])));
-        for (const x of rcpts) void sendMail({ to: x.email, subject: `✅ À valider : commande « ${r.name} » (${res.order.reference}) — ${eur(res.total)}`, text: `Bonjour,\n\nVotre commande récurrente « ${r.name} » chez ${res.vendorName} est prête (${eur(res.total)}). Elle ne partira qu'après votre validation.\n\nValider ou modifier : ${APP_URL()}/app/achats?validate=${res.order.id}\n\nAFRISUPPLY`, html: `<p>Bonjour,</p><p>Votre commande récurrente « <b>${r.name}</b> » chez ${res.vendorName} est prête (<b>${eur(res.total)}</b>). Elle ne partira qu'après votre validation.</p><p><a href="${APP_URL()}/app/achats?validate=${res.order.id}" style="background:#0f766e;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Valider la commande</a></p>` });
+        for (const x of rcpts) void sendMail({ to: x.email, subject: `✅ À valider : commande « ${r.name} » (${res.order.reference}) — ${eur(res.total)}`, text: `Bonjour,\n\nVotre commande récurrente « ${r.name} » chez ${res.vendorName} est prête (${eur(res.total)}). Elle ne partira qu'après votre validation.\n\nValider ou modifier : ${APP_URL()}/app/achats?validate=${res.order.id}\n\nAFRISUPPLY`, html: h`<p>Bonjour,</p><p>Votre commande récurrente « <b>${r.name}</b> » chez ${res.vendorName} est prête (<b>${eur(res.total)}</b>). Elle ne partira qu'après votre validation.</p><p><a href="${APP_URL()}/app/achats?validate=${res.order.id}" style="background:#0f766e;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Valider la commande</a></p>` });
       } }
     else { await db.update(recurringOrders).set({ nextRunOn: next }).where(eq(recurringOrders.id, r.id)); out.push({ id: r.id, name: r.name, ok: false, error: res.error });
       const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(and(eq(restaurantMembers.restaurantId, r.restaurantId), inArray(restaurantMembers.role, ['owner', 'manager'])));
-      for (const x of rcpts) void sendMail({ to: x.email, subject: `⚠️ Commande récurrente « ${r.name} » non envoyée`, text: `La commande récurrente « ${r.name} » n'a pas pu être envoyée aujourd'hui : ${res.error}. Vérifiez-la dans Achats → Récurrentes.`, html: `<p>La commande récurrente « <b>${r.name}</b> » n'a pas pu être envoyée aujourd'hui : ${res.error}.</p><p><a href="${APP_URL()}/app/achats">Vérifier</a></p>`, tags: { type: 'recurring' } }); }
+      for (const x of rcpts) void sendMail({ to: x.email, subject: `⚠️ Commande récurrente « ${r.name} » non envoyée`, text: `La commande récurrente « ${r.name} » n'a pas pu être envoyée aujourd'hui : ${res.error}. Vérifiez-la dans Achats → Récurrentes.`, html: h`<p>La commande récurrente « <b>${r.name}</b> » n'a pas pu être envoyée aujourd'hui : ${res.error}.</p><p><a href="${APP_URL()}/app/achats">Vérifier</a></p>`, tags: { type: 'recurring' } }); }
   }
   return { date: today, due: due.length, results: out };
 }

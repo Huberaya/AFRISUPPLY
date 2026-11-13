@@ -38,3 +38,13 @@ export function isInvalidUuidInput(e: unknown): boolean {
   }
   return false;
 }
+
+/**
+ * Chantier P0.3 — mise à jour sans aucun champ.
+ * Un `PUT` dont le corps est `{}` (ou ne contient que des champs inconnus) arrivait jusqu'à la base
+ * avec une liste de colonnes vide : la bibliothèque d'accès refuse alors la requête (« No values to
+ * set ») et l'API répondait 500. Ce n'est pas une panne : la demande ne dit pas quoi modifier.
+ */
+export function isEmptyUpdate(e: unknown): boolean {
+  return e instanceof Error && e.message === 'No values to set';
+}

@@ -14,7 +14,7 @@
 // routes de commande), auquel cas la décision est tracée.
 // =============================================================
 
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from './client.js';
 import { inventoryItems, products, stockMovements } from './schema.js';
 
@@ -50,9 +50,27 @@ export function defaultThresholds(category: string | null | undefined): { critic
 export type TrackedItem = { id: string; productId: string; criticalLevel: number; targetLevel: number | null };
 
 /**
+ * Parmi `productIds`, ceux que ce restaurant a le droit de référencer : le référentiel commun
+ * (`restaurant_id` NULL) et ses propres produits privés. Le produit privé d'un autre restaurant
+ * — ou un identifiant inconnu — n'en fait jamais partie (cloisonnement, chantier P0.2).
+ */
+export async function visibleProductIds(restaurantId: string, productIds: string[]): Promise<Set<string>> {
+  const ids = [...new Set(productIds.filter(Boolean))];
+  if (!ids.length) return new Set();
+  const db = await getDb();
+  const rows = await db.select({ id: products.id }).from(products)
+    .where(and(inArray(products.id, ids), or(isNull(products.restaurantId), eq(products.restaurantId, restaurantId))));
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
  * Ajoute des produits au stock suivi AVEC des seuils explicites (jamais 0/0 silencieux).
  * Idempotent : un produit déjà suivi garde ses réglages (on n'écrase jamais la configuration).
  * `opts.criticalLevel` force un seuil commun (objectif = max(défaut, 2 × seuil)).
+ *
+ * Chantier P0.2 — dernière ligne de défense du cloisonnement : seuls les produits visibles par le
+ * restaurant sont suivis. Un identifiant inconnu ou le produit privé d'un autre restaurant est
+ * ignoré ici, quel que soit l'appelant (les routes le refusent déjà explicitement en amont).
  */
 export async function trackProducts(
   restaurantId: string,
@@ -60,10 +78,13 @@ export async function trackProducts(
   opts: { criticalLevel?: number | null } = {},
 ): Promise<TrackedItem[]> {
   const db = await getDb();
-  const ids = [...new Set(productIds.filter(Boolean))];
-  if (!ids.length) return [];
-  const prods = await db.select({ id: products.id, category: products.category }).from(products).where(inArray(products.id, ids));
+  const wanted = [...new Set(productIds.filter(Boolean))];
+  if (!wanted.length) return [];
+  const prods = await db.select({ id: products.id, category: products.category }).from(products)
+    .where(and(inArray(products.id, wanted), or(isNull(products.restaurantId), eq(products.restaurantId, restaurantId))));
   const catById = new Map(prods.map((p) => [p.id, p.category as string]));
+  const ids = wanted.filter((id) => catById.has(id));
+  if (!ids.length) return [];
   const rows = ids.map((productId) => {
     const d = defaultThresholds(catById.get(productId));
     const critical = opts.criticalLevel ?? d.criticalLevel;

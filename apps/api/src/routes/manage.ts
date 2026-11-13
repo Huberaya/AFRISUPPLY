@@ -15,6 +15,8 @@ import { buildOrderDoc } from './vendor.js';
 import { logOrderEvent, orderTimeline } from '../lib/order-events.js';
 import { checkLineEdit, checkStatusChange, isReceived } from '../lib/orders.js';
 import { assertPlausibleQuantity } from './restaurant.js';
+import { unusableProductIds, ownsSupplier, PRODUCT_NOT_FOUND } from '../lib/tenant.js';
+import { h } from '../lib/html.js';
 
 export const manageRoutes = new Hono<Env>();
 manageRoutes.use('*', requireAuth, requireRestaurant);
@@ -27,6 +29,10 @@ manageRoutes.on(['POST'], '/suppliers', requireMinRole('manager'));
 manageRoutes.on(['PUT'], '/suppliers/:id', requireMinRole('manager'));
 manageRoutes.on(['DELETE'], '/suppliers/:id', requireMinRole('owner'));
 manageRoutes.on(['POST'], '/suppliers/:id/offers', requireMinRole('manager'));
+// Chantier P0.2 : l'ajout d'offres en lot modifie les mêmes prix que l'ajout unitaire — même rôle exigé.
+manageRoutes.on(['POST'], '/suppliers/:id/offers/batch', requireMinRole('manager'));
+// Chantier P0.2 : retirer un article du suivi efface ses seuils et son historique de comptage — responsable.
+manageRoutes.on(['DELETE'], '/stock/:itemId', requireMinRole('manager'));
 manageRoutes.on(['PUT'], '/offers/:id', requireMinRole('manager'));
 manageRoutes.on(['DELETE'], '/offers/:id', requireMinRole('manager'));
 manageRoutes.on(['POST'], '/recipes', requireMinRole('manager'));
@@ -81,7 +87,12 @@ manageRoutes.delete('/suppliers/:id', async (c) => {
 // -------------------------------------------------------------
 // Offres (prix fournisseur)
 // -------------------------------------------------------------
-const offerBody = z.object({ productId: z.string().uuid(), packLabel: z.string().min(1), packQty: z.number().positive(), packPrice: z.number().positive(), inStock: z.boolean().default(true) });
+const offerFields = { packLabel: z.string().min(1), packQty: z.number().positive(), packPrice: z.number().positive() };
+const offerBody = z.object({ productId: z.string().uuid(), ...offerFields, inStock: z.boolean().default(true) });
+// Modification : AUCUNE valeur par défaut. Un champ absent n'est pas modifié — sans quoi changer un
+// prix remettrait « en stock » une offre marquée indisponible (les valeurs par défaut d'un schéma de
+// création s'appliquent aussi à sa version partielle).
+const offerUpdateBody = z.object({ ...offerFields, inStock: z.boolean() }).partial();
 
 manageRoutes.post('/suppliers/:id/offers', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb(); const supplierId = c.req.param('id');
@@ -90,6 +101,8 @@ manageRoutes.post('/suppliers/:id/offers', async (c) => {
   const [sup] = await db.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.id, supplierId), eq(suppliers.restaurantId, rid)));
   if (!sup) return c.json({ error: 'Fournisseur introuvable' }, 404);
   const d = body.data;
+  // Cloisonnement : le produit doit venir du référentiel commun ou des produits de CE restaurant.
+  if ((await unusableProductIds(rid, [d.productId])).length) return c.json(PRODUCT_NOT_FOUND, 404);
   const [offer] = await db.insert(supplierOffers).values({ restaurantId: rid, supplierId, productId: d.productId, packLabel: d.packLabel, packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock })
     .onConflictDoUpdate({ target: [supplierOffers.supplierId, supplierOffers.productId, supplierOffers.packLabel], set: { packQty: d.packQty.toFixed(3), packPriceEur: d.packPrice.toFixed(2), inStock: d.inStock, lastSeenAt: new Date() } }).returning();
   await db.insert(priceHistory).values({ restaurantId: rid, offerId: offer.id, unitPriceEur: (d.packPrice / d.packQty).toFixed(4), source: 'manuel' });
@@ -106,6 +119,8 @@ manageRoutes.post('/suppliers/:id/offers/batch', async (c) => {
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
   const [sup] = await db.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.id, supplierId), eq(suppliers.restaurantId, rid)));
   if (!sup) return c.json({ error: 'Fournisseur introuvable' }, 404);
+  // Cloisonnement : tout le lot est refusé si un seul produit n'est pas référençable (rien n'est écrit).
+  if ((await unusableProductIds(rid, body.data.items.map((i) => i.productId))).length) return c.json(PRODUCT_NOT_FOUND, 404);
   const existing = new Set((await db.select({ productId: supplierOffers.productId }).from(supplierOffers)
     .where(and(eq(supplierOffers.supplierId, supplierId), eq(supplierOffers.restaurantId, rid)))).map((r) => r.productId));
   let created = 0, updated = 0;
@@ -122,7 +137,7 @@ manageRoutes.post('/suppliers/:id/offers/batch', async (c) => {
 
 manageRoutes.put('/offers/:id', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
-  const body = offerBody.omit({ productId: true }).partial().safeParse(await c.req.json());
+  const body = offerUpdateBody.safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const d = body.data;
   const [before] = await db.select().from(supplierOffers).where(and(eq(supplierOffers.id, c.req.param('id')), eq(supplierOffers.restaurantId, rid)));
@@ -146,6 +161,9 @@ manageRoutes.delete('/offers/:id', async (c) => {
 /** Historique de prix d'un produit, toutes offres confondues (pour le graphique du comparateur). */
 manageRoutes.get('/prices/:productId/history', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
+  // Le produit doit être visible de ce restaurant (référentiel commun ou produit du restaurant) : un
+  // identifiant inconnu, ou celui du produit privé d'un autre restaurant, répond 404 et non une série vide.
+  if ((await unusableProductIds(rid, [c.req.param('productId')])).length) return c.json(PRODUCT_NOT_FOUND, 404);
   const days = Math.min(365, Number(c.req.query('days')) || 90);
   const rows = await db.select({ offerId: priceHistory.offerId, supplierId: supplierOffers.supplierId, supplierName: suppliers.name, packLabel: supplierOffers.packLabel, unitPrice: priceHistory.unitPriceEur, recordedAt: priceHistory.recordedAt, source: priceHistory.source })
     .from(priceHistory).innerJoin(supplierOffers, eq(supplierOffers.id, priceHistory.offerId)).innerJoin(suppliers, eq(suppliers.id, supplierOffers.supplierId))
@@ -173,6 +191,8 @@ manageRoutes.post('/recipes', async (c) => {
   const body = recipeBody.safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
   const d = body.data;
+  // Cloisonnement : un ingrédient ne peut être qu'un produit du référentiel ou de ce restaurant.
+  if ((await unusableProductIds(rid, d.ingredients.map((i) => i.productId))).length) return c.json(PRODUCT_NOT_FOUND, 404);
   const [r] = await db.insert(recipes).values({ restaurantId: rid, name: d.name, sellingPriceEur: d.sellingPriceEur != null ? d.sellingPriceEur.toFixed(2) : null, targetMarginPct: (d.targetMarginPct ?? 70).toFixed(2) }).returning();
   await db.insert(recipeIngredients).values(d.ingredients.map((i) => ({ recipeId: r.id, productId: i.productId, quantity: i.quantity.toFixed(4) })));
   await trackProducts(rid, d.ingredients.map((i) => i.productId));
@@ -184,12 +204,19 @@ manageRoutes.put('/recipes/:id', async (c) => {
   const body = recipeBody.partial().safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
   const d = body.data;
-  const [r] = await db.update(recipes).set({
+  const fields = {
     name: d.name, isActive: d.isActive,
     sellingPriceEur: d.sellingPriceEur === null ? null : d.sellingPriceEur !== undefined ? d.sellingPriceEur.toFixed(2) : undefined,
     targetMarginPct: d.targetMarginPct !== undefined ? d.targetMarginPct.toFixed(2) : undefined,
-  }).where(and(eq(recipes.id, c.req.param('id')), eq(recipes.restaurantId, rid))).returning();
-  if (!r) return c.json({ error: 'Recette introuvable' }, 404);
+  };
+  const hasFields = Object.values(fields).some((v) => v !== undefined);
+  // Chantier P0.3 : un corps vide n'est pas une panne (500) mais une demande sans objet (400).
+  if (!hasFields && !d.ingredients) return c.json({ error: 'Aucune modification fournie : indiquez au moins un champ à changer.', code: 'empty_update' }, 400);
+  // Cloisonnement, vérifié AVANT toute écriture : un ingrédient ne peut être qu'un produit du référentiel ou de ce restaurant.
+  if (d.ingredients && (await unusableProductIds(rid, d.ingredients.map((i) => i.productId))).length) return c.json(PRODUCT_NOT_FOUND, 404);
+  const [existing] = await db.select().from(recipes).where(and(eq(recipes.id, c.req.param('id')), eq(recipes.restaurantId, rid)));
+  if (!existing) return c.json({ error: 'Recette introuvable' }, 404);
+  const r = hasFields ? (await db.update(recipes).set(fields).where(eq(recipes.id, existing.id)).returning())[0] : existing;
   if (d.ingredients) {
     await db.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, r.id));
     await db.insert(recipeIngredients).values(d.ingredients.map((i) => ({ recipeId: r.id, productId: i.productId, quantity: i.quantity.toFixed(4) })));
@@ -213,6 +240,9 @@ manageRoutes.put('/stock/:itemId', async (c) => {
   const body = z.object({ criticalLevel: z.number().nonnegative().optional(), targetLevel: z.number().nonnegative().nullable().optional(), preferredSupplierId: z.string().uuid().nullable().optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const d = body.data;
+  // Cloisonnement : le fournisseur préféré doit être un fournisseur de CE restaurant. Sans ce contrôle,
+  // l'identifiant d'un fournisseur d'un autre restaurant était accepté et son nom réapparaissait dans le stock.
+  if (d.preferredSupplierId && !(await ownsSupplier(rid, d.preferredSupplierId))) return c.json({ error: 'Fournisseur introuvable' }, 404);
   const [row] = await db.update(inventoryItems).set({
     criticalLevel: d.criticalLevel !== undefined ? d.criticalLevel.toFixed(3) : undefined,
     targetLevel: d.targetLevel === null ? null : d.targetLevel !== undefined ? d.targetLevel.toFixed(3) : undefined,
@@ -400,7 +430,7 @@ manageRoutes.post('/orders/:id/proposal', async (c) => {
   if (body.data.action === 'decline') {
     const [upd] = await db.update(orders).set({ status: 'annulee', vendorDecisionAt: new Date(), vendorNote: 'Proposition de modification refusée par le restaurant', proposal: null }).where(eq(orders.id, o.id)).returning();
     void logOrderEvent(o.id, 'cancelled', 'Proposition refusée par le restaurant — commande annulée', 'restaurant');
-    if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `❌ ${o.reference} : proposition refusée, commande annulée`, text: `Le restaurant a refusé votre proposition de modification pour la commande ${o.reference}. La commande est annulée.`, html: `<p>Le restaurant a refusé votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annulée.</p>`, tags: { type: 'order_proposal' } });
+    if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `❌ ${o.reference} : proposition refusée, commande annulée`, text: `Le restaurant a refusé votre proposition de modification pour la commande ${o.reference}. La commande est annulée.`, html: h`<p>Le restaurant a refusé votre proposition de modification pour la commande <b>${o.reference}</b>. La commande est annulée.</p>`, tags: { type: 'order_proposal' } });
     return c.json({ order: upd });
   }
   const p = o.proposal;
@@ -414,6 +444,6 @@ manageRoutes.post('/orders/:id/proposal', async (c) => {
   const [upd] = await db.update(orders).set({ status: 'confirmee', totalEur: p.newTotalEur.toFixed(2), expectedAt: p.expectedAt ?? o.expectedAt, vendorDecisionAt: new Date(), vendorNote: p.note ?? 'Modification acceptée par le restaurant', proposal: null }).where(eq(orders.id, o.id)).returning();
   if (v) { const amount = p.newTotalEur * Number(v.commissionPct) / 100; await db.insert(commissions).values({ vendorId: v.id, orderId: o.id, orderTotalEur: p.newTotalEur.toFixed(2), pct: v.commissionPct, amountEur: amount.toFixed(2), period: new Date().toISOString().slice(0, 7) }).onConflictDoNothing(); }
   void logOrderEvent(o.id, 'confirmed', `Modification acceptée par le restaurant — commande confirmée (${p.newTotalEur.toFixed(2).replace('.', ',')} €)`, 'restaurant', { by: user.email });
-  if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `✅ ${o.reference} : modification acceptée — à préparer`, text: `Le restaurant a accepté votre proposition pour la commande ${o.reference}. Nouveau total ${p.newTotalEur.toFixed(2)} €. La commande est confirmée : préparez-la depuis votre espace.`, html: `<p>Le restaurant a accepté votre proposition pour la commande <b>${o.reference}</b>. Nouveau total <b>${p.newTotalEur.toFixed(2)} €</b>. La commande est confirmée.</p>`, tags: { type: 'order_proposal' } });
+  if (v?.contactEmail) void sendMail({ to: v.contactEmail, subject: `✅ ${o.reference} : modification acceptée — à préparer`, text: `Le restaurant a accepté votre proposition pour la commande ${o.reference}. Nouveau total ${p.newTotalEur.toFixed(2)} €. La commande est confirmée : préparez-la depuis votre espace.`, html: h`<p>Le restaurant a accepté votre proposition pour la commande <b>${o.reference}</b>. Nouveau total <b>${p.newTotalEur.toFixed(2)} €</b>. La commande est confirmée.</p>`, tags: { type: 'order_proposal' } });
   return c.json({ order: { ...upd, proofPhoto: undefined, proofSignature: undefined } });
 });

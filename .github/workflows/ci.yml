@@ -1,11 +1,16 @@
 # Intégration continue — chantier 10 « Rendre le dépôt fiable et vérifiable ».
 #
-# Deux niveaux :
+# Trois niveaux :
 #   1. « qualite »       : lint + types + tests + build + contrôle du bundle committé (rapide, quelques minutes) ;
 #   2. « verifications » : les 12 scripts de bout en bout contre une API réellement démarrée (PGlite + seed),
 #      avec le serveur web de développement (certains scripts lisent les sources web servies par Vite).
+#   3. « navigateur »    : les parcours d'un client dans un vrai navigateur, contre le site construit et une API
+#      réellement démarrée (inscription, écrans, fournisseur, invitation d'un membre, déconnexion, session expirée).
 #
 # Une erreur volontairement introduite (type, lint, test, ou bundle non régénéré) fait échouer la CI.
+#
+# Aucune étape de ce fichier ne se connecte à un service réel (ni base Neon, ni Clerk, ni Stripe) :
+# la base est une base PostgreSQL embarquée, créée pour l'exécution.
 name: CI
 
 on:
@@ -36,6 +41,12 @@ jobs:
         run: |
           python3 -m compileall -q scripts/verifications
           echo "scripts de vérification — syntaxe OK"
+      # Dépôt public : aucun fichier de données, aucun secret, aucune coordonnée de tiers dans un fichier suivi.
+      - name: Dépôt public — ni données personnelles, ni secret
+        run: npm run check:depot
+      # Le script SQL d'une base neuve (prévisualisation sans données) correspond-il aux migrations ?
+      - name: Script de base neuve à jour
+        run: npm run check:base-neuve
       - name: Lint
         run: npm run lint
       - name: Types (un workspace à la fois)
@@ -46,6 +57,10 @@ jobs:
         run: npm run build
       - name: Le bundle serverless committé correspond-il aux sources ?
         run: npm run check:bundle
+      # Chantier P0.4/P0.5 : les tests exercent les sources ; la production exécute le bundle, depuis la
+      # racine du dépôt. On le charge tel quel et on vérifie qu'il démarre et répond (base embarquée).
+      - name: Le bundle serverless démarre-t-il et répond-il correctement ?
+        run: npm run check:bundle:run
 
   verifications:
     name: Vérifications de bout en bout (API réelle)
@@ -123,4 +138,100 @@ jobs:
         with:
           name: resultats-verifications
           path: scripts/verifications/resultats/*.json
+          if-no-files-found: warn
+
+  # Chantier P0.6 — parcours dans un VRAI navigateur, contre le site construit (le paquet servi en
+  # production) et une API réellement démarrée : pages publiques, inscription, tous les écrans de
+  # l'espace client, création d'un fournisseur, invitation et acceptation d'un membre, droits,
+  # déconnexion, connexion, expiration de session. Surveille ce que les tests d'API ne voient pas :
+  # erreurs JavaScript, écrans d'erreur, fenêtres de dialogue hors de l'écran.
+  role-minimal:
+    # Levée des réserves (chantier C) : toute la suite de l'API rejouée avec le rôle PostgreSQL
+    # applicatif candidat (packages/db/roles/afrisupply_app.sql), qui ne peut que lire et écrire des
+    # lignes. Une instruction de structure ajoutée par mégarde dans le code de l'API fait échouer cette tâche.
+    name: API sous le rôle PostgreSQL minimal
+    runs-on: ubuntu-latest
+    needs: qualite
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Tests de l'API avec le rôle « afrisupply_app »
+        env:
+          AFS_DB_MINIMAL_ROLE: 'true'
+        run: npm test -w apps/api
+
+  navigateur:
+    name: Parcours dans un navigateur (site construit + API réelle)
+    runs-on: ubuntu-latest
+    needs: qualite
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Construire le site
+        run: npm run build -w apps/web
+
+      - name: Démarrer l'API (PGlite + seed démo) et servir le site construit
+        env:
+          PGLITE_DIR: ${{ runner.temp }}/afs-pglite-nav
+          # Le parcours du navigateur tourne lui aussi avec le rôle PostgreSQL minimal (chantier C).
+          AFS_DB_MINIMAL_ROLE: 'true'
+          # Adresse d'exploitant du parcours : droits refusés avant la confirmation de l'adresse, ouverts après.
+          ADMIN_EMAILS: exploitant@parcours.test
+          SEED_DEMO: 'true'
+          JWT_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+          CRON_SECRET: dev-cron
+          MAIL_OUTBOX_DIR: ${{ runner.temp }}/afs-boite-nav
+          API_URL: http://localhost:8787
+        run: |
+          npm run start -w apps/api > /tmp/api-nav.log 2>&1 &
+          (cd apps/web && npx vite preview --host 127.0.0.1 --port 3100 --strictPort > /tmp/web-nav.log 2>&1 &)
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8787/api/health > /dev/null && curl -sf http://localhost:3100/ > /dev/null; then
+              echo "API et site prêts"; break
+            fi
+            sleep 2
+          done
+          curl -sf http://localhost:3100/api/health || (tail -50 /tmp/api-nav.log; tail -20 /tmp/web-nav.log; exit 1)
+
+      # L'application ci-dessus tourne sous Node 20, comme les autres tâches. L'outil qui pilote le
+      # navigateur (puppeteer-core 25) exige Node 22 : on change de version pour les seules étapes qui
+      # suivent ; les deux serveurs déjà démarrés gardent Node 20.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Le Chrome installé sur la machine d'intégration est utilisé : le Chromium embarqué (facultatif,
+      # 67 Mo) n'est pas installé ici.
+      - name: Outils de pilotage du navigateur
+        run: npm --prefix scripts/navigateur ci --omit=optional --no-audit --no-fund
+
+      - name: Parcours
+        env:
+          AFS_WEB: http://localhost:3100
+          AFS_OUTBOX: ${{ runner.temp }}/afs-boite-nav
+          AFS_ADMIN_EMAIL: exploitant@parcours.test
+        run: node scripts/navigateur/parcours.mjs
+
+      - name: Journaux en cas d'échec
+        if: failure()
+        run: |
+          echo "=== API ===";  tail -60 /tmp/api-nav.log || true
+          echo "=== SITE ==="; tail -30 /tmp/web-nav.log || true
+
+      - name: Rapport et captures d'écran
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parcours-navigateur
+          path: scripts/navigateur/resultats
           if-no-files-found: warn

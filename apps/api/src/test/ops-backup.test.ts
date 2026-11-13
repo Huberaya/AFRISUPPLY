@@ -13,6 +13,7 @@ import {
   listBackups, readBackupFile, pruneBackups, backupAllRestaurants, backupStorageStats, type BackupFile,
 } from '../lib/backup.js';
 import { jobHealth, watchdog, SUPPORT, jobsSurveilles } from '../lib/ops-health.js';
+import { confirmerAdresse } from './aide-comptes.js';
 
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.CRON_SECRET = 'cron-test';
 process.env.PGLITE_DIR = 'memory://ops-backup'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr';
@@ -81,7 +82,7 @@ beforeAll(async () => {
   // --- Restaurant B (isolation) + compte administrateur plateforme.
   const b = await register('patron@autre12.fr', 'Le Baobab Autre');
   ridB = b.json.restaurant.id; authB = { authorization: `Bearer ${b.json.token}` };
-  const adm = await register('admin@afrisupply.fr', 'AFRISUPPLY Exploitation');
+  const adm = await register('admin@afrisupply.fr', 'AFRISUPPLY Exploitation'); await confirmerAdresse('admin@afrisupply.fr');
   authAdmin = { authorization: `Bearer ${adm.json.token}` };
 
   ownerFile = (await call('GET', '/api/backup/export', undefined, authA)).json as BackupFile;
