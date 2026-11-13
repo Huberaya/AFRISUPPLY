@@ -73,6 +73,9 @@ export function examiner(fichier, contenu) {
 
 function autoTest() {
   const doit = (nom, ok) => { if (!ok) { console.error(`✗ auto-test : ${nom}`); process.exit(1); } };
+  // Les échantillons « à détecter » sont assemblés ici, pour que ce fichier ne contienne lui-même aucun motif de secret.
+  const chaineReelle = ['postgresql', '://neondb_owner:', 'npg_AbCdEfGh1234567', '@ep-nom-123.eu-central-1.aws.neon.tech/neondb'].join('');
+  const clePrivee = ['-----BEGIN', 'PRIVATE KEY-----'].join(' ');
   const natures = (f, c) => examiner(f, c).map((x) => x.nature).join(' | ');
   doit('un tableur est refusé', /fichier de données/.test(natures('docs/prospection/liste.xlsx', null)));
   doit('un export CSV est refusé', /fichier de données/.test(natures('docs/x/export.csv', 'a;b')));
@@ -81,9 +84,9 @@ function autoTest() {
   doit('une adresse d\'exemple ne l\'est pas', natures('docs/note.md', 'awa@chezawa.fr, test@parcours.test, bonjour@afrisupply.fr') === '');
   doit('une clé réelle est vue', /secret probable/.test(natures('apps/api/src/x.ts', `const k = 'sk_live_${'a1B2c3D4'.repeat(4)}';`)));
   doit('une clé d\'essai du dépôt ne l\'est pas', natures('apps/api/src/test/x.test.ts', "const k = 'sk_live_cle_secrete_de_production_0001';") === '');
-  doit('une chaîne de connexion réelle est vue', /chaîne de connexion/.test(natures('notes.txt', 'postgresql://neondb_owner:npg_AbCdEfGh1234567@ep-nom-123.eu-central-1.aws.neon.tech/neondb')));
+  doit('une chaîne de connexion réelle est vue', /chaîne de connexion/.test(natures('notes.txt', chaineReelle)));
   doit('une chaîne d\'exemple ne l\'est pas', natures('.env.example', 'DATABASE_URL=postgresql://user:pass@ep-xxxx-pooler.eu-central-1.aws.neon.tech/afrisupply') === '');
-  doit('une clé privée est vue', /clé privée/.test(natures('cle.txt', '-----BEGIN PRIVATE KEY-----')));
+  doit('une clé privée est vue', /clé privée/.test(natures('cle.txt', clePrivee)));
   const liste = Array.from({ length: 25 }, (_, i) => `{ nom: 'Société ${i}', tel: '01 42 00 00 ${String(i).padStart(2, '0')}' }`).join(',\n');
   doit('une liste de coordonnées hors tests est vue', /liste de 25 numéros/.test(natures('apps/api/src/routes/x.ts', liste)));
   doit('la même liste dans un test ne l\'est pas', natures('apps/api/src/test/x.test.ts', liste) === '');

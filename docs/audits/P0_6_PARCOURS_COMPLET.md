@@ -1,6 +1,8 @@
 # P0.6 — Première semaine d'un restaurant : parcours complet (chantier E)
 
-État au 13 novembre 2026 : **EN COURS**. Aucun secret ni aucune donnée personnelle dans ce document ;
+> **Document remplacé par `PARCOURS_NAVIGATEUR_FINAL.md`** : les dix-huit opérations sont désormais rejouables.
+
+État au 13 novembre 2026 (matin) : **EN COURS**. Aucun secret ni aucune donnée personnelle dans ce document ;
 tous les comptes cités sont des comptes d'essai en `@parcours.test`.
 
 **Résumé.** Les dix-huit opérations du scénario ne sont pas encore toutes dans le parcours rejouable.

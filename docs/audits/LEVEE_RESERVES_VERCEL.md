@@ -87,7 +87,7 @@ retry in 24 hours ». Le déploiement précédent (`482c4c5`, 01:22 UTC) avait r
 
 | Conséquence | Détail |
 |---|---|
-| Plus de prévisualisation pendant la durée du blocage | Les commits `6292ccb` et suivants n'ont pas de prévisualisation ; le statut « Vercel » de la demande de fusion est rouge pour cette seule raison |
+| Un commit sans prévisualisation | **Correction du 13 novembre** : seul `6292ccb` n'a pas été déployé. Le commit suivant, `2a17015`, l'a été dix-neuf minutes plus tard. Détail : `VERCEL_DEPLOYMENTS_QUOTA.md` |
 | **Un déploiement de production serait bloqué lui aussi** | Ne pas fusionner pendant le blocage : la fusion ne mettrait rien en ligne |
 | Cause à établir | Le dépôt est relié à deux projets Vercel : chaque envoi déclenche deux déploiements. La branche a reçu sept envois en deux jours, soit quatorze déploiements : cela n'explique pas à lui seul un quota journalier, d'autres déploiements du compte ont compté |
 

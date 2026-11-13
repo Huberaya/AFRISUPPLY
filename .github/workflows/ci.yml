@@ -185,6 +185,8 @@ jobs:
           PGLITE_DIR: ${{ runner.temp }}/afs-pglite-nav
           # Le parcours du navigateur tourne lui aussi avec le rôle PostgreSQL minimal (chantier C).
           AFS_DB_MINIMAL_ROLE: 'true'
+          # Adresse d'exploitant du parcours : droits refusés avant la confirmation de l'adresse, ouverts après.
+          ADMIN_EMAILS: exploitant@parcours.test
           SEED_DEMO: 'true'
           JWT_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
           CRON_SECRET: dev-cron
@@ -217,6 +219,7 @@ jobs:
         env:
           AFS_WEB: http://localhost:3100
           AFS_OUTBOX: ${{ runner.temp }}/afs-boite-nav
+          AFS_ADMIN_EMAIL: exploitant@parcours.test
         run: node scripts/navigateur/parcours.mjs
 
       - name: Journaux en cas d'échec

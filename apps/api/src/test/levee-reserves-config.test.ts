@@ -59,6 +59,22 @@ describe('nature du déploiement', () => {
   });
 });
 
+describe('une base par environnement, sans croisement possible', () => {
+  it('la production ne lit jamais PREVIEW_DATABASE_URL ; une prévisualisation ne lit jamais DATABASE_URL', async () => {
+    const { getDatabaseUrl } = await import('@afrisupply/db');
+    const PROD = 'postgresql://utilisateur:motdepasse@ep-prod.eu-central-1.aws.neon.tech/db';
+    const PREV = 'postgresql://utilisateur:motdepasse@ep-essai.eu-central-1.aws.neon.tech/db';
+    // Production : seule DATABASE_URL compte — même absente, la base de prévisualisation n'est pas prise à sa place.
+    expect(getDatabaseUrl({ VERCEL: '1', VERCEL_ENV: 'production', DATABASE_URL: PROD, PREVIEW_DATABASE_URL: PREV })).toBe(PROD);
+    expect(getDatabaseUrl({ VERCEL: '1', VERCEL_ENV: 'production', PREVIEW_DATABASE_URL: PREV })).toBeUndefined();
+    expect(getDatabaseUrl({ NODE_ENV: 'production', DATABASE_URL: PROD, PREVIEW_DATABASE_URL: PREV })).toBe(PROD);
+    // Prévisualisation : seule PREVIEW_DATABASE_URL compte — et jamais si elle vaut la base de production.
+    expect(getDatabaseUrl({ VERCEL: '1', VERCEL_ENV: 'preview', DATABASE_URL: PROD, PREVIEW_DATABASE_URL: PREV })).toBe(PREV);
+    expect(getDatabaseUrl({ VERCEL: '1', VERCEL_ENV: 'preview', DATABASE_URL: PROD })).toBeUndefined();
+    expect(getDatabaseUrl({ VERCEL: '1', VERCEL_ENV: 'preview', DATABASE_URL: PROD, PREVIEW_DATABASE_URL: PROD })).toBeUndefined();
+  });
+});
+
 describe('clés Clerk : ce qu’elles disent sans être affichées', () => {
   it('clé du site : sorte et domaine de l’instance ; clé du serveur : sorte seulement', () => {
     expect(publishableKeyFacts(PK_DEV_AFRISUPPLY)).toEqual({ mode: 'test', frontendApi: 'afrisupply-dev-42.clerk.accounts.dev' });

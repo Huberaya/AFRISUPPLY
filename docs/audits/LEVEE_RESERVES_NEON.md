@@ -105,10 +105,10 @@ d'administration au déploiement — dont l'écran « Exploitation », utile ce 
 À faire **avant** la fusion, dans la production actuelle (la fonction y existe déjà) : l'exploitant
 se connecte, clique « Renvoyer le lien » dans le bandeau de confirmation, puis ouvre le lien reçu.
 
-Risque : l'e-mail peut ne pas arriver. La production envoie depuis l'adresse d'essai du prestataire
+Risque : l'e-mail n'arrivera vraisemblablement pas tant que l'envoi n'est pas rétabli. La production envoie depuis l'adresse d'essai du prestataire
 (`onboarding@resend.dev`), qui ne remet qu'au titulaire du compte du prestataire. C'est l'explication
 la plus probable des 0 adresses confirmées, de la tâche d'alertes en erreur et des passes
-quotidiennes « partielles » — **à confirmer** par les lectures N5 et N6. Solution de fond : fiche VERCEL-02, point M.
+quotidiennes « partielles » — **à confirmer** par les lectures N5 et N6. Solution : `RESEND_DIAGNOSTIC.md`, § 5. Il n'existe pas d'autre voie : confirmer une adresse par une écriture en base est interdit.
 
 ### 6.2 Deux événements `auth.clerk_sync`
 
@@ -129,7 +129,7 @@ travaillerait sur une copie de données personnelles. Lecture N8.
 |---|---|
 | Objet | Confirmer le relevé, qualifier les trois constats du § 6, essayer le rôle minimal sur la prévisualisation |
 | Nature | Lectures (N1 à N10), puis opérations sur la **branche de prévisualisation uniquement** (O1, O2) |
-| Interdits | Toute écriture sur la branche de production hors O3 ; toute migration ; coller un mot de passe, une chaîne de connexion ou une adresse e-mail dans une conversation ou dans le dépôt |
+| Interdits | Toute écriture sur la branche de production ; toute migration ; coller un mot de passe, une chaîne de connexion ou une adresse e-mail dans une conversation ou dans le dépôt |
 
 **Lectures (aucune écriture)**
 
@@ -152,8 +152,32 @@ travaillerait sur une copie de données personnelles. Lecture N8.
 - **O2 — brancher la prévisualisation dessus.** `PREVIEW_DATABASE_URL` (portée Preview) = chaîne de connexion de la branche de prévisualisation avec ce rôle. Ne pas poser `MIGRATE_ON_BUILD=apply` : ce rôle ne peut pas migrer, et la branche est déjà à 29.
 - **Preuves** : `GET <prévisualisation>/api/status/config` → `database.role = "afrisupply_app"`, `superuser: false`, `bypassRls: false`, `canCreateTables: false`, `migrations.state = "a_jour"` ; puis le parcours du navigateur sur la prévisualisation.
 
-**Opération sur la production — uniquement sur décision explicite du titulaire**
-
-- **O3 — confirmer l'adresse de l'exploitant, si l'e-mail de confirmation n'arrive pas.** Une ligne, le compte du titulaire lui-même : `update users set email_verified_at = now() where lower(email) = lower('<adresse de l''exploitant>') and email_verified_at is null returning id;` — une seule ligne doit revenir. C'est une écriture en production : elle demande l'accord écrit du titulaire et se consigne (date, auteur, résultat).
+**Aucune écriture sur la production.** Une version précédente de cette fiche proposait, en dernier
+recours, de confirmer l'adresse de l'exploitant par une écriture en base (opération O3). **Elle est
+retirée** : une adresse ne se confirme que par le lien reçu par e-mail. Si l'e-mail n'arrive pas, c'est
+l'envoi qu'il faut rétablir (`RESEND_DIAGNOSTIC.md`).
 
 Le passage de la **production** au rôle minimal n'est pas un préalable à la fusion : il se décide après l'essai sur la prévisualisation.
+
+## 8. Prévisualisation propre (mise à jour du 13 novembre — chantier P0-B)
+
+**Relevé indépendant** : la branche de prévisualisation actuelle est une copie de la production
+(96 comptes, 89 restaurants, 50 commandes, 29 migrations de part et d'autre). Elle contient donc des
+données personnelles réelles. **Plus aucun essai ne doit y être fait.** Elle n'est ni purgée ni supprimée sans décision.
+
+**48 tables dans le code, 49 sur Neon.** La 49e est le journal des migrations (`drizzle.__drizzle_migrations`),
+hors du schéma `public`. À confirmer par : `select table_schema, count(*) from information_schema.tables where table_schema not in ('pg_catalog', 'information_schema') group by 1;` — attendu : `public` 48, `drizzle` 1. Toute autre réponse désigne une table inconnue du code, à signaler.
+
+| # | Geste (console Neon, ChatGPT) | Contrôle |
+|---|---|---|
+| P1 | Créer une base **vide qui ne dérive pas de la production** : de préférence un projet Neon distinct ; à défaut une branche « schéma seul » si l'offre la propose. Ne pas vider la branche copiée : ses données resteraient dans son historique | Le nom d'hôte diffère de celui de la production |
+| P2 | Éditeur SQL, rôle propriétaire : jouer `packages/db/sql/base_neuve.sql` (les 29 migrations et leur journal, aucune donnée ; il refuse une base qui contient déjà des tables) | `select count(*) from drizzle.__drizzle_migrations;` → 29 |
+| P3 | Vérifier qu'elle est vide | `select (select count(*) from users) + (select count(*) from restaurants) + (select count(*) from orders) + (select count(*) from audit_log);` → 0 |
+| P4 | Créer le rôle en SQL (§ 7, O1), puis jouer `packages/db/roles/afrisupply_app.sql` | `select rolsuper, rolbypassrls, rolcreaterole, rolcreatedb from pg_roles where rolname = 'afrisupply_app';` → quatre fois `false` |
+| P5 | `PREVIEW_DATABASE_URL`, portée Preview uniquement : cette base, ce rôle. Redéployer la prévisualisation | — |
+| P6 | Lire `GET <prévisualisation>/api/status/config` | `database.role = "afrisupply_app"`, `superuser`, `bypassRls`, `createRole`, `canCreateTables` à `false`, `migrations.state = "a_jour"`, `database.host` ≠ production |
+| P7 | Parcours du navigateur sur la prévisualisation (données fictives en `@parcours.test`) | Ensuite : `select count(*) from users where email not like '%@parcours.test';` → 0 |
+
+Ce qui est prouvé hors de Neon : le fichier de base neuve produit exactement le schéma de l'outil de
+migration (colonnes, index, contraintes et types comparés), et les privilèges du rôle sont couverts
+table par table (`apps/api/src/test/levee-blocages-role.test.ts`, 12 tests). **Sur Neon : EN ATTENTE EXTERNE.**
