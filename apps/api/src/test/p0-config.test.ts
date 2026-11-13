@@ -229,25 +229,35 @@ describe('4. Migrations : contrôlées, jamais appliquées par surprise', () => 
     expect(describeMigrationStatus(s)).toMatch(/base à jour \(29\/29/);
   });
 
+  // Écrire dans le journal des migrations est un geste de propriétaire : le rôle applicatif minimal
+  // (AFS_DB_MINIMAL_ROLE=true, levée des réserves) n'en a pas le droit — et c'est voulu. Le test
+  // reprend donc le rôle propriétaire le temps d'une écriture, puis rend la main au rôle applicatif.
+  const enProprietaire = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const client = ((await getDb()) as unknown as { $client: { exec: (q: string) => Promise<unknown> } }).$client;
+    const minimal = process.env.AFS_DB_MINIMAL_ROLE === 'true';
+    if (minimal) await client.exec('RESET ROLE');
+    try { return await fn(); } finally { if (minimal) await client.exec('SET ROLE afrisupply_app'); }
+  };
+
   it('une base en retard, en avance ou divergente est détectée — sans jamais écrire', async () => {
     const db = await getDb();
     const lignes = async () => Number((await db.execute(sql`select count(*)::int as n from drizzle.__drizzle_migrations`)).rows[0].n);
     const [derniere] = (await db.execute(sql`select id, hash, created_at from drizzle.__drizzle_migrations order by created_at desc limit 1`)).rows as { id: number; hash: string; created_at: string }[];
     // en retard : la dernière migration du code manque dans la base
-    await db.execute(sql`delete from drizzle.__drizzle_migrations where id = ${derniere.id}`);
+    await enProprietaire(() => db.execute(sql`delete from drizzle.__drizzle_migrations where id = ${derniere.id}`));
     const retard = await migrationStatus();
     expect(retard.state).toBe('en_retard'); expect(retard.pending).toEqual(['0028_clerk_auth']); expect(retard.applied).toBe(28);
     expect(await lignes()).toBe(28);   // la lecture n'a rien réparé toute seule
     // divergente : la migration est inscrite, mais avec une autre empreinte que le fichier du dépôt
-    await db.execute(sql`insert into drizzle.__drizzle_migrations (hash, created_at) values (${'empreinte-modifiee'}, ${derniere.created_at})`);
+    await enProprietaire(() => db.execute(sql`insert into drizzle.__drizzle_migrations (hash, created_at) values (${'empreinte-modifiee'}, ${derniere.created_at})`));
     const diverge = await migrationStatus();
     expect(diverge.state).toBe('divergente'); expect(diverge.modified).toEqual(['0028_clerk_auth']);
     // en avance : la base connaît une migration que ce code n'a pas
-    await db.execute(sql`update drizzle.__drizzle_migrations set hash = ${derniere.hash} where created_at = ${derniere.created_at}`);
-    await db.execute(sql`insert into drizzle.__drizzle_migrations (hash, created_at) values (${'migration-future'}, ${'9999999999999'})`);
+    await enProprietaire(() => db.execute(sql`update drizzle.__drizzle_migrations set hash = ${derniere.hash} where created_at = ${derniere.created_at}`));
+    await enProprietaire(() => db.execute(sql`insert into drizzle.__drizzle_migrations (hash, created_at) values (${'migration-future'}, ${'9999999999999'})`));
     const avance = await migrationStatus();
     expect(avance.state).toBe('en_avance'); expect(avance.unknownInDatabase).toBe(1); expect(avance.pending).toEqual([]);
-    await db.execute(sql`delete from drizzle.__drizzle_migrations where hash = ${'migration-future'}`);
+    await enProprietaire(() => db.execute(sql`delete from drizzle.__drizzle_migrations where hash = ${'migration-future'}`));
     expect((await migrationStatus()).state).toBe('a_jour');
   });
 
@@ -257,13 +267,13 @@ describe('4. Migrations : contrôlées, jamais appliquées par surprise', () => 
     const sain = await appel('GET', '/api/status');
     expect(sain.json.checks.schema).toMatchObject({ ok: true, state: 'a_jour', expected: 29, applied: 29, pending: 0 });
     const [derniere] = (await db.execute(sql`select id, hash, created_at from drizzle.__drizzle_migrations order by created_at desc limit 1`)).rows as { id: number; hash: string; created_at: string }[];
-    await db.execute(sql`delete from drizzle.__drizzle_migrations where id = ${derniere.id}`);
+    await enProprietaire(() => db.execute(sql`delete from drizzle.__drizzle_migrations where id = ${derniere.id}`));
     _resetSchemaCache();
     const retard = await appel('GET', '/api/status');
     expect(retard.status).toBe(503);
     expect(retard.json.ok).toBe(false);
     expect(retard.json.checks.schema).toMatchObject({ ok: false, state: 'en_retard', pending: 1 });
-    await db.execute(sql`insert into drizzle.__drizzle_migrations (hash, created_at) values (${derniere.hash}, ${derniere.created_at})`);
+    await enProprietaire(() => db.execute(sql`insert into drizzle.__drizzle_migrations (hash, created_at) values (${derniere.hash}, ${derniere.created_at})`));
     _resetSchemaCache();
     expect((await appel('GET', '/api/status')).json.checks.schema.state).toBe('a_jour');
   });

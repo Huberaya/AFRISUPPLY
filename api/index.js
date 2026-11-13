@@ -1153,6 +1153,16 @@ function resolveMigrationsFolder() {
   }
   return path.resolve(here, "../drizzle");
 }
+function resolveAppRoleScript() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  for (const c of [path.resolve(process.cwd(), "packages/db/roles/afrisupply_app.sql"), path.resolve(here, "../roles/afrisupply_app.sql"), path.resolve(here, "../../packages/db/roles/afrisupply_app.sql")]) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch {
+    }
+  }
+  return null;
+}
 async function runMigrations(target) {
   const db = target ?? await getDb();
   const folder = resolveMigrationsFolder();
@@ -1160,15 +1170,31 @@ async function runMigrations(target) {
     const { migrate } = await import("drizzle-orm/neon-serverless/migrator");
     await migrate(db, { migrationsFolder: folder });
   } else {
+    const minimal = minimalRoleRequested() ? rawClient(db) : null;
+    if (minimal) await minimal.exec("RESET ROLE");
     const { migrate } = await import("drizzle-orm/pglite/migrator");
     await migrate(db, { migrationsFolder: folder });
+    if (minimal) {
+      const script = resolveAppRoleScript();
+      if (!script) throw new Error("AFS_DB_MINIMAL_ROLE=true mais packages/db/roles/afrisupply_app.sql est introuvable.");
+      await minimal.exec(fs.readFileSync(script, "utf8"));
+      await minimal.exec(`SET ROLE ${APP_ROLE}`);
+      console.log(`[db] r\xF4le applicatif minimal \xAB ${APP_ROLE} \xBB : l'application ne peut plus que lire et \xE9crire des lignes`);
+    }
   }
   console.log("[db] migrations appliqu\xE9es");
 }
+var APP_ROLE, minimalRoleRequested, rawClient;
 var init_migrate = __esm({
   "packages/db/src/migrate.ts"() {
     "use strict";
     init_client();
+    APP_ROLE = "afrisupply_app";
+    minimalRoleRequested = (env = process.env) => env.AFS_DB_MINIMAL_ROLE === "true";
+    rawClient = (db) => {
+      const c = db.$client;
+      return c && typeof c.exec === "function" ? c : null;
+    };
     if (process.argv[1] && process.argv[1].endsWith("migrate.ts")) {
       runMigrations().then(() => process.exit(0)).catch((e) => {
         console.error(e);
@@ -2530,13 +2556,20 @@ var init_orders = __esm({
 import { sql as sql4 } from "drizzle-orm";
 async function syncSequenceToMax(opts) {
   const db = await getDb();
-  await db.execute(sql4.raw(`create sequence if not exists ${opts.sequence}`));
-  const res = await db.execute(sql4.raw(`
-    select
-      coalesce((select last_value from pg_sequences where schemaname = current_schema() and sequencename = '${opts.sequence}'), 0) as cur,
-      coalesce((select max(substring(${opts.column} from ${opts.digitsFrom})::int) from ${opts.table} where ${opts.column} ~ '${opts.pattern}'), 0) as maxref`));
-  const rows = res.rows ?? res;
-  const row = Array.isArray(rows) ? rows[0] : rows;
+  const lire = async () => {
+    const res = await db.execute(sql4.raw(`
+      select
+        (select count(*)::int from pg_sequences where schemaname = current_schema() and sequencename = '${opts.sequence}') as existe,
+        coalesce((select last_value from pg_sequences where schemaname = current_schema() and sequencename = '${opts.sequence}'), 0) as cur,
+        coalesce((select max(substring(${opts.column} from ${opts.digitsFrom})::int) from ${opts.table} where ${opts.column} ~ '${opts.pattern}'), 0) as maxref`));
+    const rows = res.rows ?? res;
+    return Array.isArray(rows) ? rows[0] : rows;
+  };
+  let row = await lire();
+  if (!Number(row?.existe ?? 0)) {
+    await db.execute(sql4.raw(`create sequence if not exists ${opts.sequence}`));
+    row = await lire();
+  }
   const cur = Number(row?.cur ?? 0);
   const maxref = Number(row?.maxref ?? 0);
   if (maxref > cur) {

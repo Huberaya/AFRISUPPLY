@@ -14,7 +14,8 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { runMigrations } from '@afrisupply/db';
+import { sql } from 'drizzle-orm';
+import { runMigrations, getDb } from '@afrisupply/db';
 import { demarrerFauxClerk, type FauxClerk } from './faux-clerk.js';
 
 process.env.NODE_ENV = 'test';
@@ -261,9 +262,28 @@ describe('GET /api/status et /api/status/config', () => {
     expect(d.canCreateTables === true || d.canCreateTables === false).toBe(true);
   });
 
+  // Chantier C — rôle applicatif à privilèges minimaux (packages/db/roles/afrisupply_app.sql).
+  // `AFS_DB_MINIMAL_ROLE=true npm test -w apps/api` rejoue TOUTE la suite de l'API avec ce rôle
+  // (tâche « rôle minimal » de l'intégration continue). Ce test-ci prouve que le rôle est bien en
+  // place pendant ce passage : sans lui, la suite passerait pour de mauvaises raisons.
+  it('sous le rôle applicatif minimal : lire et écrire des lignes, rien d’autre', async () => {
+    const d = await databaseDiagnostic();
+    if (process.env.AFS_DB_MINIMAL_ROLE !== 'true') { expect(d.role).not.toBe('afrisupply_app'); return; }
+    expect(d).toMatchObject({ role: 'afrisupply_app', superuser: false, bypassRls: false, canCreateTables: false, error: null });
+    const db = await getDb();
+    const interdits = ['create table interdit (id int)', 'alter table users add column interdit int', 'drop table rate_limits', 'truncate rate_limits',
+      'create sequence interdite', 'create role intrus', 'delete from drizzle.__drizzle_migrations', 'alter table users enable row level security'];
+    for (const q of interdits) await expect(db.execute(sql.raw(q)), q).rejects.toThrow();
+    // … et ce dont l'application a besoin reste permis : lignes, séquences de numérotation, journal en lecture.
+    await db.execute(sql.raw("insert into rate_limits (key, n, reset_at) values ('essai-role-minimal', 1, now()) on conflict (key) do nothing"));
+    await db.execute(sql.raw("delete from rate_limits where key = 'essai-role-minimal'"));
+    await db.execute(sql.raw("select nextval('order_ref_seq'), nextval('subscription_invoice_seq'), nextval('claim_ref_seq')"));
+    await db.execute(sql.raw('select count(*) from drizzle.__drizzle_migrations'));
+  });
+
   it('toute variable lue par le code de l’API figure dans le diagnostic (ou dans la liste de celles qui n’ont pas à y être)', () => {
     // Réglages sans enjeu de sécurité ni d'environnement, et variables fournies par la plateforme ou réservées aux tests.
-    const HORS_SUIVI = new Set(['NODE_ENV', 'PORT', 'PGLITE_DIR', 'MAIL_OUTBOX_DIR', 'BACKUP_DIR', 'BACKUP_KEEP', 'BACKUP_OFFSITE_KEEP', 'BACKUP_S3_PREFIX', 'BACKUP_S3_STYLE',
+    const HORS_SUIVI = new Set(['NODE_ENV', 'PORT', 'PGLITE_DIR', 'AFS_DB_MINIMAL_ROLE', 'MAIL_OUTBOX_DIR', 'BACKUP_DIR', 'BACKUP_KEEP', 'BACKUP_OFFSITE_KEEP', 'BACKUP_S3_PREFIX', 'BACKUP_S3_STYLE',
       'AFS_SELF_URL', 'CLERK_API_URL', 'CLERK_FRONTEND_API_URL', 'CLERK_TIMEOUT_MS', 'OFFSITE_TIMEOUT_MS', 'DAILY_BUDGET_MS', 'DAILY_LEASE_MS', 'DAILY_MAX_TRANCHES', 'STRIPE_API_BASE', 'STRIPE_COUPON_FOUNDER',
       'EMAIL_VERIFY_TTL_HOURS', 'PASSWORD_RESET_TTL_MINUTES', 'PASSWORD_MIN_LENGTH', 'IMMEDIATE_ALERT_WINDOW_HOURS', 'ORDER_MAX_MONTHS_OF_STOCK', 'REMINDER_HOURS', 'SALES_GAP_DAYS',
       'INVOICE_ADDRESS', 'INVOICE_EMAIL', 'INVOICE_IBAN', 'LLM_BASE_URL', 'LLM_MODEL', 'LLM_VISION_MODEL', 'SUPPORT_PHONE',
