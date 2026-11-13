@@ -283,7 +283,7 @@ export default function AppLayout() {
           </div>
         )}
         <EmailVerifyBanner />
-        <main id="main-content" className="px-4 pt-6 pb-24 max-w-7xl lg:px-8 lg:py-8 lg:pb-8"><Outlet /></main>
+        <main id="main-content" className="px-4 pt-6 pb-24 max-w-7xl lg:px-8 lg:py-8 lg:pb-24"><Outlet /></main>
         <FeedbackWidget /><UsageBeacon />
       </div>
 

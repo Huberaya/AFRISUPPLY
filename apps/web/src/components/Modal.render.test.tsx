@@ -41,6 +41,18 @@ describe('fenêtre de dialogue', () => {
     cleanup();
   });
 
+  it('la touche Échap ferme la fenêtre ; une autre touche ne ferme rien ; fermée, elle n’écoute plus', () => {
+    const fermer = vi.fn();
+    const { unmount } = render(<Modal title="Nouveau fournisseur" onClose={fermer}><input aria-label="Nom" /></Modal>);
+    fireEvent.keyDown(document, { key: 'a' });
+    expect(fermer).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(fermer).toHaveBeenCalledTimes(1);
+    unmount();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(fermer).toHaveBeenCalledTimes(1);
+  });
+
   it('l’animation d’entrée des pages se termine sans transformation', () => {
     const config = readFileSync(path.resolve(process.cwd(), 'tailwind.config.js'), 'utf8');   // les tests du site s'exécutent depuis apps/web
     const fin = /fadeUp:\s*\{[^}]*\},\s*to:\s*\{([^}]*)\}/.exec(config)?.[1] ?? '';

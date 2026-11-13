@@ -82,6 +82,10 @@ describe('4 bis. Saisie express', () => {
     const p = await call('POST', '/api/quick/parse', { text: `vendu 30 ${recipe.name}` }, A()); expect(p.status).toBe(200); expect(p.json.kind).toBe('vente'); expect(p.json.lines[0].match?.id).toBe(recipe.id);
     const stockBefore = (await call('GET', '/api/stock', undefined, A())).json.items;
     const a = await call('POST', '/api/quick/apply', { kind: 'vente', lines: [{ id: recipe.id, qty: 30 }] }, A()); expect(a.status).toBe(200); expect(a.json.applied).toBe(1);
+    // Levée des réserves : l'écran annonce « stock mis à jour sur N produits » — N compte des produits
+    // distincts (jamais plus que de lignes de stock modifiées, jamais zéro quand le stock a bougé).
+    expect(a.json.stockProductsUpdated).toBeGreaterThan(0);
+    expect(a.json.stockProductsUpdated).toBeLessThanOrEqual(a.json.stockLinesUpdated);
     const stockAfter = (await call('GET', '/api/stock', undefined, A())).json.items;
     expect(stockAfter.reduce((s: number, i: Json) => s + Number(i.quantity), 0)).toBeLessThan(stockBefore.reduce((s: number, i: Json) => s + Number(i.quantity), 0));
     const item = stockAfter[0];

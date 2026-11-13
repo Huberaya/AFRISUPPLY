@@ -13341,6 +13341,7 @@ quickRoutes.post("/quick/apply", async (c) => {
     const prev = new Map((await db.select().from(sales).where(and33(eq37(sales.restaurantId, rid2), eq37(sales.day, day)))).map((p) => [p.recipeId, p.portions]));
     let applied2 = 0;
     let consumed = 0;
+    const touched = /* @__PURE__ */ new Set();
     for (const l of d.lines) {
       if (!valid.has(l.id)) continue;
       const portions = Math.round(l.qty);
@@ -13357,9 +13358,10 @@ quickRoutes.post("/quick/apply", async (c) => {
         await db.insert(stockMovements).values({ restaurantId: rid2, inventoryItemId: item.id, type: "consommation", quantity: (-q2).toFixed(3), note: `Saisie express ventes ${day}`, createdBy: user.id });
         await db.update(inventoryItems).set({ quantity: Math.max(0, n16(item.quantity) - q2).toFixed(3), updatedAt: /* @__PURE__ */ new Date() }).where(eq37(inventoryItems.id, item.id));
         consumed++;
+        touched.add(item.id);
       }
     }
-    return c.json({ ok: true, kind: d.kind, day, applied: applied2, stockLinesUpdated: consumed });
+    return c.json({ ok: true, kind: d.kind, day, applied: applied2, stockLinesUpdated: consumed, stockProductsUpdated: touched.size });
   }
   const ids = d.lines.map((l) => l.id);
   const items = await db.select().from(inventoryItems).where(and33(eq37(inventoryItems.restaurantId, rid2), inArray18(inventoryItems.id, ids)));

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
@@ -8,8 +8,15 @@ import { X } from 'lucide-react';
  * l'endroit de la page qui l'ouvre. Rendue à l'intérieur de la page, elle héritait du repère d'un
  * ancêtre transformé (animation d'entrée) : voile réduit à la zone de la page, haut du formulaire hors
  * de l'écran quand la page est courte.
+ *
+ * La touche Échap ferme la fenêtre, comme le bouton « Fermer » et le clic sur le voile.
  */
 export function Modal({ title, subtitle, onClose, children, wide }: { title: string; subtitle?: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  useEffect(() => {
+    const surTouche = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
+    document.addEventListener('keydown', surTouche);
+    return () => document.removeEventListener('keydown', surTouche);
+  }, [onClose]);
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
       <div className={`card w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} max-h-[90vh] overflow-y-auto`} onClick={(e) => e.stopPropagation()}>
