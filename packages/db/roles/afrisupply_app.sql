@@ -25,9 +25,16 @@ BEGIN
 END
 $$;
 
--- Rien par défaut : on retire ce que « tout le monde » reçoit d'office sur le schéma.
+-- Rien par défaut : on retire ce que « tout le monde » reçoit d'office sur le schéma et sur la base.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM afrisupply_app;
+-- Tables temporaires : PostgreSQL en donne le droit à tous ; l'application n'en crée aucune.
+DO $$
+BEGIN
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
+  EXECUTE format('REVOKE CREATE ON DATABASE %I FROM afrisupply_app', current_database());
+END
+$$;
 
 -- Séquences de numérotation (commandes AFS-…, factures AFR-…, litiges LIT-…). L'application les créait
 -- elle-même à la première utilisation ; ce rôle ne peut rien créer, elles doivent donc exister d'avance.

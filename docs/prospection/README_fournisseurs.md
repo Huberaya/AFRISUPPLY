@@ -1,5 +1,11 @@
 # Prospection — fournisseurs / grossistes africains d'Île-de-France
 
+> **Les fichiers de données ne sont plus dans le dépôt.** Ce dépôt est public, et ces listes contiennent des
+> coordonnées de tiers (noms de dirigeants, téléphones, adresses e-mail). Elles ont été retirées de la branche
+> le 13 novembre 2026 ; elles restent dans l'historique Git tant qu'il n'est pas purgé
+> (`docs/audits/DEPOT_PUBLIC_DONNEES_PERSONNELLES.md`). La liste de travail se conserve hors du dépôt et s'importe
+> dans l'application par l'écran « Prospection » du back-office. Ce document ne décrit plus que la méthode.
+
 Fichiers : `fournisseurs_africains_idf.xlsx` (feuilles *Fournisseurs* + *Synthèse*) et `fournisseurs_africains_idf.csv` (séparateur `;`, UTF-8).
 Les mêmes fiches sont importées dans l'onglet admin **Prospection → Fournisseurs** (`/app/admin/prospection?kind=fournisseur`), statut « À contacter ».
 

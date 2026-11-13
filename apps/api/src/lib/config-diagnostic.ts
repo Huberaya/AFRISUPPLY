@@ -42,7 +42,8 @@ export type DatabaseDiagnostic = {
   host: string | null;
   region: string | null;
   /** Rôle PostgreSQL de la connexion et ce qu'il peut faire au-delà de lire et d'écrire des lignes. */
-  role: string | null; superuser: boolean | null; bypassRls: boolean | null; canCreateTables: boolean | null;
+  role: string | null; superuser: boolean | null; bypassRls: boolean | null; createRole: boolean | null; createDb: boolean | null;
+  canCreateTables: boolean | null; canCreateTempTables: boolean | null;
   tables: number | null; rlsTables: number | null; rlsForced: number | null; policies: number | null;
   migrations: { state: string; expected: number | null; applied: number | null } | null;
   error: string | null;
@@ -55,7 +56,7 @@ export async function databaseDiagnostic(env: NodeJS.ProcessEnv = process.env): 
   const r = databaseRegion(env);
   const out: DatabaseDiagnostic = {
     driver: url ? 'neon' : 'pglite', host, region: r ? `${r.provider}/${r.region}` : null,
-    role: null, superuser: null, bypassRls: null, canCreateTables: null, tables: null, rlsTables: null, rlsForced: null, policies: null, migrations: null, error: null,
+    role: null, superuser: null, bypassRls: null, createRole: null, createDb: null, canCreateTables: null, canCreateTempTables: null, tables: null, rlsTables: null, rlsForced: null, policies: null, migrations: null, error: null,
   };
   try {
     const db = await getDb();
@@ -63,7 +64,10 @@ export async function databaseDiagnostic(env: NodeJS.ProcessEnv = process.env): 
       select current_user::text as role,
              (select rolsuper from pg_roles where rolname = current_user) as superuser,
              (select rolbypassrls from pg_roles where rolname = current_user) as bypass_rls,
+             (select rolcreaterole from pg_roles where rolname = current_user) as create_role,
+             (select rolcreatedb from pg_roles where rolname = current_user) as create_db,
              has_schema_privilege(current_user, 'public', 'CREATE') as can_create,
+             has_database_privilege(current_user, current_database(), 'TEMPORARY') as can_temp,
              (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r') as tables,
              (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity) as rls_tables,
              (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and c.relforcerowsecurity) as rls_forced,
@@ -72,7 +76,8 @@ export async function databaseDiagnostic(env: NodeJS.ProcessEnv = process.env): 
     if (row) {
       const bool = (v: unknown) => (v === null || v === undefined ? null : v === true || v === 't' || v === 'true');
       out.role = row.role === null || row.role === undefined ? null : String(row.role);
-      out.superuser = bool(row.superuser); out.bypassRls = bool(row.bypass_rls); out.canCreateTables = bool(row.can_create);
+      out.superuser = bool(row.superuser); out.bypassRls = bool(row.bypass_rls); out.createRole = bool(row.create_role); out.createDb = bool(row.create_db);
+      out.canCreateTables = bool(row.can_create); out.canCreateTempTables = bool(row.can_temp);
       out.tables = Number(row.tables); out.rlsTables = Number(row.rls_tables); out.rlsForced = Number(row.rls_forced); out.policies = Number(row.policies);
     }
     const m = await migrationStatus();

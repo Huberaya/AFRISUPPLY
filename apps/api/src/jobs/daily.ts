@@ -170,7 +170,7 @@ export async function runDailyForRestaurant(rid: string, opts: { dryRun?: boolea
       const digest = buildDigest({ ...input, firstName: rcpt.firstName }); preview ??= digest;
       if (opts.dryRun) continue;
       const res = await sendMail({ to: rcpt.email, subject: digest.subject, text: digest.text, html: digest.html, tags: { type: 'daily_digest', restaurant: rid } });
-      transport = res.transport; if (!res.ok) throw new Error(res.error);
+      transport = res.transport; if (!res.ok) throw new Error(`[${res.code}] ${res.error}`);
     }
     if (pending.length) await markAlertsNotified(pending.map((a) => a.id), now);
     return { ...base, digest: 'sent', recipients: recipients.map((x) => x.email), transport: opts.dryRun ? 'dry-run' : transport, preview };

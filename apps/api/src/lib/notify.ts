@@ -8,7 +8,7 @@
 // la fonction est appelée à la fois par la réception, par la route d'alertes et par le cron horaire.
 import { and, asc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { getDb, alerts, restaurants } from '@afrisupply/db';
-import { sendMail } from './mailer.js';
+import { sendMail, maskEmail, MAIL_CONFIG_ERRORS, MAIL_ERROR_MESSAGES, type MailErrorCode } from './mailer.js';
 import { recordJobRun } from './job-runs.js';
 import { recipientsFor } from './recipients.js';
 
@@ -79,9 +79,21 @@ export function buildAlertMail(restaurantName: string, list: PendingAlert[]) {
   return { subject, text, html };
 }
 
+/**
+ * Levée des blocages (chantier E) — pourquoi un restaurant n'a pas reçu ses alertes.
+ * `no_recipient` et `disabled` ne sont pas des pannes : il n'y avait personne à qui écrire, ou le
+ * restaurant a coupé ces e-mails. Les autres motifs sont ceux du service d'envoi (lib/mailer.ts).
+ */
+export type NotifyReason = MailErrorCode | 'no_recipient' | 'disabled' | 'not_attempted';
+
 export interface NotifyResult {
-  restaurantId: string; alerts: number; emails: number; recipients: string[];
-  sent: boolean; transport?: string; delivered?: boolean; status: 'ok' | 'partial' | 'error' | 'nothing';
+  restaurantId: string; alerts: number; emails: number;
+  /** Destinataires, masqués (« a***@domaine.fr ») : ce résultat part dans des réponses et des journaux. */
+  recipients: string[];
+  sent: boolean; transport?: string; delivered?: boolean;
+  /** `skipped` : rien à reprocher à l'envoi (aucun destinataire) ; `error` : l'envoi a été tenté et rien n'est parti. */
+  status: 'ok' | 'partial' | 'error' | 'nothing' | 'skipped';
+  reason?: NotifyReason;
   error?: string;
 }
 
@@ -89,7 +101,7 @@ export interface NotifyResult {
  * Envoie (tout de suite) l'e-mail des alertes urgentes en attente d'un restaurant.
  * `record` : écrit une ligne `job_runs` — chaque envoi doit être supervisable.
  */
-export async function notifyCriticalAlerts(rid: string, opts: { now?: Date; record?: boolean; recordJob?: string } = {}): Promise<NotifyResult> {
+export async function notifyCriticalAlerts(rid: string, opts: { now?: Date; record?: boolean; recordJob?: string; dontSend?: NotifyReason } = {}): Promise<NotifyResult> {
   const now = opts.now ?? new Date();
   const startedAt = new Date();
   const db = await getDb();
@@ -101,7 +113,7 @@ export async function notifyCriticalAlerts(rid: string, opts: { now?: Date; reco
   const out: NotifyResult = { restaurantId: rid, alerts: pending.length, emails: 0, recipients: [], sent: false, status: 'partial' };
 
   if (r?.settings?.immediateAlertEmails === false) {
-    out.status = 'nothing'; out.error = 'alertes immédiates désactivées dans les réglages';
+    out.status = 'nothing'; out.reason = 'disabled'; out.error = 'alertes immédiates désactivées dans les réglages';
     // Désactivé volontairement : on ne notifie jamais par e-mail, on marque pour ne pas réessayer en boucle.
     await markAlertsNotified(pending.map((a) => a.id), now);
     if (opts.record !== false) await recordJobRun({ job: opts.recordJob ?? 'alerts-notify', startedAt, status: 'ok', summary: { restaurantId: rid, skipped: 'immediate_alert_emails_disabled', alerts: pending.length } });
@@ -109,35 +121,49 @@ export async function notifyCriticalAlerts(rid: string, opts: { now?: Date; reco
   }
 
   const recipients = await recipientsFor(rid, r?.settings?.digestRecipients);
-  out.recipients = recipients.map((x) => x.email);
+  out.recipients = recipients.map((x) => maskEmail(x.email));
   if (!recipients.length) {
-    out.status = 'error'; out.error = 'aucun destinataire : renseignez un e-mail dans les réglages';
-    if (opts.record !== false) await recordJobRun({ job: opts.recordJob ?? 'alerts-notify', startedAt, status: 'error', summary: { restaurantId: rid, alerts: pending.length, recipients: 0 }, error: out.error });
+    // Personne à qui écrire : ce n'est pas une panne de l'envoi. Les alertes restent dans la cloche
+    // et dans le mail du matin ; elles ne sont pas marquées (un destinataire ajouté plus tard les recevra).
+    out.status = 'skipped'; out.reason = 'no_recipient'; out.error = 'aucun destinataire : renseignez un e-mail dans les réglages';
+    if (opts.record !== false) await recordJobRun({ job: opts.recordJob ?? 'alerts-notify', startedAt, status: 'ok', summary: { restaurantId: rid, alerts: pending.length, recipients: 0, skipped: 'no_recipient' } });
+    return out;
+  }
+  if (opts.dontSend) {
+    // Le balayage a déjà constaté que l'envoi est impossible pour tout le monde (configuration, limite
+    // de débit) : on n'insiste pas auprès du prestataire. Rien n'est marqué : tout repartira au prochain passage.
+    out.status = 'error'; out.reason = 'not_attempted'; out.error = `envoi non tenté : ${MAIL_ERROR_MESSAGES[opts.dontSend as MailErrorCode] ?? opts.dontSend}`;
     return out;
   }
 
   const { subject, text, html } = buildAlertMail(r?.name ?? 'votre restaurant', pending);
-  let transport = ''; let delivered = false; let error: string | undefined;
+  let transport = ''; let delivered = 0; let failureCode: MailErrorCode | undefined;
   for (const rcpt of recipients) {
     const res = await sendMail({ to: rcpt.email, subject, text: html ? text : text, html, tags: { type: 'alert_immediate', restaurant: rid } });
     transport = res.transport;
-    if (res.ok && res.delivered) delivered = true;
-    if (!res.ok) error = res.error;
+    if (res.ok && res.delivered) delivered += 1;
+    if (!res.ok) {
+      failureCode = res.code;
+      // Un échec de configuration ou une limite de débit frappera aussi les destinataires suivants.
+      if (MAIL_CONFIG_ERRORS.includes(res.code) || res.code === 'mail_rate_limited') break;
+    }
   }
-  out.transport = transport; out.delivered = delivered; out.emails = delivered ? recipients.length : 0;
+  out.transport = transport; out.delivered = delivered > 0; out.emails = delivered;
 
-  if (delivered) {
+  if (delivered > 0) {
+    // Au moins un responsable a reçu le message : les alertes sont annoncées, elles ne repartiront pas.
     await markAlertsNotified(pending.map((a) => a.id), now);
-    out.sent = true; out.status = 'ok';
+    out.sent = true; out.status = delivered === recipients.length ? 'ok' : 'partial';
+    if (failureCode) { out.reason = failureCode; out.error = MAIL_ERROR_MESSAGES[failureCode]; }
   } else {
     // Rien n'est parti : on ne marque PAS les alertes (elles repartiront dès qu'un canal réel sera configuré).
-    out.status = 'error'; out.error = error ?? 'envoi impossible : aucun service d’e-mail configuré';
+    out.status = 'error'; out.reason = failureCode ?? 'mail_not_configured'; out.error = MAIL_ERROR_MESSAGES[failureCode ?? 'mail_not_configured'];
   }
   if (opts.record !== false) {
     await recordJobRun({
-      job: opts.recordJob ?? 'alerts-notify', startedAt, status: out.status === 'ok' ? 'ok' : 'error',
-      summary: { restaurantId: rid, alerts: pending.length, recipients: out.recipients.length, sent: out.sent, transport, kinds: pending.map((a) => a.kind) },
-      error: out.error ?? null,
+      job: opts.recordJob ?? 'alerts-notify', startedAt, status: out.sent ? 'ok' : 'error',
+      summary: { restaurantId: rid, alerts: pending.length, recipients: out.recipients.length, emails: out.emails, sent: out.sent, transport, kinds: pending.map((a) => a.kind), ...(out.reason ? { reason: out.reason } : {}) },
+      error: out.sent ? null : out.error ?? null,
     });
   }
   return out;
@@ -148,13 +174,28 @@ export async function notifyAllRestaurants(opts: { now?: Date; limit?: number } 
   const startedAt = new Date(); const db = await getDb();
   const all = await db.select({ id: restaurants.id }).from(restaurants).orderBy(asc(restaurants.createdAt)).limit(opts.limit ?? 200);
   const details: NotifyResult[] = [];
-  for (const r of all) { const res = await notifyCriticalAlerts(r.id, { now: opts.now, record: false }); if (res.alerts) details.push(res); }
+  // Dès qu'un envoi échoue pour une raison qui vaut pour tout le monde (configuration du service,
+  // limite de débit), le balayage cesse de solliciter le prestataire : il note le motif et continue
+  // sans envoyer. Les alertes ne sont pas marquées : elles repartiront au passage suivant, une seule fois.
+  let blocked: NotifyReason | undefined;
+  for (const r of all) {
+    const res = await notifyCriticalAlerts(r.id, { now: opts.now, record: false, dontSend: blocked });
+    if (res.alerts) details.push(res);
+    if (!blocked && res.status === 'error' && res.reason && (MAIL_CONFIG_ERRORS.includes(res.reason as MailErrorCode) || res.reason === 'mail_rate_limited')) blocked = res.reason;
+  }
   const sent = details.filter((d) => d.sent).reduce((a, d) => a + d.emails, 0);
-  const failed = details.filter((d) => d.status === 'error').length;
+  const failedList = details.filter((d) => d.status === 'error');
+  const failed = failedList.length;
+  const skipped = details.filter((d) => d.status === 'skipped').length;
+  // Motifs comptés : la ligne de suivi dit POURQUOI rien n'est parti, pas seulement combien.
+  const reasons: Record<string, number> = {};
+  for (const d of details) if (d.reason && d.status !== 'ok') reasons[d.reason] = (reasons[d.reason] ?? 0) + 1;
+  const cause = blocked ?? (failedList.find((d) => d.reason)?.reason as NotifyReason | undefined);
+  const explain = cause && cause in MAIL_ERROR_MESSAGES ? ` — ${MAIL_ERROR_MESSAGES[cause as MailErrorCode]}` : '';
   await recordJobRun({
     job: 'alerts-notify', startedAt, status: failed === 0 ? 'ok' : sent > 0 ? 'partial' : 'error',
-    summary: { restaurants: all.length, withAlerts: details.length, emails: sent, failed },
-    error: failed ? `${failed} restaurant(s) sans envoi possible` : null,
+    summary: { restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, ...(blocked ? { stoppedSendingFor: blocked } : {}) },
+    error: failed ? `${failed} restaurant(s) sans envoi${cause ? ` [${cause}]` : ''}${explain}` : null,
   });
-  return { ranAt: (opts.now ?? new Date()).toISOString(), restaurants: all.length, withAlerts: details.length, emails: sent, failed, details };
+  return { ranAt: (opts.now ?? new Date()).toISOString(), restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, details };
 }

@@ -4302,17 +4302,38 @@ var init_ops_health = __esm({
 // apps/api/src/lib/mailer.ts
 var mailer_exports = {};
 __export(mailer_exports, {
+  MAIL_CONFIG_ERRORS: () => MAIL_CONFIG_ERRORS,
+  MAIL_ERROR_MESSAGES: () => MAIL_ERROR_MESSAGES,
+  MAIL_RETRYABLE_ERRORS: () => MAIL_RETRYABLE_ERRORS,
   _resetMailStats: () => _resetMailStats,
   channelsDevAllowed: () => channelsDevAllowed,
+  classifyProviderFailure: () => classifyProviderFailure,
   devLinksAllowed: () => devLinksAllowed,
   mailDeliverable: () => mailDeliverable,
   mailStats: () => mailStats,
   mailerConfig: () => mailerConfig,
+  maskEmail: () => maskEmail,
   outboxCount: () => outboxCount,
+  redact: () => redact,
   sendMail: () => sendMail
 });
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import path5 from "node:path";
+function classifyProviderFailure(status, body3) {
+  const name = String(body3?.name ?? "").toLowerCase();
+  const message = String(body3?.message ?? "").toLowerCase();
+  if (status === 429 || /rate_limit|quota/.test(name)) return "mail_rate_limited";
+  if (status >= 500) return "mail_provider_error";
+  if (status === 401 || /api_key/.test(name) || /api key/.test(message)) return "mail_key_invalid";
+  if (/only send testing emails to your own email address/.test(message)) return "mail_test_sender_restricted";
+  if (/domain is not verified|verify (a|your) domain/.test(message)) return "mail_domain_not_verified";
+  if (name === "invalid_from_address" || /`?from`? (address|field)/.test(message)) return "mail_from_invalid";
+  if (name === "invalid_to_address" || /`?to`? (address|field)|recipient/.test(message)) return "mail_recipient_rejected";
+  return "mail_rejected";
+}
+function redact(text2) {
+  return text2.replace(/([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, "$1***@$2").replace(/\b(re|sk|pk|whsec|rk)_[A-Za-z0-9_]{8,}/g, "$1_***").replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 ***").replace(/([?&](?:token|secret|code|key)=)[^&\s"']{6,}/gi, "$1***");
+}
 function mailerConfig() {
   return {
     // resend en prod ; fichier en dev ; « log » (console uniquement) sur serverless sans clé
@@ -4332,7 +4353,7 @@ async function sendMail(m) {
   const cfg = mailerConfig();
   if (cfg.transport === "resend") {
     try {
-      const res = await fetch("https://api.resend.com/emails", {
+      const res = await fetch(`${providerUrl()}/emails`, {
         method: "POST",
         headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4349,26 +4370,27 @@ async function sendMail(m) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        bump("failed", "resend", data.message ?? `HTTP ${res.status}`);
-        return { ok: false, error: data.message ?? `HTTP ${res.status}`, transport: "resend", delivered: false, code: "send_failed" };
+        const code = classifyProviderFailure(res.status, data);
+        bump("failed", "resend", code);
+        return failure(code, "resend");
       }
       bump("sent", "resend");
       return { ok: true, id: data.id ?? "unknown", transport: "resend", delivered: true };
-    } catch (e) {
-      bump("failed", "resend", e.message);
-      return { ok: false, error: e.message, transport: "resend", delivered: false, code: "send_failed" };
+    } catch {
+      bump("failed", "resend", "mail_network_error");
+      return failure("mail_network_error", "resend");
     }
   }
   if (cfg.transport === "log") {
-    const reason = `Aucun service d'envoi d'e-mails n'est configur\xE9 (RESEND_API_KEY absent) : le message pour ${m.to} (\xAB ${m.subject} \xBB) n'a pas \xE9t\xE9 envoy\xE9.`;
+    const reason = `Aucun service d'envoi d'e-mails n'est configur\xE9 (RESEND_API_KEY absent) : le message pour ${maskEmail(m.to)} (\xAB ${m.subject} \xBB) n'a pas \xE9t\xE9 envoy\xE9.`;
     if (channelsDevAllowed()) {
       console.warn(`[mail] ${reason} (mode d\xE9veloppement : envoi simul\xE9, rien n'est remis)`);
-      bump("simulated", "log", reason);
+      bump("simulated", "log");
       return { ok: true, id: "logged", transport: "log", delivered: false };
     }
-    await alertAdmin({ key: "mail_not_configured", message: `[e-mail] envoi impossible : ${reason}`, detail: { to: m.to, subject: m.subject, tags: m.tags } });
-    bump("failed", "log", reason);
-    return { ok: false, error: reason, transport: "log", delivered: false, code: "mail_not_configured" };
+    await alertAdmin({ key: "mail_not_configured", message: `[e-mail] envoi impossible : ${reason}`, detail: { to: maskEmail(m.to), subject: m.subject, tags: m.tags } });
+    bump("failed", "log", "mail_not_configured");
+    return failure("mail_not_configured", "log");
   }
   try {
     await mkdir(cfg.outbox, { recursive: true });
@@ -4385,9 +4407,9 @@ ${m.text}`);
     }
     bump("sent", "file");
     return { ok: true, id, transport: "file", delivered: true };
-  } catch (e) {
-    bump("failed", "file", e.message);
-    return { ok: false, error: e.message, transport: "file", delivered: false, code: "send_failed" };
+  } catch {
+    bump("failed", "file", "send_failed");
+    return failure("send_failed", "file");
   }
 }
 async function ecrireSansEcraser(dir, base, ext, contenu) {
@@ -4402,21 +4424,43 @@ async function ecrireSansEcraser(dir, base, ext, contenu) {
   }
   throw new Error(`Impossible de nommer le message dans ${dir} : trop de collisions sur \xAB ${base} \xBB.`);
 }
-var mailDeliverable, devLinksAllowed, channelsDevAllowed, stats, bump, mailStats, _resetMailStats;
+var MAIL_CONFIG_ERRORS, MAIL_RETRYABLE_ERRORS, MAIL_ERROR_MESSAGES, maskEmail, failure, providerUrl, mailDeliverable, devLinksAllowed, channelsDevAllowed, stats, bump, mailStats, _resetMailStats;
 var init_mailer = __esm({
   "apps/api/src/lib/mailer.ts"() {
     "use strict";
     init_ops();
     init_ops_health();
+    MAIL_CONFIG_ERRORS = ["mail_not_configured", "mail_key_invalid", "mail_domain_not_verified", "mail_from_invalid"];
+    MAIL_RETRYABLE_ERRORS = ["mail_rate_limited", "mail_provider_error", "mail_network_error"];
+    MAIL_ERROR_MESSAGES = {
+      mail_not_configured: "Aucun service d'envoi d'e-mails n'est configur\xE9 (cl\xE9 absente) : le message n'a pas \xE9t\xE9 envoy\xE9.",
+      mail_key_invalid: "La cl\xE9 du service d'envoi d'e-mails est refus\xE9e par le prestataire.",
+      mail_test_sender_restricted: "L'exp\xE9diteur est l'adresse d'essai du prestataire : il ne remet qu'au titulaire de son compte. V\xE9rifiez un domaine d'envoi et r\xE9glez MAIL_FROM.",
+      mail_domain_not_verified: "Le domaine de l'adresse d'exp\xE9diteur n'est pas v\xE9rifi\xE9 chez le prestataire d'e-mails.",
+      mail_from_invalid: "L'adresse d'exp\xE9diteur (MAIL_FROM) est refus\xE9e par le prestataire d'e-mails.",
+      mail_recipient_rejected: "L'adresse du destinataire est refus\xE9e par le prestataire d'e-mails.",
+      mail_rejected: "Le message a \xE9t\xE9 refus\xE9 par le prestataire d'e-mails.",
+      mail_rate_limited: "Le prestataire d'e-mails limite le d\xE9bit ou le quota est atteint : \xE0 r\xE9essayer plus tard.",
+      mail_provider_error: "Le prestataire d'e-mails est en panne : \xE0 r\xE9essayer plus tard.",
+      mail_network_error: "Le prestataire d'e-mails est injoignable ou n'a pas r\xE9pondu \xE0 temps : \xE0 r\xE9essayer plus tard.",
+      send_failed: "Le message n'a pas pu \xEAtre \xE9crit dans le dossier local des e-mails."
+    };
+    maskEmail = (email) => redact(email);
+    failure = (code, transport) => ({ ok: false, error: MAIL_ERROR_MESSAGES[code], transport, delivered: false, code, retryable: MAIL_RETRYABLE_ERRORS.includes(code) });
+    providerUrl = () => {
+      const prod = process.env.NODE_ENV === "production" || !!process.env.VERCEL;
+      return (!prod && process.env.RESEND_API_URL?.trim() || "https://api.resend.com").replace(/\/$/, "");
+    };
     mailDeliverable = () => mailerConfig().transport !== "log";
     devLinksAllowed = () => !process.env.RESEND_API_KEY && process.env.NODE_ENV !== "production" && !process.env.VERCEL;
     channelsDevAllowed = () => process.env.NODE_ENV !== "production" && !process.env.VERCEL;
-    stats = { sent: 0, simulated: 0, failed: 0, lastAt: null, lastTransport: null, lastError: null };
-    bump = (kind, transport, error) => {
+    stats = { sent: 0, simulated: 0, failed: 0, lastAt: null, lastTransport: null, lastError: null, lastErrorCode: null };
+    bump = (kind, transport, code) => {
       stats[kind] += 1;
       stats.lastAt = (/* @__PURE__ */ new Date()).toISOString();
       stats.lastTransport = transport;
-      stats.lastError = error ?? null;
+      stats.lastErrorCode = code ?? null;
+      stats.lastError = code ? MAIL_ERROR_MESSAGES[code] : null;
     };
     mailStats = () => ({ ...stats, transport: mailerConfig().transport, deliverable: mailDeliverable() });
     _resetMailStats = () => {
@@ -4426,6 +4470,7 @@ var init_mailer = __esm({
       stats.lastAt = null;
       stats.lastTransport = null;
       stats.lastError = null;
+      stats.lastErrorCode = null;
     };
   }
 });
@@ -4593,47 +4638,63 @@ async function notifyCriticalAlerts(rid2, opts = {}) {
   const out = { restaurantId: rid2, alerts: pending.length, emails: 0, recipients: [], sent: false, status: "partial" };
   if (r?.settings?.immediateAlertEmails === false) {
     out.status = "nothing";
+    out.reason = "disabled";
     out.error = "alertes imm\xE9diates d\xE9sactiv\xE9es dans les r\xE9glages";
     await markAlertsNotified(pending.map((a) => a.id), now);
     if (opts.record !== false) await recordJobRun({ job: opts.recordJob ?? "alerts-notify", startedAt, status: "ok", summary: { restaurantId: rid2, skipped: "immediate_alert_emails_disabled", alerts: pending.length } });
     return out;
   }
   const recipients = await recipientsFor(rid2, r?.settings?.digestRecipients);
-  out.recipients = recipients.map((x) => x.email);
+  out.recipients = recipients.map((x) => maskEmail(x.email));
   if (!recipients.length) {
-    out.status = "error";
+    out.status = "skipped";
+    out.reason = "no_recipient";
     out.error = "aucun destinataire : renseignez un e-mail dans les r\xE9glages";
-    if (opts.record !== false) await recordJobRun({ job: opts.recordJob ?? "alerts-notify", startedAt, status: "error", summary: { restaurantId: rid2, alerts: pending.length, recipients: 0 }, error: out.error });
+    if (opts.record !== false) await recordJobRun({ job: opts.recordJob ?? "alerts-notify", startedAt, status: "ok", summary: { restaurantId: rid2, alerts: pending.length, recipients: 0, skipped: "no_recipient" } });
+    return out;
+  }
+  if (opts.dontSend) {
+    out.status = "error";
+    out.reason = "not_attempted";
+    out.error = `envoi non tent\xE9 : ${MAIL_ERROR_MESSAGES[opts.dontSend] ?? opts.dontSend}`;
     return out;
   }
   const { subject, text: text2, html } = buildAlertMail(r?.name ?? "votre restaurant", pending);
   let transport = "";
-  let delivered = false;
-  let error;
+  let delivered = 0;
+  let failureCode;
   for (const rcpt of recipients) {
     const res = await sendMail({ to: rcpt.email, subject, text: html ? text2 : text2, html, tags: { type: "alert_immediate", restaurant: rid2 } });
     transport = res.transport;
-    if (res.ok && res.delivered) delivered = true;
-    if (!res.ok) error = res.error;
+    if (res.ok && res.delivered) delivered += 1;
+    if (!res.ok) {
+      failureCode = res.code;
+      if (MAIL_CONFIG_ERRORS.includes(res.code) || res.code === "mail_rate_limited") break;
+    }
   }
   out.transport = transport;
-  out.delivered = delivered;
-  out.emails = delivered ? recipients.length : 0;
-  if (delivered) {
+  out.delivered = delivered > 0;
+  out.emails = delivered;
+  if (delivered > 0) {
     await markAlertsNotified(pending.map((a) => a.id), now);
     out.sent = true;
-    out.status = "ok";
+    out.status = delivered === recipients.length ? "ok" : "partial";
+    if (failureCode) {
+      out.reason = failureCode;
+      out.error = MAIL_ERROR_MESSAGES[failureCode];
+    }
   } else {
     out.status = "error";
-    out.error = error ?? "envoi impossible : aucun service d\u2019e-mail configur\xE9";
+    out.reason = failureCode ?? "mail_not_configured";
+    out.error = MAIL_ERROR_MESSAGES[failureCode ?? "mail_not_configured"];
   }
   if (opts.record !== false) {
     await recordJobRun({
       job: opts.recordJob ?? "alerts-notify",
       startedAt,
-      status: out.status === "ok" ? "ok" : "error",
-      summary: { restaurantId: rid2, alerts: pending.length, recipients: out.recipients.length, sent: out.sent, transport, kinds: pending.map((a) => a.kind) },
-      error: out.error ?? null
+      status: out.sent ? "ok" : "error",
+      summary: { restaurantId: rid2, alerts: pending.length, recipients: out.recipients.length, emails: out.emails, sent: out.sent, transport, kinds: pending.map((a) => a.kind), ...out.reason ? { reason: out.reason } : {} },
+      error: out.sent ? null : out.error ?? null
     });
   }
   return out;
@@ -4643,20 +4704,28 @@ async function notifyAllRestaurants(opts = {}) {
   const db = await getDb();
   const all = await db.select({ id: restaurants.id }).from(restaurants).orderBy(asc2(restaurants.createdAt)).limit(opts.limit ?? 200);
   const details = [];
+  let blocked;
   for (const r of all) {
-    const res = await notifyCriticalAlerts(r.id, { now: opts.now, record: false });
+    const res = await notifyCriticalAlerts(r.id, { now: opts.now, record: false, dontSend: blocked });
     if (res.alerts) details.push(res);
+    if (!blocked && res.status === "error" && res.reason && (MAIL_CONFIG_ERRORS.includes(res.reason) || res.reason === "mail_rate_limited")) blocked = res.reason;
   }
   const sent = details.filter((d) => d.sent).reduce((a, d) => a + d.emails, 0);
-  const failed = details.filter((d) => d.status === "error").length;
+  const failedList = details.filter((d) => d.status === "error");
+  const failed = failedList.length;
+  const skipped = details.filter((d) => d.status === "skipped").length;
+  const reasons = {};
+  for (const d of details) if (d.reason && d.status !== "ok") reasons[d.reason] = (reasons[d.reason] ?? 0) + 1;
+  const cause = blocked ?? failedList.find((d) => d.reason)?.reason;
+  const explain = cause && cause in MAIL_ERROR_MESSAGES ? ` \u2014 ${MAIL_ERROR_MESSAGES[cause]}` : "";
   await recordJobRun({
     job: "alerts-notify",
     startedAt,
     status: failed === 0 ? "ok" : sent > 0 ? "partial" : "error",
-    summary: { restaurants: all.length, withAlerts: details.length, emails: sent, failed },
-    error: failed ? `${failed} restaurant(s) sans envoi possible` : null
+    summary: { restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, ...blocked ? { stoppedSendingFor: blocked } : {} },
+    error: failed ? `${failed} restaurant(s) sans envoi${cause ? ` [${cause}]` : ""}${explain}` : null
   });
-  return { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), restaurants: all.length, withAlerts: details.length, emails: sent, failed, details };
+  return { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, details };
 }
 var IMMEDIATE_KINDS, IMMEDIATE_SEVERITIES, IMMEDIATE_WINDOW_HOURS, APP_URL, escapeHtml;
 var init_notify = __esm({
@@ -8954,7 +9023,7 @@ async function runDailyForRestaurant(rid2, opts = {}) {
       if (opts.dryRun) continue;
       const res = await sendMail({ to: rcpt.email, subject: digest.subject, text: digest.text, html: digest.html, tags: { type: "daily_digest", restaurant: rid2 } });
       transport = res.transport;
-      if (!res.ok) throw new Error(res.error);
+      if (!res.ok) throw new Error(`[${res.code}] ${res.error}`);
     }
     if (pending.length) await markAlertsNotified(pending.map((a) => a.id), now);
     return { ...base, digest: "sent", recipients: recipients.map((x) => x.email), transport: opts.dryRun ? "dry-run" : transport, preview };
@@ -13670,7 +13739,10 @@ async function databaseDiagnostic(env = process.env) {
     role: null,
     superuser: null,
     bypassRls: null,
+    createRole: null,
+    createDb: null,
     canCreateTables: null,
+    canCreateTempTables: null,
     tables: null,
     rlsTables: null,
     rlsForced: null,
@@ -13684,7 +13756,10 @@ async function databaseDiagnostic(env = process.env) {
       select current_user::text as role,
              (select rolsuper from pg_roles where rolname = current_user) as superuser,
              (select rolbypassrls from pg_roles where rolname = current_user) as bypass_rls,
+             (select rolcreaterole from pg_roles where rolname = current_user) as create_role,
+             (select rolcreatedb from pg_roles where rolname = current_user) as create_db,
              has_schema_privilege(current_user, 'public', 'CREATE') as can_create,
+             has_database_privilege(current_user, current_database(), 'TEMPORARY') as can_temp,
              (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r') as tables,
              (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity) as rls_tables,
              (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and c.relforcerowsecurity) as rls_forced,
@@ -13695,7 +13770,10 @@ async function databaseDiagnostic(env = process.env) {
       out.role = row.role === null || row.role === void 0 ? null : String(row.role);
       out.superuser = bool(row.superuser);
       out.bypassRls = bool(row.bypass_rls);
+      out.createRole = bool(row.create_role);
+      out.createDb = bool(row.create_db);
       out.canCreateTables = bool(row.can_create);
+      out.canCreateTempTables = bool(row.can_temp);
       out.tables = Number(row.tables);
       out.rlsTables = Number(row.rls_tables);
       out.rlsForced = Number(row.rls_forced);

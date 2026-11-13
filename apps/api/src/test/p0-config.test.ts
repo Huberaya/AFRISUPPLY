@@ -288,7 +288,7 @@ describe('4. Migrations : contrôlées, jamais appliquées par surprise', () => 
 describe('5. Les fonctions tournent-elles près de la base ?', () => {
   // Mesuré en production le 2026-11-12 (page de statut publique) : fonctions en « iad1 », ~96 ms par
   // requête SQL. Ce contrôle rend la cause lisible — sans jamais montrer l'adresse de la base.
-  const NEON = 'postgresql://app:MOT-DE-PASSE-SECRET@ep-calme-riviere-a1b2c3d4-pooler.eu-central-1.aws.neon.tech/afrisupply?sslmode=require';
+  const NEON = 'postgresql://utilisateur:motdepasse@ep-calme-riviere-a1b2c3d4-pooler.eu-central-1.aws.neon.tech/afrisupply?sslmode=require';
 
   it('la région de la base se lit dans le nom d’hôte — et rien d’autre n’en sort', () => {
     expect(databaseRegion({ DATABASE_URL: NEON })).toEqual({ provider: 'aws', region: 'eu-central-1' });

@@ -41,6 +41,12 @@ jobs:
         run: |
           python3 -m compileall -q scripts/verifications
           echo "scripts de vérification — syntaxe OK"
+      # Dépôt public : aucun fichier de données, aucun secret, aucune coordonnée de tiers dans un fichier suivi.
+      - name: Dépôt public — ni données personnelles, ni secret
+        run: npm run check:depot
+      # Le script SQL d'une base neuve (prévisualisation sans données) correspond-il aux migrations ?
+      - name: Script de base neuve à jour
+        run: npm run check:base-neuve
       - name: Lint
         run: npm run lint
       - name: Types (un workspace à la fois)

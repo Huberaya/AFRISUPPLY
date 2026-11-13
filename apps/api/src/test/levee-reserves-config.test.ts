@@ -269,7 +269,7 @@ describe('GET /api/status et /api/status/config', () => {
   it('sous le rôle applicatif minimal : lire et écrire des lignes, rien d’autre', async () => {
     const d = await databaseDiagnostic();
     if (process.env.AFS_DB_MINIMAL_ROLE !== 'true') { expect(d.role).not.toBe('afrisupply_app'); return; }
-    expect(d).toMatchObject({ role: 'afrisupply_app', superuser: false, bypassRls: false, canCreateTables: false, error: null });
+    expect(d).toMatchObject({ role: 'afrisupply_app', superuser: false, bypassRls: false, createRole: false, createDb: false, canCreateTables: false, canCreateTempTables: false, error: null });
     const db = await getDb();
     const interdits = ['create table interdit (id int)', 'alter table users add column interdit int', 'drop table rate_limits', 'truncate rate_limits',
       'create sequence interdite', 'create role intrus', 'delete from drizzle.__drizzle_migrations', 'alter table users enable row level security'];
@@ -284,7 +284,7 @@ describe('GET /api/status et /api/status/config', () => {
   it('toute variable lue par le code de l’API figure dans le diagnostic (ou dans la liste de celles qui n’ont pas à y être)', () => {
     // Réglages sans enjeu de sécurité ni d'environnement, et variables fournies par la plateforme ou réservées aux tests.
     const HORS_SUIVI = new Set(['NODE_ENV', 'PORT', 'PGLITE_DIR', 'AFS_DB_MINIMAL_ROLE', 'MAIL_OUTBOX_DIR', 'BACKUP_DIR', 'BACKUP_KEEP', 'BACKUP_OFFSITE_KEEP', 'BACKUP_S3_PREFIX', 'BACKUP_S3_STYLE',
-      'AFS_SELF_URL', 'CLERK_API_URL', 'CLERK_FRONTEND_API_URL', 'CLERK_TIMEOUT_MS', 'OFFSITE_TIMEOUT_MS', 'DAILY_BUDGET_MS', 'DAILY_LEASE_MS', 'DAILY_MAX_TRANCHES', 'STRIPE_API_BASE', 'STRIPE_COUPON_FOUNDER',
+      'AFS_SELF_URL', 'CLERK_API_URL', 'CLERK_FRONTEND_API_URL', 'RESEND_API_URL', 'CLERK_TIMEOUT_MS', 'OFFSITE_TIMEOUT_MS', 'DAILY_BUDGET_MS', 'DAILY_LEASE_MS', 'DAILY_MAX_TRANCHES', 'STRIPE_API_BASE', 'STRIPE_COUPON_FOUNDER',
       'EMAIL_VERIFY_TTL_HOURS', 'PASSWORD_RESET_TTL_MINUTES', 'PASSWORD_MIN_LENGTH', 'IMMEDIATE_ALERT_WINDOW_HOURS', 'ORDER_MAX_MONTHS_OF_STOCK', 'REMINDER_HOURS', 'SALES_GAP_DAYS',
       'INVOICE_ADDRESS', 'INVOICE_EMAIL', 'INVOICE_IBAN', 'LLM_BASE_URL', 'LLM_MODEL', 'LLM_VISION_MODEL', 'SUPPORT_PHONE',
       'VERCEL', 'VERCEL_ENV', 'VERCEL_URL', 'VERCEL_BRANCH_URL', 'VERCEL_REGION', 'VERCEL_GIT_COMMIT_SHA', 'VERCEL_PROJECT_PRODUCTION_URL']);

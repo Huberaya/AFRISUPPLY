@@ -22,10 +22,12 @@
     "build:api": "node api/build.mjs",
     "deploy:migrate": "node scripts/deploy-migrate.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
+    "check:depot": "node scripts/controle-depot-public.mjs --auto-test && node scripts/controle-depot-public.mjs",
+    "check:base-neuve": "node scripts/base-neuve.mjs --check",
     "check:bundle:run": "node scripts/fumee-bundle.mjs",
     "verifs:e2e": "bash scripts/verifications/toutes.sh",
     "verifs:navigateur": "npm --prefix scripts/navigateur ci --no-audit --no-fund && node scripts/navigateur/parcours.mjs",
-    "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run check:bundle && npm run check:bundle:run"
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run check:bundle && npm run check:bundle:run && npm run check:depot && npm run check:base-neuve"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
