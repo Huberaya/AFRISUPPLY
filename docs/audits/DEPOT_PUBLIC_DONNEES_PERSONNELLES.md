@@ -88,3 +88,11 @@ Limite : l'agent n'a pas pu lire ces journaux ; leur contenu est déduit du fich
 Demandé au titulaire : ouvrir une exécution de « Daily digest » dans l'onglet « Actions », constater ce
 qu'elle affiche, puis décider de désactiver le workflow jusqu'à la fusion et de supprimer les journaux
 passés. La décision « dépôt privé ou purge » couvre aussi ces journaux si le dépôt devient privé.
+
+## Mise à jour du 17 novembre, seconde passe
+
+| Point | Constat | Statut |
+|---|---|---|
+| Fichiers suivis | 749 (contre 742 au passage précédent) : contrôle vert, aucun fichier de données, aucun secret probable, aucune coordonnée | PROUVÉ — `npm run check:depot` |
+| Le contrôle attrape bien ce qu'il doit | Un test ajouté dans cette passe contenait des chaînes de connexion **fictives** avec mot de passe : le contrôle les a signalées (4 constats) et elles ont été réécrites sous la forme d'exemple admise. Le contrôle n'a donc pas été contourné, il a joué son rôle | PROUVÉ — incident du 17 novembre, corrigé |
+| Exécution du workflow quotidien | Lu par l'API GitHub (exécution `43871977916`) : l'étape « Déclencher le job quotidien » **réussit**, l'étape « Résumé (et échec si le job a échoué » **échoue**. Le corps du journal reste illisible d'ici : il est servi par `results-receiver.actions.githubusercontent.com`, hors des hôtes joignables par l'agent | PARTIEL — corps du journal à lire dans l'interface |

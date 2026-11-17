@@ -102,16 +102,25 @@ colonne ajoutée au schéma sans migration ; instantané de la migration n° 28 
 | `typescript-eslint` et ses paquets (dont `minimatch`) | 8.70.0 | 8.73.0 | 0 |
 | `source-map-js` | 1.2.1 | 1.2.2 | 0 |
 | `postcss-selector-parser` | 6.1.4 | 6.1.6 | 0 |
-| `drizzle-kit`, `@esbuild-kit/core-utils`, `@esbuild-kit/esm-loader`, `esbuild` 0.18 | — | inchangés | **4 modérées** |
+| `drizzle-kit` (et, par ricochet, `@esbuild-kit/core-utils`, `@esbuild-kit/esm-loader`, `esbuild` 0.18) | 0.30.6 | 0.31.11 | 0 |
 
-Les quatre restantes tiennent à l'outil de migration : la seule correction proposée par le registre
-est un changement de version majeure de `drizzle-kit`. Elles concernent le serveur de développement
-d'esbuild, que rien ne lance ici : l'outil ne sert qu'à générer une migration et au contrôle
-`check:schema`. Statut : qualifiées, non corrigées — à faire à part.
+**Seconde passe du 17 novembre : 16 → 0.** Les quatre vulnérabilités qui restaient venaient de la
+chaîne `drizzle-kit → @esbuild-kit/esm-loader → @esbuild-kit/core-utils → esbuild 0.18`. `drizzle-kit`
+est passé de 0.30.6 à 0.31.11 (outil de développement, aucune dépendance de production touchée) et le
+reste de la chaîne est ramené à `esbuild ^0.25.12` par les `overrides` déjà présents. Résultat mesuré
+après l'installation : `npm audit` → **0 vulnérabilité**, `npm audit --omit=dev` → **0**, arbre sans
+aucune entrée `invalid`. L'outil de migration ne sert qu'à générer une migration et au contrôle
+`check:schema` ; les 29 migrations et le script de base neuve sont inchangés (`check:base-neuve` vert).
 
-Limite d'outillage : npm 10.9.8 échoue sur une erreur interne dès qu'il modifie une dépendance d'un
-espace de travail. Le fichier de verrouillage a été produit avec npm 11.21.2 (même format, version 3),
-puis vérifié par une installation propre avec npm 10.9.8.
+Limite d'outillage : npm 10.9.8 échoue sur une erreur interne (`Cannot read properties of null
+(reading 'edgesOut')`) dès qu'il modifie une dépendance d'un espace de travail. Le fichier de
+verrouillage a été produit avec npm 11.21.2 (même format, version 3), puis vérifié par une
+installation propre avec npm 10.9.8. Deux pièges rencontrés, à connaître avant toute nouvelle mise à
+jour : une installation demandée avec `--legacy-peer-deps` **omet les dépendances par paire** (le
+contrôle des types du site échoue alors sur `@testing-library/dom` manquant) ; et retirer une entrée du
+fichier de verrouillage sans retirer celle de ses parents laisse npm dans un état incohérent
+(`postcss-selector-parser` absent alors que Tailwind le réclame). La procédure fiable : retirer
+l'entrée **et** celle de son parent, puis `npm install` sans drapeau.
 
 **Nouveau contrôle en CI** : « Schéma et migrations concordent » (tâche « Qualité »).
 

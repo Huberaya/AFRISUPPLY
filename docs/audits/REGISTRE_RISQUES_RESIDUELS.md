@@ -39,7 +39,7 @@
 | R4 | Relu : 0 fichier, dernière sauvegarde réussie le 5 octobre | PROUVÉ — EN ATTENTE EXTERNE |
 | R9 | Confirmé en production : la dernière passe enregistrée date du 23 septembre, alors que le mail du matin part chaque jour | PROUVÉ en production ; CORRIGÉ dans la branche ; à constater après déploiement |
 | R12 | Précision : la version en production accepte un secret de session absent et signe alors avec une valeur écrite dans le code, donc publique. La lecture de `JWT_SECRET` est à faire sans attendre la fusion | **BLOQUÉ** — jamais lu |
-| R15 | 16 vulnérabilités d'outillage ramenées à 4, toutes dans la chaîne de l'outil de migration | CORRIGÉ en partie |
+| R15 | 16 vulnérabilités d'outillage, puis 4 : ramenées à **0** le 17 novembre (seconde passe) par le passage de l'outil de migration en 0.31.11 ; 0 en production | CORRIGÉ |
 | R16 | Nature de la limite identifiée : stockage des fonctions de l'offre gratuite à 100 % le 5 novembre, pour toute l'équipe | PROUVÉ ; réglages EN ATTENTE EXTERNE |
 
 **Risques nouveaux**
@@ -51,3 +51,8 @@
 | R20 | La prochaine migration générée aurait rejoué la migration n° 28 et échoué en production | Moyenne | Certaine à la prochaine migration | Mise en production bloquée, ou schéma corrigé à la main | Essai : l'outil régénérait les trois instructions | Instantané ajouté ; contrôle en CI | Agent | — | CORRIGÉ |
 | R21 | La durée de la tâche d'alertes croissait avec le nombre de restaurants (22 secondes pour 89) | Moyenne | Certaine avec la croissance | Tâche coupée par la limite de 60 secondes ; alertes non envoyées | `/api/status` de production | Tâche bornée, reprise au passage suivant | Agent, titulaire | Constat sur la plateforme après déploiement | CORRIGÉ dans la branche |
 | R22 | Fusionner déclenche une mise en production automatique | Élevée si R2 ou R12 ne sont pas levés | Certaine | API en 503, ou exploitant sans administration | Six derniers déploiements de production créés par Vercel à chaque envoi sur `main` | Plan écrit ; voie « fusion sans mise en ligne » décrite, non appliquée | Titulaire | Préalables P1 à P3 du plan levés avant la fusion | BLOQUÉ |
+
+| R23 | Une relance fournisseur dont l'envoi avait échoué était définitivement perdue (commande marquée relancée) | Moyenne | Certaine à chaque panne du prestataire | Un grossiste ne reçoit jamais la relance, sans trace d'erreur | Test reproduisant la panne puis la reprise | Marquage seulement après remise | Agent | — | CORRIGÉ |
+| R24 | Une sauvegarde perdait les événements de fréquentation (`forecast_events`) | Moyenne | Certaine à chaque restauration | Prévisions faussées après restauration, sans avertissement | Test d'export et d'essai de restauration | Table ajoutée à l'export | Agent | — | CORRIGÉ |
+| R25 | La garde « prévisualisation ≠ production » se contournait par l'orthographe de la chaîne de connexion | Élevée | Possible par erreur de saisie | Une prévisualisation écrivant dans la base de production | Test avec trois orthographes différentes de la même base | Comparaison de l'hôte, du port et de la base | Agent | — | CORRIGÉ |
+| R26 | Le jeton Vercel de l'agent est à portée réduite (`limited: true`) | Faible | Constatée | Impossible de relire ou de poser les variables de la prévisualisation ; la condition 15 reste externe | `get_authenticated_user`, `list_teams` (vide), `list_projects` (refusé) | Jeton avec lecture des projets et des variables | Titulaire | Un appel `list_projects` réussi | EN ATTENTE EXTERNE |

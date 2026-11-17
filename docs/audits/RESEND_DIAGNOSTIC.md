@@ -80,3 +80,16 @@ le 13 novembre reste à lire dans le tableau de bord du prestataire.
 
 Demandé au titulaire : vérifier un domaine d'envoi, poser `MAIL_FROM` sur ce domaine, puis dérouler
 `RESEND_VALIDATION_PREVIEW.md`. Sans attendre : `docs/PLAN_REPRISE_PRODUCTION.md`, § 3, P2.
+
+## Mise à jour du 17 novembre, seconde passe
+
+| Point | Constat | Statut |
+|---|---|---|
+| Balayage des alertes avec l'expéditeur d'essai | Il sollicitait le prestataire pour **chaque** restaurant : autant d'appels rejetés par passage, un risque de limite de débit et une ligne de suivi illisible. Il s'arrête désormais au premier restaurant qui n'a rien reçu (`sweepBlocker`) | CORRIGÉ — 3 tests |
+| Le titulaire du compte du prestataire | Il reste servi : si son adresse figure parmi les destinataires d'un restaurant, l'envoi lui parvient et le balayage continue | PROUVÉ — test |
+| Confirmation indépendante, côté boîte du titulaire | Le courrier du matin y arrive chaque jour à 05 h 21 UTC (13, 14, 15, 16 et 17 novembre), et à cette seule adresse : le prestataire remet bien, mais à son seul titulaire de compte | PROUVÉ — boîte du titulaire |
+| Workflow quotidien « Daily digest » | En échec chaque jour à l'étape « Résumé (et échec si le job a échoué) », après une étape de déclenchement **réussie** : l'API répond, l'échec vient des restaurants en erreur d'envoi. Journaux détaillés non lisibles depuis l'environnement de l'agent (`results-receiver.actions.githubusercontent.com` injoignable) | PROUVÉ — API GitHub ; détail à confirmer dans l'interface |
+
+Ces deux constats convergent : en production, la remise à un tiers est impossible tant que l'expéditeur
+reste l'adresse d'essai. Aucune correction de code ne peut lever ce point ; il faut un domaine vérifié
+et un `MAIL_FROM` sur ce domaine (`RESEND_VALIDATION_PREVIEW.md`).

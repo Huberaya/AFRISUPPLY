@@ -50,3 +50,20 @@ ce que le code exige et garantit ; la présence réelle de chaque variable reste
 Preuve : `GET <prévisualisation>/api/status/config` — `sessionSecret.ok = true`, `database.role = "afrisupply_app"`,
 `database.host` différent de celui de la production, `clerk.instance.same = true`, `mail.testSender = false`.
 Rien de tout cela ne touche une variable de portée Production.
+
+## 4. Pourquoi l'agent ne peut pas relire la matrice (constat du 17 novembre, seconde passe)
+
+| Appel | Résultat | Lecture |
+|---|---|---|
+| `get_authenticated_user` | réussi : utilisateur `baya-ibraimmayoanouedu-8164`, équipe par défaut `team_BdnOPU97H1GOmMxy7T06nijQ`, **`limited: true`** | le jeton est authentifié mais à portée réduite |
+| `list_teams` | réussi : **liste vide** | le jeton ne voit aucune équipe, donc aucun de leurs projets |
+| `list_projects` | refusé (`Access denied`) | conséquence directe de la ligne précédente |
+
+Conclusion : l'obstacle n'est pas le projet ni ses réglages, mais le jeton attaché au connecteur. Tant
+qu'il est `limited`, aucune variable ne peut être relue ni posée par l'agent, et la condition 15 reste
+EN ATTENTE EXTERNE.
+
+Geste du titulaire (aucune valeur de secret à transmettre) : attacher au connecteur un jeton Vercel
+disposant de la **lecture** des projets et des variables d'environnement (portée « Project » et « Env
+Vars » en lecture). Les noms des variables et leurs portées suffisent à établir la matrice ; les
+valeurs ne sont demandées à personne et ne doivent figurer dans aucun message.

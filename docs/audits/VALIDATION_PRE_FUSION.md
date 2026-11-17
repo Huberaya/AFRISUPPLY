@@ -105,3 +105,43 @@ Non prouvées sur les services réels : 5, 7, 9, 10, 11, 13, 14, 15, 16, 17.
 quelques minutes : relire `JWT_SECRET` de la production, et confirmer l'adresse de l'exploitant par le
 lien reçu. Ils lèvent les deux préalables qui rendraient la mise en production dangereuse. Le reste
 suit l'ordre du § 3. Le défaut critique de connexion reste en production tant que la branche n'y est pas.
+
+## 6. Mise à jour du 17 novembre 2026, seconde passe
+
+| | |
+|---|---|
+| Branche contrôlée | `arena/326bcc8c-afrisupply`, dont la tête était `d358360be716ee182264977c7ef9b3e441f83f0f` (poussée par un autre agent à 12 h 04 UTC, CI verte : exécution `44079711068`) ; les commits de cette passe sont `36ab9d1` puis la fusion `51e228b` |
+| `main` | `15c8b81e665ab0b01e35e76fbae5f22c9c0271b0`, inchangé |
+| Environnements | GitHub, boîte du titulaire, base embarquée, registre des paquets. Toujours ni Neon, ni Clerk, ni le tableau de bord Vercel, ni celui du prestataire d'e-mails |
+| Fusion | **non effectuée** — les conditions 5, 7, 9, 10, 11, 13, 14, 15, 16 et 17 ne sont toujours pas prouvées sur les services réels |
+
+**Corrections apportées par cette passe** (chacune avec son test) :
+
+| # | Défaut | Correction | Preuve |
+|---|---|---|---|
+| 1 | Une relance fournisseur qui n'avait rien remis marquait la commande comme relancée : elle ne repartait plus jamais | `vendor_reminded_at` n'est posé que si un message a été remis, ou s'il n'existe aucun canal | 2 tests (`p0m-corrections-finales.test.ts`) |
+| 2 | `forecast_events` (soirée privatisée, fermeture…) absent de la sauvegarde : une restauration les perdait sans le dire | Table ajoutée à l'export et à l'essai de restauration | 1 test |
+| 3 | La garde « prévisualisation ≠ production » comparait les chaînes complètes : la production sous une autre orthographe (mot de passe, `?sslmode=`, `/` final) passait pour une base de prévisualisation | `sameDatabase` compare l'hôte, le port et la base ; utilisé par `getDatabaseUrl` **et** par `scripts/deploy-migrate.mjs` | 2 tests |
+| 4 | Le fichier du rôle ne retirait rien à un rôle déjà existant : un rôle créé par la console Neon gardait ses privilèges étendus | `ALTER ROLE … NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT NOREPLICATION`, `CREATE` retiré à `PUBLIC` sur la base et sur le schéma du journal, `CONNECT` accordé explicitement, gardes `IF EXISTS` pour rester rejouable sur une base vide | 1 test |
+| 5 | Avec l'expéditeur d'essai, le balayage des alertes sollicitait le prestataire pour **chaque** restaurant (jusqu'à 200 appels rejetés par passage, limite de débit, ligne de suivi illisible) | `sweepBlocker` : le balayage s'arrête au premier restaurant qui n'a rien reçu ; le titulaire du compte du prestataire reste servi s'il figure parmi les destinataires | 2 tests + 1 test de la règle |
+| 6 | 16 vulnérabilités d'outillage | 0 (`VALIDATION_CI_FINALE.md`, mise à jour) | `npm audit` |
+
+**Conditions dont l'état change avec cette passe** : 3 (706 tests de l'API, et 706 sous le rôle
+minimal), 14 (code corrigé une seconde fois), 19 (0 vulnérabilité, production et outillage). Les
+autres sont inchangées par rapport au § 5.
+
+**Constat nouveau, côté Vercel.** Le connecteur de l'agent s'authentifie (utilisateur
+`baya-ibraimmayoanouedu-8164`, équipe par défaut `team_BdnOPU97H1GOmMxy7T06nijQ`) mais le jeton est
+signalé **`limited: true`** : `list_teams` répond une liste vide et `list_projects` est refusé. C'est
+la cause précise de l'impossibilité de lire la matrice des variables (condition 15) — il ne s'agit pas
+d'un refus du projet mais d'un jeton sans portée de lecture. Geste du titulaire : attacher au
+connecteur un jeton disposant de la lecture des projets et des variables (aucune valeur de secret n'est
+demandée, les noms suffisent).
+
+**Constat nouveau, côté boîte du titulaire.** Le courrier du matin arrive chaque jour à 05 h 21 UTC du
+13 au 17 novembre, et uniquement à cette adresse : cela confirme sur un canal indépendant que le
+prestataire remet **à son seul titulaire de compte** (expéditeur d'essai). Le workflow « Daily digest »
+échoue chaque jour à l'étape « Résumé (et échec si le job a échoué) » après une étape de déclenchement
+réussie : l'API répond donc, et l'échec vient des restaurants en erreur d'envoi. Les journaux
+détaillés ne sont pas lisibles d'ici (l'hôte `results-receiver.actions.githubusercontent.com` n'est pas
+joignable depuis l'environnement de l'agent) — constat à confirmer dans l'interface GitHub.

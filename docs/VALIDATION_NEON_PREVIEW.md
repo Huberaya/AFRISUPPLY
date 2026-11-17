@@ -52,12 +52,82 @@ Rien n'est copié depuis la production. Les données d'une prévisualisation pro
 
 ## 4. Relevés faits sur Neon après le 13 novembre
 
-À compléter par la personne qui les a faits. L'agent ne les a pas retranscrits : il ne peut ni les
-relire ni les vérifier sur Neon, et ne reporte pas ici un chiffre qu'il n'a pas sous les yeux.
+Relevés **déclarés par le titulaire le 17 novembre 2026**. L'agent n'a aucun accès à Neon : il les
+retranscrit tels quels et ne les a ni relus ni vérifiés. Chacun reste à constater par la personne qui
+dispose du tableau de bord (requêtes ci-dessous, sans aucune donnée personnelle dans le résultat).
 
 | Date | Par qui | Branche ou projet | Relevé | Valeur |
 |---|---|---|---|---|
-| | | | | |
+| 17/11 | Titulaire (déclaré) | Projet `Afrisupply` `holy-hill-17097233`, `aws-eu-central-1`, PostgreSQL 18.7 | projet inchangé | déclaré |
+| 17/11 | Titulaire (déclaré) | `preview-clean-20261117` = `br-mute-pond-b16h1clm`, point d'entrée `ep-bitter-pine-b1j8ghua`, parent `br-soft-snow-b1g7doab` | état `ready` ; 48 tables publiques à 0 ligne ; 29 migrations | déclaré |
+| 17/11 | Titulaire (déclaré) | `br-summer-tree-b1xz2jon` (ancienne prévisualisation de la branche) | 48 tables publiques à 0 ligne ; 29 migrations conservées | déclaré |
+| 17/11 | Titulaire (déclaré) | `br-soft-snow-b1g7doab` (production) | 96 comptes, 89 restaurants, 50 commandes ; 29 migrations ; aucune migration exécutée ; aucune écriture | déclaré |
+| 17/11 | Titulaire (déclaré) | `vercel-dev` = `br-polished-rice-b1s02go9` | copie de la production (96 / 89 / 50) : **contient des données personnelles**, à ne pas nettoyer avant d'avoir établi quel projet Vercel l'utilise | déclaré |
+| 17/11 | Titulaire (déclaré) | rôle `afrisupply_app` | **absent** ; `neondb_owner` a `BYPASSRLS = true` ; aucune RLS, aucune politique | déclaré |
+
+Conséquence pour les conditions 10 et 11 : une base de prévisualisation propre **existe** (déclarée),
+mais elle **dérive de la production** (parent `br-soft-snow-b1g7doab`) et le rôle minimal n'y est pas
+encore installé. Les deux points restent EN ATTENTE EXTERNE tant que les requêtes ci-dessous n'ont pas
+été jouées et leurs réponses rapportées.
+
+## 4 bis. Installation du rôle minimal sur `br-mute-pond-b16h1clm` — commandes exactes
+
+À jouer par le titulaire (ou l'intervenant Neon) **avec le rôle propriétaire** de la branche, jamais
+sur la production. Aucun mot de passe ne figure ici et ne doit figurer dans aucune conversation.
+
+**P1 — créer le rôle de connexion (SQL, et non la console : un rôle créé par la console reçoit des
+privilèges étendus).** Le fichier `packages/db/roles/afrisupply_app.sql` crée le rôle sans connexion ;
+pour un usage réel, le créer d'abord avec `LOGIN` et un mot de passe généré sur place :
+
+```sql
+CREATE ROLE afrisupply_app LOGIN PASSWORD '<généré sur place, jamais copié ici>'
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT;
+```
+
+**P2 — jouer le fichier de droits** (idempotent ; il retire aussi leurs privilèges à un rôle
+préexistant qui en aurait trop, reprise P0-M) :
+
+```bash
+psql "<chaîne de connexion de br-mute-pond-b16h1clm, rôle propriétaire>" \
+  -v ON_ERROR_STOP=1 -f packages/db/roles/afrisupply_app.sql
+```
+
+**P3 — constater les attributs du rôle** (les quatre premiers doivent être `false`) :
+
+```sql
+select rolname, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolcanlogin
+from pg_roles where rolname = 'afrisupply_app';
+```
+
+**P4 — constater les droits, table par table** (48 lignes attendues, toutes `r/w/d` à `true`,
+et aucune table absente de la liste) :
+
+```sql
+select c.relname,
+       has_table_privilege('afrisupply_app', c.oid, 'SELECT') as lecture,
+       has_table_privilege('afrisupply_app', c.oid, 'INSERT') as insertion,
+       has_table_privilege('afrisupply_app', c.oid, 'UPDATE') as modification,
+       has_table_privilege('afrisupply_app', c.oid, 'DELETE') as suppression,
+       has_table_privilege('afrisupply_app', c.oid, 'TRUNCATE') as troncature
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind = 'r'
+order by c.relname;
+```
+
+**P5 — constater que rien d'autre n'est possible** (les trois requêtes doivent échouer) :
+
+```sql
+-- en tant qu'afrisupply_app :
+create table essai_interdit (id int);            -- attendu : permission denied for schema public
+truncate table restaurants;                      -- attendu : must be owner of table restaurants
+select count(*) from drizzle.__drizzle_migrations;  -- attendu : 29 (lecture seule permise)
+insert into drizzle.__drizzle_migrations (hash, created_at) values ('x', 0);  -- attendu : permission denied
+```
+
+**P6 — brancher la prévisualisation** : `PREVIEW_DATABASE_URL` en portée **Preview** avec ce rôle
+(`VERCEL_MATRICE_ENVIRONNEMENTS.md`, § 3), puis `GET <prévisualisation>/api/status/config` :
+`database.role = "afrisupply_app"`, `superuser`, `bypassRls`, `createRole`, `canCreateTables` à `false`,
+`migrations.state = "a_jour"`, `database.host` différent de celui de la production.
 
 ## 5. Limites
 
