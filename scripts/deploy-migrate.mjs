@@ -19,6 +19,19 @@ import { pathToFileURL } from 'node:url';
 
 const clean = (v) => { const s = (v ?? '').trim(); return s || undefined; };
 
+/** Même base ? (voir `sameDatabase` dans packages/db/src/client.ts — comparaison hôte + base, pas chaîne complète.) */
+export function sameDatabase(a, b) {
+  const x = clean(a); const y = clean(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  try {
+    const ux = new URL(x); const uy = new URL(y);
+    return ux.hostname.toLowerCase() === uy.hostname.toLowerCase()
+      && ux.port === uy.port
+      && ux.pathname.replace(/\/+$/, '') === uy.pathname.replace(/\/+$/, '');
+  } catch { return false; }
+}
+
 /**
  * Décide ce que le build a le droit de faire avec la base. Fonction pure : testée sans base.
  * `target` désigne la base visée : 'production' (DATABASE_URL) ou 'preview' (PREVIEW_DATABASE_URL).
@@ -37,7 +50,7 @@ export function decideMigrationAction(env, argv = []) {
   if (onVercel && vercelEnv === 'preview') {
     const previewUrl = clean(env.PREVIEW_DATABASE_URL);
     if (!previewUrl) return { action: 'skip', reason: 'build de prévisualisation sans PREVIEW_DATABASE_URL : aucune connexion à une base (DATABASE_URL est ignoré hors production)' };
-    if (previewUrl === prodUrl) return { action: 'skip', reason: 'PREVIEW_DATABASE_URL est identique à DATABASE_URL : refusé, une prévisualisation ne touche pas la base de production' };
+    if (sameDatabase(previewUrl, prodUrl)) return { action: 'skip', reason: 'PREVIEW_DATABASE_URL est identique à DATABASE_URL : refusé, une prévisualisation ne touche pas la base de production' };
     return wantsApply
       ? { action: 'apply', target: 'preview', reason: 'MIGRATE_ON_BUILD=apply : migrations appliquées à la base de PRÉVISUALISATION' }
       : { action: 'check', target: 'preview', reason: 'contrôle en lecture seule de la base de prévisualisation (MIGRATE_ON_BUILD=apply pour appliquer)' };

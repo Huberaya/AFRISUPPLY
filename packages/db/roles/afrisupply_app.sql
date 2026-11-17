@@ -25,14 +25,36 @@ BEGIN
 END
 $$;
 
--- Rien par défaut : on retire ce que « tout le monde » reçoit d'office sur le schéma et sur la base.
+-- Reprise P0-M : si le rôle existe déjà (par exemple créé par la console Neon, qui lui donne des
+-- privilèges étendus), on retire ces privilèges au lieu de les laisser en place. Sans cette ligne,
+-- un rôle préexistant SUPERUSER ou BYPASSRLS gardait ses pouvoirs après l'installation du fichier.
+-- (LOGIN / NOLOGIN et le mot de passe ne sont pas touchés ici : voir l'en-tête.)
+ALTER ROLE afrisupply_app NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT NOREPLICATION;
+
+-- Rien par défaut : on retire ce que « tout le monde » reçoit d'office sur les schémas et sur la base.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM afrisupply_app;
+-- Reprise P0-M : le schéma du journal des migrations reçoit la même discipline (avant : seul USAGE
+-- était accordé, sans retirer un éventuel CREATE hérité de PUBLIC sur Neon). Gardé si le schéma
+-- existe (base déjà migrée) : sur une base vide, il n'y a rien à retirer et le fichier reste rejouable.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
+    EXECUTE 'REVOKE CREATE ON SCHEMA drizzle FROM PUBLIC';
+    EXECUTE 'REVOKE ALL ON SCHEMA drizzle FROM afrisupply_app';
+  END IF;
+END
+$$;
 -- Tables temporaires : PostgreSQL en donne le droit à tous ; l'application n'en crée aucune.
+-- Reprise P0-M : CREATE sur la base (créer des schémas) est aussi retiré à PUBLIC, pas seulement au rôle.
 DO $$
 BEGIN
   EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
+  EXECUTE format('REVOKE CREATE ON DATABASE %I FROM PUBLIC', current_database());
   EXECUTE format('REVOKE CREATE ON DATABASE %I FROM afrisupply_app', current_database());
+  -- Le rôle doit pouvoir se connecter à la base (CONNECT est donné à PUBLIC par défaut, mais on
+  -- l'accorde explicitement pour ne pas dépendre des réglages par défaut de la plateforme).
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO afrisupply_app', current_database());
 END
 $$;
 
@@ -50,9 +72,23 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO afrisuppl
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO afrisupply_app;
 
 -- Journal des migrations : lecture seule (l'application y lit l'état du schéma pour /api/status).
-GRANT USAGE ON SCHEMA drizzle TO afrisupply_app;
-GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO afrisupply_app;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA drizzle TO afrisupply_app';
+    EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO afrisupply_app';
+  END IF;
+END
+$$;
 
 -- Tables créées plus tard par une migration (jouée par le rôle propriétaire) : mêmes droits, d'office.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO afrisupply_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO afrisupply_app;
+-- Reprise P0-M : même règle pour le schéma du journal (une table future y reste lisible, jamais inscriptible).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle GRANT SELECT ON TABLES TO afrisupply_app';
+  END IF;
+END
+$$;

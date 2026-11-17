@@ -936,10 +936,23 @@ var init_schema = __esm({
 });
 
 // packages/db/src/client.ts
+function sameDatabase(a, b) {
+  const x = clean(a);
+  const y = clean(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  try {
+    const ux = new URL(x);
+    const uy = new URL(y);
+    return ux.hostname.toLowerCase() === uy.hostname.toLowerCase() && ux.port === uy.port && ux.pathname.replace(/\/+$/, "") === uy.pathname.replace(/\/+$/, "");
+  } catch {
+    return false;
+  }
+}
 function getDatabaseUrl(env = process.env) {
   if (env.VERCEL_ENV === "preview") {
     const preview = clean(env.PREVIEW_DATABASE_URL);
-    if (preview && preview === clean(env.DATABASE_URL)) return void 0;
+    if (preview && sameDatabase(preview, clean(env.DATABASE_URL))) return void 0;
     return preview;
   }
   return clean(env.DATABASE_URL);
@@ -2418,6 +2431,7 @@ __export(src_exports, {
   runMigrations: () => runMigrations,
   sales: () => sales,
   salesRelations: () => salesRelations,
+  sameDatabase: () => sameDatabase,
   schema: () => schema_exports,
   seedDemo: () => seedDemo,
   shoppingLists: () => shoppingLists,
@@ -3815,6 +3829,11 @@ var init_backup = __esm({
       { name: "alerts", table: alerts, scope: "restaurant", column: "restaurantId" },
       { name: "reorder_rules", table: reorderRules, scope: "restaurant", column: "restaurantId" },
       { name: "forecasts", table: forecasts, scope: "restaurant", column: "restaurantId" },
+      // Reprise P0-M : les événements de fréquentation (soirée privatisée, fermeture…) appartiennent
+      // au restaurant et alimentent la prévision. Ils manquaient à la sauvegarde : une restauration
+      // perdait ces réglages sans le dire. Les jetons de confirmation et de réinitialisation restent
+      // volontairement hors sauvegarde (transitoires, à usage unique).
+      { name: "forecast_events", table: forecastEvents, scope: "restaurant", column: "restaurantId" },
       { name: "shopping_lists", table: shoppingLists, scope: "restaurant", column: "restaurantId" },
       { name: "recurring_orders", table: recurringOrders, scope: "restaurant", column: "restaurantId" },
       { name: "claims", table: claims, scope: "restaurant", column: "restaurantId" },
@@ -4708,7 +4727,7 @@ async function notifyAllRestaurants(opts = {}) {
   for (const r of all) {
     const res = await notifyCriticalAlerts(r.id, { now: opts.now, record: false, dontSend: blocked });
     if (res.alerts) details.push(res);
-    if (!blocked && res.status === "error" && res.reason && (MAIL_CONFIG_ERRORS.includes(res.reason) || res.reason === "mail_rate_limited")) blocked = res.reason;
+    if (!blocked) blocked = sweepBlocker(res);
   }
   const sent = details.filter((d) => d.sent).reduce((a, d) => a + d.emails, 0);
   const failedList = details.filter((d) => d.status === "error");
@@ -4727,7 +4746,7 @@ async function notifyAllRestaurants(opts = {}) {
   });
   return { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, details };
 }
-var IMMEDIATE_KINDS, IMMEDIATE_SEVERITIES, IMMEDIATE_WINDOW_HOURS, APP_URL, escapeHtml;
+var IMMEDIATE_KINDS, IMMEDIATE_SEVERITIES, IMMEDIATE_WINDOW_HOURS, APP_URL, escapeHtml, sweepBlocker;
 var init_notify = __esm({
   "apps/api/src/lib/notify.ts"() {
     "use strict";
@@ -4740,6 +4759,13 @@ var init_notify = __esm({
     IMMEDIATE_WINDOW_HOURS = () => Math.max(1, Number(process.env.IMMEDIATE_ALERT_WINDOW_HOURS ?? 48));
     APP_URL = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    sweepBlocker = (res) => {
+      if (res.status !== "error" || !res.reason) return void 0;
+      const code = res.reason;
+      if (MAIL_CONFIG_ERRORS.includes(code) || code === "mail_rate_limited") return code;
+      if (code === "mail_test_sender_restricted" && res.emails === 0) return code;
+      return void 0;
+    };
   }
 });
 
@@ -6806,7 +6832,7 @@ Confirmer / refuser : ${APP_URL2()}/fournisseur/commandes`;
       ok = ok || m.ok;
       channel = channel === "none" ? "email" : `${channel}+email`;
     }
-    await db.update(orders).set({ vendorRemindedAt: now }).where(eq16(orders.id, o.id));
+    if (ok || channel === "none") await db.update(orders).set({ vendorRemindedAt: now }).where(eq16(orders.id, o.id));
     out.push({ reference: o.reference, vendor: v.name, channel, ok });
   }
   const watch = await watchdog({ self: "reminders", now });

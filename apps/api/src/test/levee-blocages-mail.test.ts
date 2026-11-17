@@ -177,13 +177,15 @@ describe('tâche d’alertes : elle dit pourquoi, n’insiste pas, reprend sans 
     const a = await restaurantAvecAlerte(); const b = await restaurantAvecAlerte(); const c = await restaurantAvecAlerte();
     mode = 'expediteur_essai';
     const passe1 = await notifyAllRestaurants();
-    expect(passe1).toMatchObject({ withAlerts: 3, emails: 0, failed: 3, skipped: 0, reasons: { mail_test_sender_restricted: 3 } });
-    // Motif propre à chaque destinataire : le prestataire est sollicité pour chacun (le titulaire du compte, lui, serait servi).
-    expect(recus).toHaveLength(3);
+    expect(passe1).toMatchObject({ withAlerts: 3, emails: 0, failed: 3, skipped: 0, reasons: { mail_test_sender_restricted: 1, not_attempted: 2 } });
+    // Rien n'a été remis au premier restaurant essayé : le prestataire refusera les suivants pour la même
+    // raison (seul le titulaire de son compte serait servi). Le balayage cesse donc de le solliciter — sinon
+    // chaque passage frappe le prestataire une fois par restaurant jusqu'à la limite de débit.
+    expect(recus).toHaveLength(1);
     const ligne = await derniereLigne();
     expect(ligne.status).toBe('error');
     expect(ligne.error).toMatch(/^3 restaurant\(s\) sans envoi \[mail_test_sender_restricted\] — L'expéditeur est l'adresse d'essai/);
-    expect(ligne.summary).toMatchObject({ withAlerts: 3, failed: 3, reasons: { mail_test_sender_restricted: 3 } });
+    expect(ligne.summary).toMatchObject({ withAlerts: 3, failed: 3, reasons: { mail_test_sender_restricted: 1, not_attempted: 2 }, stoppedSendingFor: 'mail_test_sender_restricted' });
     for (const r of [a, b, c]) expect(await enAttente(r.rid)).toBe(1);
 
     // L'envoi est rétabli (domaine vérifié) : chaque restaurant reçoit son alerte, une fois.
@@ -198,6 +200,22 @@ describe('tâche d’alertes : elle dit pourquoi, n’insiste pas, reprend sans 
     recus.length = 0;
     expect(await notifyAllRestaurants()).toMatchObject({ withAlerts: 0, emails: 0, failed: 0 });
     expect(recus).toHaveLength(0);
+  });
+
+  it('expéditeur d’essai : le titulaire du compte reste servi, et le balayage s’arrête au premier restaurant sans envoi', async () => {
+    // Le prestataire sert le titulaire de son compte : l'envoi n'est donc PAS abandonné d'emblée.
+    const titulaire = await restaurantAvecAlerte({ destinataires: [TITULAIRE] });
+    const b = await restaurantAvecAlerte(); const c = await restaurantAvecAlerte();
+    mode = 'expediteur_essai';
+    const passe = await notifyAllRestaurants();
+    expect(passe).toMatchObject({ withAlerts: 3, emails: 1, failed: 2, reasons: { mail_test_sender_restricted: 1, not_attempted: 1 } });
+    expect(recus).toEqual([TITULAIRE, b.email]);            // le 3e restaurant n'est pas sollicité : son refus est certain
+    const ligne = await derniereLigne();
+    expect(ligne.status).toBe('partial');                   // quelque chose est parti : pas « error »
+    expect(ligne.summary).toMatchObject({ stoppedSendingFor: 'mail_test_sender_restricted' });
+    expect(await enAttente(titulaire.rid)).toBe(0);         // l'alerte du titulaire est annoncée
+    expect(await enAttente(b.rid)).toBe(1);                 // les autres repartiront au passage suivant
+    expect(await enAttente(c.rid)).toBe(1);
   });
 
   for (const [m, code] of [['cle', 'mail_key_invalid'], ['domaine', 'mail_domain_not_verified'], ['debit', 'mail_rate_limited']] as const) {

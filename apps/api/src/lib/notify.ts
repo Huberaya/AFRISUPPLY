@@ -169,6 +169,21 @@ export async function notifyCriticalAlerts(rid: string, opts: { now?: Date; reco
   return out;
 }
 
+/**
+ * Motif qui rend inutile tout autre envoi du balayage courant, ou `undefined` si l'on doit continuer.
+ * `mail_test_sender_restricted` n'arrête le balayage que si RIEN n'a été remis au restaurant essayé :
+ * avec l'expéditeur d'essai du prestataire, seul le titulaire de son compte est servi — s'il l'a été,
+ * l'envoi continue ; sinon les restaurants suivants seront refusés pour la même raison, et il ne sert
+ * à rien de solliciter le prestataire deux cents fois par passage (limite de débit, journal illisible).
+ */
+export const sweepBlocker = (res: NotifyResult): MailErrorCode | undefined => {
+  if (res.status !== 'error' || !res.reason) return undefined;
+  const code = res.reason as MailErrorCode;
+  if (MAIL_CONFIG_ERRORS.includes(code) || code === 'mail_rate_limited') return code;
+  if (code === 'mail_test_sender_restricted' && res.emails === 0) return code;
+  return undefined;
+};
+
 /** Balayage de tous les restaurants : utilisé par le cron horaire (et au plus toutes les 15 min en opportuniste). */
 export async function notifyAllRestaurants(opts: { now?: Date; limit?: number } = {}) {
   const startedAt = new Date(); const db = await getDb();
@@ -181,7 +196,7 @@ export async function notifyAllRestaurants(opts: { now?: Date; limit?: number } 
   for (const r of all) {
     const res = await notifyCriticalAlerts(r.id, { now: opts.now, record: false, dontSend: blocked });
     if (res.alerts) details.push(res);
-    if (!blocked && res.status === 'error' && res.reason && (MAIL_CONFIG_ERRORS.includes(res.reason as MailErrorCode) || res.reason === 'mail_rate_limited')) blocked = res.reason;
+    if (!blocked) blocked = sweepBlocker(res);
   }
   const sent = details.filter((d) => d.sent).reduce((a, d) => a + d.emails, 0);
   const failedList = details.filter((d) => d.status === 'error');

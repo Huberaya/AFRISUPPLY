@@ -19,6 +19,25 @@ const clean = (v: string | undefined) => { const s = v?.trim(); return s && s.le
 export const onVercel = (env: NodeJS.ProcessEnv = process.env) => !!env.VERCEL || !!env.VERCEL_ENV;
 
 /**
+ * Deux adresses désignent-elles la même base ? On compare l'hôte et la base (pas la chaîne
+ * complète) : un mot de passe différent, un paramètre `?sslmode=` ou un `/` final ne doivent pas
+ * faire passer la base de production pour une base de prévisualisation. Reprise P0-M : avant, la
+ * comparaison était stricte (`preview === prod`) et laissait passer la production sous une autre
+ * orthographe de la même adresse. Si une adresse ne se lit pas, on retombe sur la comparaison stricte.
+ */
+export function sameDatabase(a: string | undefined, b: string | undefined): boolean {
+  const x = clean(a); const y = clean(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  try {
+    const ux = new URL(x); const uy = new URL(y);
+    return ux.hostname.toLowerCase() === uy.hostname.toLowerCase()
+      && ux.port === uy.port
+      && ux.pathname.replace(/\/+$/, '') === uy.pathname.replace(/\/+$/, '');
+  } catch { return false; }
+}
+
+/**
  * Adresse de la base à utiliser dans l'environnement courant.
  *
  * Chantier P0.4 — cloisonnement des environnements : une prévisualisation Vercel ne lit JAMAIS
@@ -26,12 +45,12 @@ export const onVercel = (env: NodeJS.ProcessEnv = process.env) => !!env.VERCEL |
  * l'exposer à tous les environnements : une branche de travail se brancherait alors sur les données
  * réelles sans que personne ne l'ait décidé. Une prévisualisation n'utilise donc que
  * `PREVIEW_DATABASE_URL` (une base ou une branche Neon dédiée), et rien si elle est absente.
- * Garde supplémentaire : si les deux variables portent la même adresse, la prévisualisation est refusée.
+ * Garde supplémentaire : si les deux variables désignent la même base, la prévisualisation est refusée.
  */
 export function getDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.VERCEL_ENV === 'preview') {
     const preview = clean(env.PREVIEW_DATABASE_URL);
-    if (preview && preview === clean(env.DATABASE_URL)) return undefined;
+    if (preview && sameDatabase(preview, clean(env.DATABASE_URL))) return undefined;
     return preview;
   }
   return clean(env.DATABASE_URL);

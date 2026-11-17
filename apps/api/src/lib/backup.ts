@@ -19,7 +19,7 @@ import type { PgTable } from 'drizzle-orm/pg-core';
 import {
   getDb, openDatabase, runMigrations, type Db, restaurants, users, restaurantMembers, products, suppliers, supplierOffers, priceHistory,
   inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes,
-  recipeIngredients, sales, alerts, reorderRules, forecasts, shoppingLists, feedback, usageEvents,
+  recipeIngredients, sales, alerts, reorderRules, forecasts, forecastEvents, shoppingLists, feedback, usageEvents,
   notifications, orderEvents, recurringOrders, claims, subscriptionInvoices, billingEvents,
   commissions, groupBuyParticipations, vendorCustomerPrices, vendorReviews,
 } from '@afrisupply/db';
@@ -69,6 +69,11 @@ export const BACKUP_TABLES: BackupTable[] = [
   { name: 'alerts', table: alerts, scope: 'restaurant', column: 'restaurantId' },
   { name: 'reorder_rules', table: reorderRules, scope: 'restaurant', column: 'restaurantId' },
   { name: 'forecasts', table: forecasts, scope: 'restaurant', column: 'restaurantId' },
+  // Reprise P0-M : les événements de fréquentation (soirée privatisée, fermeture…) appartiennent
+  // au restaurant et alimentent la prévision. Ils manquaient à la sauvegarde : une restauration
+  // perdait ces réglages sans le dire. Les jetons de confirmation et de réinitialisation restent
+  // volontairement hors sauvegarde (transitoires, à usage unique).
+  { name: 'forecast_events', table: forecastEvents, scope: 'restaurant', column: 'restaurantId' },
   { name: 'shopping_lists', table: shoppingLists, scope: 'restaurant', column: 'restaurantId' },
   { name: 'recurring_orders', table: recurringOrders, scope: 'restaurant', column: 'restaurantId' },
   { name: 'claims', table: claims, scope: 'restaurant', column: 'restaurantId' },
