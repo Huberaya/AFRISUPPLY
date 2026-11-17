@@ -21,3 +21,33 @@
 | R15 | 16 vulnérabilités d'outils de développement | Faible | Faible | Poste de développement seulement | `npm audit` | Demande de fusion séparée | Agent | `npm audit` : 0 | — |
 | R16 | Cadence ou quota de déploiements Vercel | Faible | Constatée une fois | Mise en ligne retardée | Statut du commit `6292ccb` | Envois regroupés | Titulaire | Nature de la limite relevée ; second projet coupé | Second projet Vercel |
 | R17 | Mentions légales inexactes, société non immatriculée | Élevée pour un pilote payant | Constatée | Engagements publics non tenus | `docs/chantiers/DOSSIER_COMMERCIALISATION.md` | Hors de cette mission | Titulaire | Mentions corrigées | Décisions de la société |
+
+## Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnements | GitHub, production (deux pages publiques), boîte du titulaire, base embarquée |
+
+**Risques dont l'état a changé**
+
+| # | Ce qui a changé | Statut |
+|---|---|---|
+| R1 | Relu : la production sert toujours `15c8b81`. Le défaut critique y est donc toujours | BLOQUÉ — levé par la mise en production de la branche |
+| R2 | Une voie existe sans attendre le domaine d'envoi : `docs/PLAN_REPRISE_PRODUCTION.md`, § 3, P2 | BLOQUÉ — geste du titulaire |
+| R3 | Confirmé par la production (expéditeur d'essai) et par la boîte du titulaire, servie chaque jour. À l'inscription, la personne est désormais informée du motif | PROUVÉ ; message CORRIGÉ ; remise EN ATTENTE EXTERNE |
+| R4 | Relu : 0 fichier, dernière sauvegarde réussie le 5 octobre | PROUVÉ — EN ATTENTE EXTERNE |
+| R9 | Confirmé en production : la dernière passe enregistrée date du 23 septembre, alors que le mail du matin part chaque jour | PROUVÉ en production ; CORRIGÉ dans la branche ; à constater après déploiement |
+| R12 | Précision : la version en production accepte un secret de session absent et signe alors avec une valeur écrite dans le code, donc publique. La lecture de `JWT_SECRET` est à faire sans attendre la fusion | **BLOQUÉ** — jamais lu |
+| R15 | 16 vulnérabilités d'outillage ramenées à 4, toutes dans la chaîne de l'outil de migration | CORRIGÉ en partie |
+| R16 | Nature de la limite identifiée : stockage des fonctions de l'offre gratuite à 100 % le 5 novembre, pour toute l'équipe | PROUVÉ ; réglages EN ATTENTE EXTERNE |
+
+**Risques nouveaux**
+
+| # | Risque | Gravité | Probabilité | Impact | Preuve | Correction | Responsable | Condition de levée | Statut |
+|---|---|---|---|---|---|---|---|---|---|
+| R18 | Le workflow quotidien de GitHub écrit le nom des restaurants dans un journal public | Élevée | Constatée dans le fichier de `main` ; journaux non lus | Liste de clients lisible par toute personne connectée à GitHub | `docs/VALIDATION_ETAT_INITIAL_FUSION.md`, § 5.1 | Dans la branche : compteurs seulement | Titulaire | Workflow désactivé ou branche fusionnée ; journaux passés supprimés | CORRIGÉ dans la branche ; journaux existants : BLOQUÉ — décision |
+| R19 | Ce même workflow est en échec chaque jour depuis le 23 septembre (55 exécutions) | Moyenne | Constatée | Une alerte permanente n'alerte plus : une vraie panne passerait inaperçue | API GitHub | Version de la branche ; elle restera en échec tant que des e-mails sont refusés | Titulaire | Une exécution verte après la mise en ordre des e-mails | EN ATTENTE EXTERNE |
+| R20 | La prochaine migration générée aurait rejoué la migration n° 28 et échoué en production | Moyenne | Certaine à la prochaine migration | Mise en production bloquée, ou schéma corrigé à la main | Essai : l'outil régénérait les trois instructions | Instantané ajouté ; contrôle en CI | Agent | — | CORRIGÉ |
+| R21 | La durée de la tâche d'alertes croissait avec le nombre de restaurants (22 secondes pour 89) | Moyenne | Certaine avec la croissance | Tâche coupée par la limite de 60 secondes ; alertes non envoyées | `/api/status` de production | Tâche bornée, reprise au passage suivant | Agent, titulaire | Constat sur la plateforme après déploiement | CORRIGÉ dans la branche |
+| R22 | Fusionner déclenche une mise en production automatique | Élevée si R2 ou R12 ne sont pas levés | Certaine | API en 503, ou exploitant sans administration | Six derniers déploiements de production créés par Vercel à chaque envoi sur `main` | Plan écrit ; voie « fusion sans mise en ligne » décrite, non appliquée | Titulaire | Préalables P1 à P3 du plan levés avant la fusion | BLOQUÉ |

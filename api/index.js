@@ -4586,15 +4586,7 @@ import { and as and7, asc as asc2, eq as eq10, gte, inArray as inArray3, isNull 
 async function pendingImmediateAlerts(rid2, limit = 50) {
   const db = await getDb();
   const cutoff = new Date(Date.now() - IMMEDIATE_WINDOW_HOURS() * 36e5);
-  const rows = await db.select({ id: alerts.id, kind: alerts.kind, severity: alerts.severity, title: alerts.title, message: alerts.message, actionUrl: alerts.actionUrl, createdAt: alerts.createdAt }).from(alerts).where(and7(
-    eq10(alerts.restaurantId, rid2),
-    isNull6(alerts.notifiedAt),
-    eq10(alerts.isRead, false),
-    gte(alerts.createdAt, cutoff),
-    // Chantier 9 : un rappel doux (severity « blue ») ne part pas par e-mail — il serait quotidien
-    // et deviendrait du bruit. Les alertes graves partent immédiatement, comme avant.
-    or2(and7(inArray3(alerts.kind, [...IMMEDIATE_KINDS]), inArray3(alerts.severity, [...IMMEDIATE_SEVERITIES])), sql9`${alerts.payload} ? 'surchargeEur'`)
-  )).orderBy(asc2(alerts.createdAt)).limit(limit);
+  const rows = await db.select({ id: alerts.id, kind: alerts.kind, severity: alerts.severity, title: alerts.title, message: alerts.message, actionUrl: alerts.actionUrl, createdAt: alerts.createdAt }).from(alerts).where(and7(eq10(alerts.restaurantId, rid2), aEnvoyer(cutoff))).orderBy(asc2(alerts.createdAt)).limit(limit);
   return rows.map((r) => ({ id: r.id, kind: r.kind, severity: r.severity, title: r.title, message: r.message, actionUrl: r.actionUrl }));
 }
 async function retireStaleAlerts(rid2, now = /* @__PURE__ */ new Date()) {
@@ -4702,10 +4694,20 @@ async function notifyCriticalAlerts(rid2, opts = {}) {
 async function notifyAllRestaurants(opts = {}) {
   const startedAt = /* @__PURE__ */ new Date();
   const db = await getDb();
-  const all = await db.select({ id: restaurants.id }).from(restaurants).orderBy(asc2(restaurants.createdAt)).limit(opts.limit ?? 200);
+  const now = opts.now ?? /* @__PURE__ */ new Date();
+  const cutoff = new Date(now.getTime() - IMMEDIATE_WINDOW_HOURS() * 36e5);
+  const budget = opts.budgetMs ?? notifyBudgetMs();
+  await db.update(alerts).set({ notifiedAt: now }).where(and7(isNull6(alerts.notifiedAt), lt(alerts.createdAt, cutoff)));
+  const [{ n: total }] = await db.select({ n: sql9`count(*)::int` }).from(restaurants);
+  const all = await db.select({ id: alerts.restaurantId }).from(alerts).where(aEnvoyer(cutoff)).groupBy(alerts.restaurantId).orderBy(sql9`min(${alerts.createdAt})`).limit(opts.limit ?? 500);
   const details = [];
+  let remaining = 0;
   let blocked;
-  for (const r of all) {
+  for (const [i, r] of all.entries()) {
+    if (Date.now() - startedAt.getTime() >= budget) {
+      remaining = all.length - i;
+      break;
+    }
     const res = await notifyCriticalAlerts(r.id, { now: opts.now, record: false, dontSend: blocked });
     if (res.alerts) details.push(res);
     if (!blocked && res.status === "error" && res.reason && (MAIL_CONFIG_ERRORS.includes(res.reason) || res.reason === "mail_rate_limited")) blocked = res.reason;
@@ -4718,16 +4720,18 @@ async function notifyAllRestaurants(opts = {}) {
   for (const d of details) if (d.reason && d.status !== "ok") reasons[d.reason] = (reasons[d.reason] ?? 0) + 1;
   const cause = blocked ?? failedList.find((d) => d.reason)?.reason;
   const explain = cause && cause in MAIL_ERROR_MESSAGES ? ` \u2014 ${MAIL_ERROR_MESSAGES[cause]}` : "";
+  const status = failed === 0 && remaining === 0 ? "ok" : sent > 0 || failed === 0 && remaining > 0 ? "partial" : "error";
+  const message = [failed ? `${failed} restaurant(s) sans envoi${cause ? ` [${cause}]` : ""}${explain}` : "", remaining ? `${remaining} restaurant(s) report\xE9(s) au passage suivant (temps imparti atteint)` : ""].filter(Boolean).join(" ; ");
   await recordJobRun({
     job: "alerts-notify",
     startedAt,
-    status: failed === 0 ? "ok" : sent > 0 ? "partial" : "error",
-    summary: { restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, ...blocked ? { stoppedSendingFor: blocked } : {} },
-    error: failed ? `${failed} restaurant(s) sans envoi${cause ? ` [${cause}]` : ""}${explain}` : null
+    status,
+    summary: { restaurants: Number(total), withAlerts: details.length, emails: sent, failed, skipped, remaining, reasons, ...blocked ? { stoppedSendingFor: blocked } : {} },
+    error: message || null
   });
-  return { ranAt: (opts.now ?? /* @__PURE__ */ new Date()).toISOString(), restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, details };
+  return { ranAt: now.toISOString(), restaurants: Number(total), withAlerts: details.length, emails: sent, failed, skipped, remaining, reasons, details };
 }
-var IMMEDIATE_KINDS, IMMEDIATE_SEVERITIES, IMMEDIATE_WINDOW_HOURS, APP_URL, escapeHtml;
+var IMMEDIATE_KINDS, IMMEDIATE_SEVERITIES, IMMEDIATE_WINDOW_HOURS, APP_URL, aEnvoyer, escapeHtml, notifyBudgetMs;
 var init_notify = __esm({
   "apps/api/src/lib/notify.ts"() {
     "use strict";
@@ -4739,7 +4743,17 @@ var init_notify = __esm({
     IMMEDIATE_SEVERITIES = ["red", "orange"];
     IMMEDIATE_WINDOW_HOURS = () => Math.max(1, Number(process.env.IMMEDIATE_ALERT_WINDOW_HOURS ?? 48));
     APP_URL = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    aEnvoyer = (cutoff) => and7(
+      isNull6(alerts.notifiedAt),
+      eq10(alerts.isRead, false),
+      gte(alerts.createdAt, cutoff),
+      or2(and7(inArray3(alerts.kind, [...IMMEDIATE_KINDS]), inArray3(alerts.severity, [...IMMEDIATE_SEVERITIES])), sql9`${alerts.payload} ? 'surchargeEur'`)
+    );
     escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    notifyBudgetMs = (env = process.env) => {
+      const v = Number(env.NOTIFY_BUDGET_MS);
+      return Number.isFinite(v) && v > 0 ? v : env.VERCEL ? 3e4 : 5 * 6e4;
+    };
   }
 });
 
@@ -9658,13 +9672,14 @@ var authRoutes = new Hono();
 var mailStatus = (res, link, kind) => {
   const delivered = res.ok && res.transport !== "log";
   const { transport } = res;
+  const reason = res.ok ? "mail_not_configured" : res.code;
+  const retryable = !res.ok && res.retryable;
+  const quoi = kind === "verification" ? "Votre adresse n'a pas encore pu \xEAtre confirm\xE9e" : "L'e-mail n'a pas pu \xEAtre envoy\xE9";
+  const pourquoi = retryable ? "le service d'envoi est momentan\xE9ment indisponible. R\xE9essayez dans quelques minutes." : reason === "mail_recipient_rejected" ? "cette adresse est refus\xE9e par le service d'envoi. V\xE9rifiez-la." : reason === "mail_not_configured" ? "l'envoi d'e-mails n'est pas configur\xE9 sur ce serveur. Pr\xE9venez le support." : "l'envoi d'e-mails de la plateforme n'est pas op\xE9rationnel pour l'instant. Votre compte fonctionne ; pr\xE9venez le support.";
   return {
     delivered,
     transport,
-    ...delivered ? {} : {
-      code: "mail_not_delivered",
-      warning: kind === "verification" ? "Votre adresse n'a pas encore pu \xEAtre confirm\xE9e : l'envoi d'e-mails n'est pas configur\xE9 sur ce serveur." : "L'e-mail n'a pas pu \xEAtre envoy\xE9 : l'envoi d'e-mails n'est pas configur\xE9 sur ce serveur. Pr\xE9venez le support."
-    },
+    ...delivered ? {} : { code: "mail_not_delivered", reason, retryable, warning: `${quoi} : ${pourquoi}` },
     ...devLinksAllowed() ? { devLink: link } : {}
   };
 };
@@ -9707,7 +9722,7 @@ Tant que l'adresse n'est pas confirm\xE9e, nous ne pouvons pas vous envoyer les 
     html: h`<p>Bonjour ${user.fullName.split(" ")[0] || "chef"},</p><p>Bienvenue sur AFRISUPPLY. <a href="${link}">Confirmez votre adresse e-mail</a> (lien valable ${TTL_H} heures).</p><p>Tant que l'adresse n'est pas confirmée, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.</p>`,
     tags: { type: "email_verification" }
   });
-  void audit("email.verification.sent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== "log" } });
+  void audit("email.verification.sent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== "log", ...mail.ok ? {} : { reason: mail.code } } });
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, "afs_token", token, cookieOpts);
   const firstName2 = user.fullName.split(" ")[0] || "chef";
@@ -9784,8 +9799,8 @@ Les liens pr\xE9c\xE9dents ne fonctionnent plus.`,
     html: h`<p>Bonjour ${user.fullName.split(" ")[0] || "chef"},</p><p><a href="${link}">Confirmer mon adresse e-mail</a> (valable ${TTL_H} heures). Les liens précédents ne fonctionnent plus.</p>`,
     tags: { type: "email_verification" }
   });
-  void audit("email.verification.resent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport } });
   const status = mailStatus(mail, link, "verification");
+  void audit("email.verification.resent", { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: status.delivered, ...status.delivered ? {} : { reason: mail.ok ? "mail_not_configured" : mail.code } } });
   return c.json({
     ok: true,
     ...status,

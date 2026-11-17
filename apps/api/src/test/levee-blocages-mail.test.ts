@@ -29,13 +29,15 @@ delete process.env.VERCEL; delete process.env.APP_URL;
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { and, eq, isNull } from 'drizzle-orm';
-import { getDb, runMigrations, alerts, jobRuns, restaurants, restaurantMembers } from '@afrisupply/db';
+import { getDb, runMigrations, alerts, jobRuns, restaurants, restaurantMembers, auditLog, emailVerifications } from '@afrisupply/db';
 
 // --- faux prestataire d'e-mails -----------------------------------------------------------------
 const TITULAIRE = 'titulaire.du.compte@prestataire-exemple.test';      // l'adresse que le vrai prestataire écrit dans son message de refus
 type Mode = 'ok' | 'expediteur_essai' | 'domaine' | 'cle' | 'debit' | 'panne' | 'destinataire' | 'autre';
 let mode: Mode = 'ok';
 const recus: string[] = [];        // destinataires de chaque appel reçu
+const textes: string[] = [];       // texte de chaque message reçu
+let delaiMs = 0;                   // lenteur simulée du prestataire
 let serveur: http.Server;
 const REPONSES: Record<Exclude<Mode, 'ok'>, [number, Record<string, unknown>]> = {
   expediteur_essai: [403, { statusCode: 403, name: 'validation_error', message: `You can only send testing emails to your own email address (${TITULAIRE}). To send emails to other recipients, please verify a domain at resend.com/domains, and change the \`from\` address to an email using this domain.` }],
@@ -52,9 +54,10 @@ beforeAll(async () => {
     let corps = '';
     req.on('data', (d) => { corps += d; });
     req.on('end', () => {
-      const to = String((JSON.parse(corps || '{}') as { to?: string[] }).to?.[0] ?? '');
-      recus.push(to);
-      const json = (status: number, body: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+      const recu = JSON.parse(corps || '{}') as { to?: string[]; text?: string };
+      const to = String(recu.to?.[0] ?? '');
+      recus.push(to); textes.push(String(recu.text ?? ''));
+      const json = (status: number, body: unknown) => { setTimeout(() => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); }, delaiMs); };
       if (mode === 'ok') return json(200, { id: `msg_${recus.length}` });
       // Comme le vrai prestataire : avec l'expéditeur d'essai, le titulaire du compte est servi, pas les autres.
       if (mode === 'expediteur_essai' && to === TITULAIRE) return json(200, { id: `msg_${recus.length}` });
@@ -92,7 +95,7 @@ const enAttente = async (rid: string) => (await (await getDb()).select({ id: ale
 /** Remet les compteurs à zéro : plus aucune alerte en attente, plus aucun appel compté. */
 async function menage() {
   await (await getDb()).update(alerts).set({ notifiedAt: new Date() }).where(isNull(alerts.notifiedAt));
-  recus.length = 0; mode = 'ok'; _resetMailStats();
+  recus.length = 0; textes.length = 0; mode = 'ok'; delaiMs = 0; _resetMailStats();
 }
 beforeEach(menage);
 
@@ -257,3 +260,127 @@ describe('tâche d’alertes : elle dit pourquoi, n’insiste pas, reprend sans 
     expect(texte).not.toContain(r.email); expect(texte).not.toContain(TITULAIRE);
   });
 });
+
+describe('tâche d’alertes : elle tient dans le temps d’une fonction et reprend où elle s’est arrêtée', () => {
+  it('temps imparti atteint : elle s’arrête, dit combien il en reste, et le passage suivant sert EXACTEMENT le reste', async () => {
+    const liste = [await restaurantAvecAlerte(), await restaurantAvecAlerte(), await restaurantAvecAlerte(), await restaurantAvecAlerte()];
+    delaiMs = 80;                                             // prestataire lent : un envoi dépasse à lui seul le temps imparti
+    const passe1 = await notifyAllRestaurants({ budgetMs: 50 });
+    delaiMs = 0;
+    expect(passe1).toMatchObject({ withAlerts: 1, emails: 1, failed: 0, remaining: 3 });
+    const servi = [...recus];
+    expect(servi).toHaveLength(1);
+    const ligne = (await (await getDb()).select().from(jobRuns).where(eq(jobRuns.job, 'alerts-notify'))).sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())[0];
+    expect(ligne.status).toBe('partial');
+    expect(ligne.error).toMatch(/3 restaurant\(s\) reporté\(s\) au passage suivant/);
+    expect(ligne.summary).toMatchObject({ remaining: 3 });
+    recus.length = 0;
+    const passe2 = await notifyAllRestaurants();
+    expect(passe2).toMatchObject({ withAlerts: 3, emails: 3, failed: 0, remaining: 0 });
+    // Personne n'a reçu deux fois, personne n'a été oublié.
+    expect([...servi, ...recus].sort()).toEqual(liste.map((r) => r.email).sort());
+    recus.length = 0;
+    expect(await notifyAllRestaurants()).toMatchObject({ withAlerts: 0, emails: 0, remaining: 0 });
+    expect(recus).toHaveLength(0);
+  });
+
+  it('sans alerte à envoyer : le prestataire n’est pas sollicité, quel que soit le nombre de restaurants', async () => {
+    const passe = await notifyAllRestaurants();
+    expect(passe.restaurants).toBeGreaterThan(10);            // tous les restaurants créés par ce fichier
+    expect(passe).toMatchObject({ withAlerts: 0, emails: 0, failed: 0, skipped: 0, remaining: 0 });
+    expect(recus).toHaveLength(0);
+  });
+});
+
+describe('confirmation d’adresse : l’échec d’envoi est dit, et qualifié', () => {
+  const inscrire = async (email: string) => {
+    await _resetRateLimits();
+    const r = await app.request('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'Plantain-Yassa-42', fullName: 'Personne Essai', restaurantName: `Restaurant ${email.split('@')[0]}` }) });
+    return { status: r.status, texte: await r.text() };
+  };
+  const renvoyer = async (jeton: string) => { const r = await app.request('/api/auth/resend-verification', { method: 'POST', headers: { authorization: `Bearer ${jeton}` } }); return { status: r.status, texte: await r.text() }; };
+
+  it('expéditeur d’essai (cas de la production) : le compte est créé, l’envoi est annoncé non fait, avec son motif', async () => {
+    mode = 'expediteur_essai';
+    const r = await inscrire('confirmation-1@restaurant-exemple.test');
+    const j = JSON.parse(r.texte);
+    expect(r.status).toBe(201);
+    expect(j.emailVerification).toMatchObject({ delivered: false, code: 'mail_not_delivered', reason: 'mail_test_sender_restricted', retryable: false });
+    expect(j.emailVerification.warning).toMatch(/n'a pas encore pu être confirmée : l'envoi d'e-mails de la plateforme n'est pas opérationnel/);
+    expect(j.emailVerification.warning).not.toMatch(/n'est pas configuré/);       // il l'est : c'est le prestataire qui refuse
+    for (const interdit of [TITULAIRE, 'only send testing emails', 'prestataire-exemple']) expect(r.texte).not.toContain(interdit);
+  });
+
+  it('prestataire momentanément indisponible : la personne est invitée à réessayer ; adresse refusée : à la vérifier', async () => {
+    const r = await inscrire('confirmation-2@restaurant-exemple.test');     // envoi réussi à l'inscription
+    const jeton = JSON.parse(r.texte).token as string;
+    expect(JSON.parse(r.texte).emailVerification).toMatchObject({ delivered: true });
+    mode = 'debit';
+    const debit = JSON.parse((await renvoyer(jeton)).texte);
+    expect(debit).toMatchObject({ delivered: false, reason: 'mail_rate_limited', retryable: true });
+    expect(debit.message).toMatch(/momentanément indisponible\. Réessayez dans quelques minutes/);
+    mode = 'destinataire';
+    const refus = JSON.parse((await renvoyer(jeton)).texte);
+    expect(refus).toMatchObject({ delivered: false, reason: 'mail_recipient_rejected', retryable: false });
+    expect(refus.message).toMatch(/refusée par le service d'envoi\. Vérifiez-la/);
+    // Le journal d'audit garde le motif — jamais le texte du prestataire.
+    const journal = JSON.stringify(await (await getDb()).select().from(auditLog).where(eq(auditLog.action, 'email.verification.resent')));
+    expect(journal).toContain('mail_rate_limited'); expect(journal).toContain('mail_recipient_rejected');
+    expect(journal).not.toContain('Too many requests'); expect(journal).not.toContain('Invalid `to` field');
+  });
+
+  it('le lien envoyé ne porte que le jeton : ni adresse, ni identifiant, ni autre paramètre', async () => {
+    await inscrire('confirmation-3@restaurant-exemple.test');
+    const message = textes.find((t) => t.includes('/verifier-email?token=')) ?? '';
+    const lien = /https?:\/\/\S+\/verifier-email\?\S+/.exec(message)?.[0] ?? '';
+    const url = new URL(lien);
+    expect([...url.searchParams.keys()]).toEqual(['token']);
+    expect(url.searchParams.get('token')).toMatch(/^[A-Za-z0-9_-]{43}$/);      // 32 octets aléatoires
+    expect(lien).not.toContain('@'); expect(lien).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+
+  it('un jeton falsifié est refusé, ne confirme rien et ne consomme pas le vrai ; le vrai sert une fois', async () => {
+    const adresse = 'confirmation-5@restaurant-exemple.test';
+    const r = await inscrire(adresse);
+    const session = JSON.parse(r.texte).token as string;
+    const message = [...textes].reverse().find((t) => t.includes('/verifier-email?token=')) ?? '';
+    const vrai = new URL(/https?:\/\/\S+\/verifier-email\?\S+/.exec(message)?.[0] ?? '').searchParams.get('token')!;
+    const confirmer = async (jeton: string) => { const x = await app.request('/api/auth/verify-email', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: jeton }) }); return { status: x.status, json: await x.json() as Record<string, unknown> }; };
+    const moi = async () => (await (await app.request('/api/auth/me', { headers: { authorization: `Bearer ${session}` } })).json()) as { user?: { emailVerified?: boolean } };
+    // Un caractère changé, un jeton tronqué, un jeton d'une autre forme : refusés, avec le même message.
+    const falsifie = vrai.slice(0, -1) + (vrai.endsWith('A') ? 'B' : 'A');
+    for (const faux of [falsifie, vrai.slice(0, 20), `${vrai}x`, 'a'.repeat(43)]) {
+      const refus = await confirmer(faux);
+      expect(refus.status).toBe(400);
+      expect(refus.json.code).toBe('verify_invalid');
+    }
+    expect((await moi()).user?.emailVerified).toBe(false);
+    // En base : le jeton n'est conservé que sous forme d'empreinte, et il n'est pas consommé par les essais.
+    const lignes = await (await getDb()).select().from(emailVerifications).where(eq(emailVerifications.email, adresse));
+    expect(lignes).toHaveLength(1);
+    expect(lignes[0].usedAt).toBeNull();
+    expect(JSON.stringify(lignes)).not.toContain(vrai);
+    expect(lignes[0].tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    // Le vrai jeton confirme l'adresse — c'est l'application qui écrit la date, personne d'autre.
+    const ok = await confirmer(vrai);
+    expect(ok.status).toBe(200);
+    expect((await moi()).user?.emailVerified).toBe(true);
+    const apres = await (await getDb()).select().from(emailVerifications).where(eq(emailVerifications.email, adresse));
+    expect(apres[0].usedAt).not.toBeNull();
+    // Rejoué : rien ne change (« déjà confirmée »), aucune seconde écriture utile.
+    const rejoue = await confirmer(vrai);
+    expect(rejoue.status).toBe(200);
+    expect(rejoue.json.alreadyVerified).toBe(true);
+  });
+
+  it('le renvoi du lien est freiné : cinq par quart d’heure, puis 429', async () => {
+    const r = await inscrire('confirmation-4@restaurant-exemple.test');
+    const jeton = JSON.parse(r.texte).token as string;
+    await _resetRateLimits();
+    const codes: number[] = [];
+    for (let i = 0; i < 7; i += 1) codes.push((await renvoyer(jeton)).status);
+    expect(codes).toEqual([200, 200, 200, 200, 200, 429, 429]);
+    await _resetRateLimits();
+  });
+});
+

@@ -7,7 +7,7 @@ import { getDb, users, restaurants, restaurantMembers, leads, passwordResets, em
 import { hashPassword, verifyPassword, signToken, verifyToken, requireAuth, tokenTtlSeconds, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { passwordProblem, PASSWORD_MIN_LENGTH } from '../lib/security.js';
 import { issuePasswordLink, issueEmailVerification, hashEmailToken } from '../lib/reset-link.js';
-import { sendMail, mailerConfig, mailDeliverable, devLinksAllowed, type MailResult } from '../lib/mailer.js';
+import { sendMail, mailerConfig, mailDeliverable, devLinksAllowed, type MailResult , type MailErrorCode } from '../lib/mailer.js';
 import { audit, clientIp } from '../lib/ops.js';
 import { clerkIdentityFromRequest, ClerkAuthError, type ClerkIdentity } from '../lib/clerk.js';
 import { h, zNomAffiche } from '../lib/html.js';
@@ -25,17 +25,28 @@ export const authRoutes = new Hono<Env>();
  * répondre « e-mail envoyé ». On distingue « remis » de « non configuré », et en développement
  * on renvoie le lien pour pouvoir tester le parcours de bout en bout.
  */
+//
+// Levée des blocages (phase 3) — l'échec est QUALIFIÉ. Avant, tout échec donnait « l'envoi d'e-mails
+// n'est pas configuré », y compris quand le prestataire refusait le message (cas de la production :
+// expéditeur d'essai). `reason` porte le motif (lib/mailer.ts) ; le message dit à la personne ce
+// qu'elle peut faire : réessayer, corriger son adresse, ou attendre que la plateforme soit réparée.
+// Ni le texte du prestataire ni une adresse n'entrent dans cette réponse.
 const mailStatus = (res: MailResult, link: string, kind: 'verification' | 'reset' | 'invitation') => {
   const delivered = res.ok && res.transport !== 'log';
   const { transport } = res;
+  const reason: MailErrorCode = res.ok ? 'mail_not_configured' : res.code;
+  const retryable = !res.ok && res.retryable;
+  const quoi = kind === 'verification' ? "Votre adresse n'a pas encore pu être confirmée" : "L'e-mail n'a pas pu être envoyé";
+  const pourquoi = retryable
+    ? "le service d'envoi est momentanément indisponible. Réessayez dans quelques minutes."
+    : reason === 'mail_recipient_rejected'
+      ? "cette adresse est refusée par le service d'envoi. Vérifiez-la."
+      : reason === 'mail_not_configured'
+        ? "l'envoi d'e-mails n'est pas configuré sur ce serveur. Prévenez le support."
+        : "l'envoi d'e-mails de la plateforme n'est pas opérationnel pour l'instant. Votre compte fonctionne ; prévenez le support.";
   return {
     delivered, transport,
-    ...(delivered ? {} : {
-      code: 'mail_not_delivered',
-      warning: kind === 'verification'
-        ? "Votre adresse n'a pas encore pu être confirmée : l'envoi d'e-mails n'est pas configuré sur ce serveur."
-        : "L'e-mail n'a pas pu être envoyé : l'envoi d'e-mails n'est pas configuré sur ce serveur. Prévenez le support.",
-    }),
+    ...(delivered ? {} : { code: 'mail_not_delivered', reason, retryable, warning: `${quoi} : ${pourquoi}` }),
     ...(devLinksAllowed() ? { devLink: link } : {}),
   };
 };
@@ -77,7 +88,7 @@ authRoutes.post('/register', async (c) => {
     html: h`<p>Bonjour ${user.fullName.split(' ')[0] || 'chef'},</p><p>Bienvenue sur AFRISUPPLY. <a href="${link}">Confirmez votre adresse e-mail</a> (lien valable ${TTL_H} heures).</p><p>Tant que l'adresse n'est pas confirmée, nous ne pouvons pas vous envoyer les alertes de rupture ni les rappels de commande.</p>`,
     tags: { type: 'email_verification' },
   });
-  void audit('email.verification.sent', { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== 'log' } });
+  void audit('email.verification.sent', { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: mail.ok && mail.transport !== 'log', ...(mail.ok ? {} : { reason: mail.code }) } });
 
   const token = await signToken({ id: user.id, email: user.email, fullName: user.fullName, tokenVersion: user.tokenVersion ?? 0 });
   setCookie(c, 'afs_token', token, cookieOpts);
@@ -146,8 +157,9 @@ authRoutes.post('/resend-verification', requireAuth, async (c) => {
     html: h`<p>Bonjour ${user.fullName.split(' ')[0] || 'chef'},</p><p><a href="${link}">Confirmer mon adresse e-mail</a> (valable ${TTL_H} heures). Les liens précédents ne fonctionnent plus.</p>`,
     tags: { type: 'email_verification' },
   });
-  void audit('email.verification.resent', { actorEmail: user.email, target: user.id, meta: { transport: mail.transport } });
   const status = mailStatus(mail, link, 'verification');
+  // Le journal dit si le message est parti, et sinon pourquoi (motif seulement).
+  void audit('email.verification.resent', { actorEmail: user.email, target: user.id, meta: { transport: mail.transport, delivered: status.delivered, ...(status.delivered ? {} : { reason: mail.ok ? 'mail_not_configured' : mail.code }) } });
   return c.json({
     ok: true, ...status,
     message: status.delivered

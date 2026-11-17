@@ -38,3 +38,15 @@ Limite du point 4 : le code de la bibliothèque Clerk reste présent dans le paq
 | Connexion par mot de passe toujours fonctionnelle | **Rempli** (test automatisé) |
 | Preview : clés de la même instance, `clerk.instance.same = true` | EN ATTENTE EXTERNE |
 | Connexion réelle testée, origine non autorisée refusée | EN ATTENTE EXTERNE (prouvé contre un faux service seulement) |
+
+## Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnement | Tests automatisés contre un faux service Clerk ; aucune lecture de Clerk ni de la prévisualisation |
+| Statut | Production, Clerk coupé : PROUVÉ par tests, à constater après déploiement. Prévisualisation : **EN ATTENTE EXTERNE**, inchangé |
+
+Aucun changement de code sur ce sujet depuis le 13 novembre. Les 22 tests de la synchronisation Clerk
+et le parcours du navigateur (zéro requête vers un domaine de Clerk, Clerk coupé) ont été rejoués le
+17 novembre sur l'arbre mis à jour : réussis. Les gestes 7 à 10 du § 3 restent à faire.

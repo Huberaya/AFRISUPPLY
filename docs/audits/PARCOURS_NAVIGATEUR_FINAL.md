@@ -76,3 +76,17 @@ Une vérification peut compter pour deux opérations (réception et écart parta
 | Le comparateur ne s'ouvre depuis le stock que pour un produit « à commander » | Choix d'écran ; un produit bien approvisionné n'a pas de lien de comparaison |
 | Un membre d'équipe ne peut pas supprimer lui-même son compte ; le propriétaire le retire, ce qui supprime le compte | Règle voulue par le code ; à relire au titre du droit à l'effacement |
 | Écran Stock : « jours restants » surestimés après une seule journée de ventes | Non instruit |
+
+## Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnement | Poste de l'agent : site construit (outil de build mis à jour), API réellement démarrée sous le rôle PostgreSQL minimal, base embarquée, données fictives |
+| Résultat | **18 opérations sur 18 ; 140 vérifications sur 140** — PROUVÉ en local |
+| Sur une prévisualisation propre | **EN ATTENTE EXTERNE** |
+
+Rejoué après la mise à jour des outils de build et de test, et après les corrections de la tâche
+d'alertes et des messages d'envoi. Limite précisée pour l'essai en prévisualisation : contre une API
+distante, les deux opérations qui lisent un lien dans un e-mail sont annoncées « NON FAIT » par le script
+(`docs/VALIDATION_VERCEL_PREVIEW.md`, § 4).

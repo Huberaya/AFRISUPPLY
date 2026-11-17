@@ -66,3 +66,25 @@ cache et des commits orphelins ; (6) vérifier par une recherche dans l'historiq
 **Information des personnes et obligations légales.** Des coordonnées de tiers ont été publiées sans que
 ces personnes en soient informées. L'analyse de cette publication (information des personnes,
 éventuelle notification à l'autorité de protection des données) relève du responsable de la société et de son conseil.
+
+## Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnements | Dépôt (fichiers suivis et historique complet des deux branches) ; API GitHub |
+
+Les statuts sont définis dans `docs/VALIDATION_ETAT_INITIAL_FUSION.md`.
+
+| Point | Constat | Statut |
+|---|---|---|
+| Fichiers suivis de la branche | Contrôle automatique rejoué : aucun fichier de données, aucun secret probable, aucune coordonnée dans les documents | PROUVÉ — contrôle en CI |
+| Historique public | Inchangé : les quatre fichiers de prospection y sont toujours, depuis le 18 septembre | **BLOQUÉ** — décision : dépôt privé, ou purge |
+| Secrets dans l'historique | Recherche sur tous les commits des deux branches : chaînes de connexion avec mot de passe, jetons de base, clés de paiement, clés d'envoi, jetons signés. Seuls ressortent des exemples et des valeurs factices de tests | PROUVÉ — recherche par motifs ; une recherche par motifs ne voit pas un secret d'une forme inconnue |
+| **Nouveau : journaux publics du workflow quotidien** | La version de `main` du workflow « Daily digest » écrit le nom de chaque restaurant traité dans son journal ; 55 exécutions, du 23 septembre au 16 novembre | CORRIGÉ dans la branche ; journaux existants : **BLOQUÉ** — décision |
+
+Limite : l'agent n'a pas pu lire ces journaux ; leur contenu est déduit du fichier de `main`.
+
+Demandé au titulaire : ouvrir une exécution de « Daily digest » dans l'onglet « Actions », constater ce
+qu'elle affiche, puis décider de désactiver le workflow jusqu'à la fusion et de supprimer les journaux
+passés. La décision « dépôt privé ou purge » couvre aussi ces journaux si le dépôt devient privé.

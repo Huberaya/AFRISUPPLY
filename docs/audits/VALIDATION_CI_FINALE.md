@@ -62,3 +62,57 @@ L'API publique de GitHub indique `protected: false` pour `main` : **aucune règl
 active**. Rien n'empêche techniquement un envoi direct ou une fusion sans contrôles verts. L'agent ne
 peut ni lire le détail ni le régler (403). Proposition au titulaire : exiger une demande de fusion et les
 quatre tâches vertes avant toute fusion sur `main`.
+
+## 6. Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnements | GitHub Actions (résultats des tâches) ; poste de l'agent, Node 22, npm 10.9.8, base embarquée |
+
+**Exécution du dernier commit publié.** `be6d05b` : exécution `43417700631`, quatre tâches réussies
+(PROUVÉ, GitHub). Les journaux de cette exécution ne sont pas téléchargeables depuis le poste de
+l'agent : le décompte des tests n'y a pas été relu.
+
+**Contrôles rejoués le 17 novembre sur l'arbre mis à jour** (PROUVÉ, tests automatisés)
+
+| Commande | Résultat |
+|---|---|
+| `npm ci` avec npm 10.9.8 sur le nouveau fichier de verrouillage | réussi, aucun paquet invalide |
+| `npm test` | 792 tests réussis, 0 échec (base 5, API 698, site 89) |
+| `AFS_DB_MINIMAL_ROLE=true npm test -w apps/api` | 698 réussis sur 698 |
+| `npm run lint`, `npm run typecheck` | 0 erreur |
+| `npm run build`, `check:bundle`, `check:bundle:run` | réussis |
+| `npm run check:depot`, `npm run check:base-neuve` | réussis |
+| `npm run check:schema` (nouveau) | les 29 migrations couvrent tout le schéma du code |
+| Parcours du navigateur, sous le rôle minimal | 18 opérations sur 18 ; 140 vérifications sur 140 |
+| `npm audit --omit=dev` | 0 vulnérabilité |
+
+**Essais contraires** (chaque correction retirée, un test doit échouer) : limite de temps de la tâche
+d'alertes ; sélection des seuls restaurants à servir ; motif d'échec d'envoi transmis à la personne ;
+colonne ajoutée au schéma sans migration ; instantané de la migration n° 28 retiré. Cinq sur cinq détectés.
+
+**Vulnérabilités d'outils de développement : 16 → 4** (CORRIGÉ en partie). Ce document proposait le
+13 novembre de les traiter à part ; elles l'ont été ici, par des mises à jour mineures, chacune suivie de la suite complète.
+
+| Paquet | Avant | Après | Reste |
+|---|---|---|---|
+| `vite` | 8.3.0 | 8.3.8 | 0 |
+| `vitest`, `@vitest/mocker` | 4.1.11 | 4.1.12 | 0 |
+| `typescript-eslint` et ses paquets (dont `minimatch`) | 8.70.0 | 8.73.0 | 0 |
+| `source-map-js` | 1.2.1 | 1.2.2 | 0 |
+| `postcss-selector-parser` | 6.1.4 | 6.1.6 | 0 |
+| `drizzle-kit`, `@esbuild-kit/core-utils`, `@esbuild-kit/esm-loader`, `esbuild` 0.18 | — | inchangés | **4 modérées** |
+
+Les quatre restantes tiennent à l'outil de migration : la seule correction proposée par le registre
+est un changement de version majeure de `drizzle-kit`. Elles concernent le serveur de développement
+d'esbuild, que rien ne lance ici : l'outil ne sert qu'à générer une migration et au contrôle
+`check:schema`. Statut : qualifiées, non corrigées — à faire à part.
+
+Limite d'outillage : npm 10.9.8 échoue sur une erreur interne dès qu'il modifie une dépendance d'un
+espace de travail. Le fichier de verrouillage a été produit avec npm 11.21.2 (même format, version 3),
+puis vérifié par une installation propre avec npm 10.9.8.
+
+**Nouveau contrôle en CI** : « Schéma et migrations concordent » (tâche « Qualité »).
+
+**Protection de `main`** : toujours absente (`protected: false`, relu le 17 novembre). EN ATTENTE EXTERNE.
