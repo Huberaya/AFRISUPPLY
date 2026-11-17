@@ -53,3 +53,30 @@ l'adresse du support. La configuration signale en production l'usage de l'adress
 
 Tant que ce n'est pas fait en production : aucun client ne reçoit de confirmation, d'alerte ni de mail
 du matin, et **l'exploitant ne peut pas confirmer son adresse** (`VALIDATION_PRE_FUSION.md`).
+
+## Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnements | Production (`/api/status`, page publique) ; boîte du titulaire (expéditeur, objet et date des messages de l'application) ; base embarquée et faux prestataire pour les tests. **Le tableau de bord du prestataire n'a pas été lu** |
+
+Les statuts sont définis dans `docs/VALIDATION_ETAT_INITIAL_FUSION.md`.
+
+| Point | Constat | Statut |
+|---|---|---|
+| Expéditeur de la production | `onboarding@resend.dev`, l'expéditeur d'essai du prestataire | PROUVÉ — production |
+| Ce que cet expéditeur permet | Le mail du matin arrive chaque jour dans la boîte du titulaire du compte du prestataire (29 jours sur 29 du 20 octobre au 17 novembre). Le prestataire remet donc bien — à cette seule adresse | PROUVÉ — boîte du titulaire |
+| Tâche d'alertes en production | « error » le 16 novembre, après 22,3 secondes | PROUVÉ — production |
+| Message donné à la personne quand l'envoi échoue, à l'inscription et au renvoi du lien | Qualifié : réessayer plus tard, vérifier l'adresse, ou envoi de la plateforme non opérationnel. Avant : toujours « non configuré » | CORRIGÉ — 2 tests |
+| Ce qui entre dans la réponse et dans le journal d'audit | Un motif seulement ; ni le texte du prestataire, ni une adresse | CORRIGÉ — mêmes tests |
+| Tâche d'alertes : durée | Ne visite que les restaurants à servir ; s'arrête à un temps imparti, dit combien il en reste, reprend au passage suivant sans doublon | CORRIGÉ — 2 tests |
+| Lien de confirmation | Jeton de 32 octets aléatoires, conservé sous forme d'empreinte, valable 48 heures, à usage unique ; un jeton falsifié ou tronqué est refusé et ne consomme pas le vrai ; cinq renvois par quart d'heure, puis refus | PROUVÉ — tests |
+| Site | Le bandeau ne promet aucun envoi ; le motif s'affiche au clic sur « Renvoyer le lien » | PROUVÉ — test du site |
+| Envoi réel à un tiers | Jamais constaté | EN ATTENTE EXTERNE |
+
+Limites : les essais d'envoi utilisent un faux prestataire ; le texte des sept erreurs explicites relevées
+le 13 novembre reste à lire dans le tableau de bord du prestataire.
+
+Demandé au titulaire : vérifier un domaine d'envoi, poser `MAIL_FROM` sur ce domaine, puis dérouler
+`RESEND_VALIDATION_PREVIEW.md`. Sans attendre : `docs/PLAN_REPRISE_PRODUCTION.md`, § 3, P2.

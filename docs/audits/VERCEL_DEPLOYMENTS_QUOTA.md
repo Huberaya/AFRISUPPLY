@@ -38,3 +38,15 @@ prévisualisation. C'était faux : `2a17015` a été déployé dix-neuf minutes 
 | Ne pas fusionner dans l'heure qui suit plusieurs envois | Recommandation pour le jour de la fusion : un refus de cadence empêcherait la mise en ligne |
 | Couper les déploiements automatiques du projet redondant | **Proposition, non réalisée** : dans Vercel, projet `afrisupply` → Settings → Git → déconnecter le dépôt, ou « Ignored Build Step ». Divise la consommation par deux. À ne faire qu'après avoir vérifié qu'aucun domaine utile n'est servi par ce projet |
 | Reprise après un refus | Relancer le déploiement depuis Vercel (« Redeploy »), ou pousser un nouveau commit après quelques minutes |
+
+## Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnements | API GitHub ; boîte du titulaire (notifications de Vercel) ; documentation publique de Vercel. Tableau de bord non lu |
+
+La nature de la limite est identifiée : **stockage des fonctions de l'offre gratuite utilisé à 100 %
+(10 Go)**, pour toute l'équipe, selon la notification de Vercel du 5 novembre — PROUVÉ. Son niveau
+actuel et les réglages à faire (durée de conservation des déploiements, second projet) sont
+EN ATTENTE EXTERNE. Le détail et les gestes demandés sont dans `docs/VALIDATION_VERCEL_PREVIEW.md`, § 2 et § 6.

@@ -30,3 +30,16 @@ le motif (`reasons`), sans adresse ni texte du prestataire.
 
 Interdits : utiliser la clé d'envoi de production sur la prévisualisation ; écrire à une adresse qui
 n'est pas une boîte de test autorisée ; modifier une variable de portée Production.
+
+## Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnement | Aucun : rien de ce document n'a été exécuté |
+| Statut | **EN ATTENTE EXTERNE**, inchangé : ni domaine d'envoi vérifié, ni prévisualisation sans données réelles |
+
+Ce qui a changé côté code est décrit dans `RESEND_DIAGNOSTIC.md` (mise à jour du même jour). Une
+précision pour le déroulé : sur une prévisualisation, le parcours automatique crée des comptes en
+`@parcours.test`, domaine qui ne reçoit rien. L'essai d'envoi réel se fait donc à part, à la main, vers une
+boîte que l'on peut lire — et les deux opérations du parcours qui dépendent d'un e-mail aussi.

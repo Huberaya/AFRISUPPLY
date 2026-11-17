@@ -134,11 +134,13 @@ describe('2. sauvegarde : les événements de fréquentation sont exportés et r
 });
 
 describe('3. cloisonnement Preview : la même base sous une autre orthographe reste refusée', () => {
-  const PROD = 'postgresql://neondb_owner:mot-de-passe@ep-prod-123.eu-central-1.aws.neon.tech/afrisupply?sslmode=require';
+  // Adresses et mots de passe FICTIFS (aucune valeur réelle ne figure dans ce dépôt) : `motdepasse` est
+  // la forme d'exemple admise par le contrôle du dépôt public, `autremdp` une autre orthographe.
+  const PROD = 'postgresql://proprietaire:motdepasse@ep-prod-123.eu-central-1.aws.neon.tech/afrisupply?sslmode=require';
   it('sameDatabase compare hôte et base, pas la chaîne complète', () => {
     expect(sameDatabase(PROD, PROD)).toBe(true);
-    expect(sameDatabase(PROD, 'postgresql://autre:autre-mot-de-passe@ep-prod-123.eu-central-1.aws.neon.tech/afrisupply')).toBe(true);
-    expect(sameDatabase(PROD, 'postgresql://neondb_owner:mot-de-passe@ep-prod-123.eu-central-1.aws.neon.tech/afrisupply/')).toBe(true);
+    expect(sameDatabase(PROD, 'postgresql://autre:autremdp@ep-prod-123.eu-central-1.aws.neon.tech/afrisupply')).toBe(true);
+    expect(sameDatabase(PROD, 'postgresql://proprietaire:motdepasse@ep-prod-123.eu-central-1.aws.neon.tech/afrisupply/')).toBe(true);
     expect(sameDatabase(PROD, 'postgresql://u:p@ep-preview-456.eu-central-1.aws.neon.tech/afrisupply?sslmode=require')).toBe(false);
     expect(sameDatabase(PROD, 'postgresql://u:p@ep-prod-123.eu-central-1.aws.neon.tech/autre_base')).toBe(false);
     expect(sameDatabase(PROD, undefined)).toBe(false);
@@ -146,10 +148,10 @@ describe('3. cloisonnement Preview : la même base sous une autre orthographe re
   });
 
   it('getDatabaseUrl refuse la production déguisée en prévisualisation', () => {
-    const deguisee = 'postgresql://afrisupply_app:autre-mot-de-passe@ep-prod-123.eu-central-1.aws.neon.tech/afrisupply';
+    const deguisee = 'postgresql://afrisupply_app:autremdp@ep-prod-123.eu-central-1.aws.neon.tech/afrisupply';
     expect(getDatabaseUrl({ VERCEL_ENV: 'preview', DATABASE_URL: PROD, PREVIEW_DATABASE_URL: deguisee })).toBeUndefined();
-    expect(getDatabaseUrl({ VERCEL_ENV: 'preview', DATABASE_URL: PROD, PREVIEW_DATABASE_URL: 'postgresql://u:p@ep-preview-456.eu-central-1.aws.neon.tech/afrisupply' }))
-      .toBe('postgresql://u:p@ep-preview-456.eu-central-1.aws.neon.tech/afrisupply');
+    const preview = 'postgresql://u:p@ep-preview-456.eu-central-1.aws.neon.tech/afrisupply';
+    expect(getDatabaseUrl({ VERCEL_ENV: 'preview', DATABASE_URL: PROD, PREVIEW_DATABASE_URL: preview })).toBe(preview);
   });
 });
 

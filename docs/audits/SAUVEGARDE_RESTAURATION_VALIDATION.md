@@ -68,3 +68,37 @@ lisent chez le fournisseur retenu au moment du choix. **Aucune ressource n'a ét
 | Procédure documentée | Rempli |
 | Alertes en cas d'échec | Rempli (test automatisé) |
 | Sauvegardes opérationnelles en production | **Non rempli — EN ATTENTE EXTERNE** : stockage à décider et à créer |
+
+## Mise à jour du 17 novembre 2026
+
+| | |
+|---|---|
+| SHA contrôlé | arbre de `be6d05b86b99b34ddc3ab7592b7e3d6a0f80d3f6` complété par le commit qui porte cette mise à jour (à lire sur la demande de fusion n° 1) |
+| Environnements | Production (`/api/status`, page publique) ; base embarquée et faux stockage pour les tests |
+
+Les statuts sont définis dans `docs/VALIDATION_ETAT_INITIAL_FUSION.md`.
+
+| Point | Constat | Statut |
+|---|---|---|
+| Sauvegardes de production | 0 fichier conservé ; tâche « périmée » ; dernière réussie le 5 octobre | PROUVÉ — production |
+| Code de sauvegarde et de restauration | Suite rejouée, y compris sous le rôle minimal | PROUVÉ — tests, stockage simulé |
+| Copie externe réelle | Aucune | EN ATTENTE EXTERNE — décision du titulaire |
+
+**Pour décider du stockage.** Le code accepte tout stockage compatible S3 (variables `BACKUP_S3_*`). Au
+volume attendu — une base d'une centaine de comptes, quatorze archives conservées, donc très en dessous
+d'un gigaoctet : estimation, la production n'ayant aucune archive à mesurer — le prix ne départage pas
+les offres. Ce qui compte : la localisation des données et le chiffrement au repos, puisque l'archive
+n'est pas chiffrée par l'application.
+
+| Offre | Ordre de grandeur public, par gigaoctet et par mois | Localisation |
+|---|---|---|
+| Cloudflare R2 | 0,015 $ ; 10 Go offerts ; sortie gratuite | prestataire américain ; localisation européenne à vérifier |
+| Backblaze B2 | environ 0,007 $ ; 10 Go offerts | prestataire américain ; localisation européenne à vérifier |
+| Scaleway Object Storage | environ 0,01 à 0,016 € | France |
+| OVHcloud Object Storage | environ 0,007 à 0,014 € | France |
+
+Tarifs relevés en novembre 2026 sur la page de Cloudflare (`https://developers.cloudflare.com/r2/pricing/`)
+et dans des comparatifs publics (`https://tadata.fr/posts/object-storage-pricing`,
+`https://technomind.fr/stockage-s3-fonctionnement-object-storage/`,
+`https://shattered.io/backblaze-pricing-b2-vs-wasabi-r2-s3-gcs-2026/`) : à vérifier sur le site du
+prestataire avant de choisir. Les colonnes « localisation » sont à confirmer à la création du compte.

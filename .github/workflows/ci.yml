@@ -47,6 +47,9 @@ jobs:
       # Le script SQL d'une base neuve (prévisualisation sans données) correspond-il aux migrations ?
       - name: Script de base neuve à jour
         run: npm run check:base-neuve
+      # Rien dans le schéma du code qui ne soit déjà dans une migration (la production n'est modifiée que par elles).
+      - name: Schéma et migrations concordent
+        run: npm run check:schema
       - name: Lint
         run: npm run lint
       - name: Types (un workspace à la fois)

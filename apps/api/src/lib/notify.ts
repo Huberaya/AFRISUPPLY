@@ -27,16 +27,22 @@ const APP_URL = () => (process.env.APP_URL ?? 'http://localhost:3000').replace(/
 
 export interface PendingAlert { id: string; kind: string; severity: string; title: string; message: string; actionUrl: string | null }
 
+/**
+ * Ce qui fait d'une alerte une alerte « à envoyer tout de suite » — une seule définition, utilisée pour
+ * lire les alertes d'un restaurant ET pour savoir quels restaurants ont quelque chose à recevoir.
+ * Chantier 9 : un rappel doux (severity « blue ») ne part pas par e-mail — il serait quotidien et
+ * deviendrait du bruit. Les alertes graves partent immédiatement.
+ */
+const aEnvoyer = (cutoff: Date) => and(isNull(alerts.notifiedAt), eq(alerts.isRead, false), gte(alerts.createdAt, cutoff),
+  or(and(inArray(alerts.kind, [...IMMEDIATE_KINDS]), inArray(alerts.severity, [...IMMEDIATE_SEVERITIES])), sql`${alerts.payload} ? 'surchargeEur'`));
+
 /** Alertes urgentes pas encore notifiées par e-mail (une charge utile de facturation compte comme urgente). */
 export async function pendingImmediateAlerts(rid: string, limit = 50): Promise<PendingAlert[]> {
   const db = await getDb();
   const cutoff = new Date(Date.now() - IMMEDIATE_WINDOW_HOURS() * 3_600_000);
   const rows = await db.select({ id: alerts.id, kind: alerts.kind, severity: alerts.severity, title: alerts.title, message: alerts.message, actionUrl: alerts.actionUrl, createdAt: alerts.createdAt })
     .from(alerts)
-    .where(and(eq(alerts.restaurantId, rid), isNull(alerts.notifiedAt), eq(alerts.isRead, false), gte(alerts.createdAt, cutoff),
-      // Chantier 9 : un rappel doux (severity « blue ») ne part pas par e-mail — il serait quotidien
-      // et deviendrait du bruit. Les alertes graves partent immédiatement, comme avant.
-      or(and(inArray(alerts.kind, [...IMMEDIATE_KINDS]), inArray(alerts.severity, [...IMMEDIATE_SEVERITIES])), sql`${alerts.payload} ? 'surchargeEur'`)))
+    .where(and(eq(alerts.restaurantId, rid), aEnvoyer(cutoff)))
     // Chantier 9 (audit 2) : l'ordre est stable (le plus ancien d'abord) et la limite est large.
     // Avec une limite de 8 et un tri arbitraire, une rupture réelle pouvait ne JAMAIS figurer dans
     // l'e-mail alors que les autres partaient (cas reproduit : 9 produits à zéro d'un compte neuf).
@@ -174,7 +180,7 @@ export async function notifyCriticalAlerts(rid: string, opts: { now?: Date; reco
  * `mail_test_sender_restricted` n'arrête le balayage que si RIEN n'a été remis au restaurant essayé :
  * avec l'expéditeur d'essai du prestataire, seul le titulaire de son compte est servi — s'il l'a été,
  * l'envoi continue ; sinon les restaurants suivants seront refusés pour la même raison, et il ne sert
- * à rien de solliciter le prestataire deux cents fois par passage (limite de débit, journal illisible).
+ * à rien de solliciter le prestataire pour chacun (limite de débit, journal illisible).
  */
 export const sweepBlocker = (res: NotifyResult): MailErrorCode | undefined => {
   if (res.status !== 'error' || !res.reason) return undefined;
@@ -184,16 +190,37 @@ export const sweepBlocker = (res: NotifyResult): MailErrorCode | undefined => {
   return undefined;
 };
 
-/** Balayage de tous les restaurants : utilisé par le cron horaire (et au plus toutes les 15 min en opportuniste). */
-export async function notifyAllRestaurants(opts: { now?: Date; limit?: number } = {}) {
+/**
+ * Temps de travail accordé à un balayage. Sur la plateforme serverless une fonction est coupée à 60 s :
+ * le balayage s'arrête de lui-même avant, dit combien de restaurants restent, et le passage suivant les
+ * sert (leurs alertes ne sont pas marquées : rien n'est perdu, rien n'est envoyé deux fois).
+ */
+export const notifyBudgetMs = (env: NodeJS.ProcessEnv = process.env) => {
+  const v = Number(env.NOTIFY_BUDGET_MS);
+  return Number.isFinite(v) && v > 0 ? v : env.VERCEL ? 30_000 : 5 * 60_000;
+};
+
+/** Balayage des restaurants qui ont une alerte à recevoir : utilisé par le cron (et au plus toutes les 15 min en opportuniste). */
+export async function notifyAllRestaurants(opts: { now?: Date; limit?: number; budgetMs?: number } = {}) {
   const startedAt = new Date(); const db = await getDb();
-  const all = await db.select({ id: restaurants.id }).from(restaurants).orderBy(asc(restaurants.createdAt)).limit(opts.limit ?? 200);
+  const now = opts.now ?? new Date();
+  const cutoff = new Date(now.getTime() - IMMEDIATE_WINDOW_HOURS() * 3_600_000);
+  const budget = opts.budgetMs ?? notifyBudgetMs();
+  // Levée des blocages (phase 5). Avant : chaque restaurant de la plateforme coûtait deux requêtes, qu'il
+  // ait une alerte ou non — une vingtaine de secondes pour 89 restaurants à 96 ms la requête. Désormais :
+  // un ménage global, puis seuls les restaurants qui ont quelque chose à recevoir, le plus ancien d'abord.
+  await db.update(alerts).set({ notifiedAt: now }).where(and(isNull(alerts.notifiedAt), lt(alerts.createdAt, cutoff)));
+  const [{ n: total }] = await db.select({ n: sql<number>`count(*)::int` }).from(restaurants);
+  const all = await db.select({ id: alerts.restaurantId }).from(alerts).where(aEnvoyer(cutoff))
+    .groupBy(alerts.restaurantId).orderBy(sql`min(${alerts.createdAt})`).limit(opts.limit ?? 500);
   const details: NotifyResult[] = [];
+  let remaining = 0;
   // Dès qu'un envoi échoue pour une raison qui vaut pour tout le monde (configuration du service,
   // limite de débit), le balayage cesse de solliciter le prestataire : il note le motif et continue
   // sans envoyer. Les alertes ne sont pas marquées : elles repartiront au passage suivant, une seule fois.
   let blocked: NotifyReason | undefined;
-  for (const r of all) {
+  for (const [i, r] of all.entries()) {
+    if (Date.now() - startedAt.getTime() >= budget) { remaining = all.length - i; break; }
     const res = await notifyCriticalAlerts(r.id, { now: opts.now, record: false, dontSend: blocked });
     if (res.alerts) details.push(res);
     if (!blocked) blocked = sweepBlocker(res);
@@ -207,10 +234,14 @@ export async function notifyAllRestaurants(opts: { now?: Date; limit?: number } 
   for (const d of details) if (d.reason && d.status !== 'ok') reasons[d.reason] = (reasons[d.reason] ?? 0) + 1;
   const cause = blocked ?? (failedList.find((d) => d.reason)?.reason as NotifyReason | undefined);
   const explain = cause && cause in MAIL_ERROR_MESSAGES ? ` — ${MAIL_ERROR_MESSAGES[cause as MailErrorCode]}` : '';
+  // « partial » : une partie est servie (des e-mails sont partis, ou le temps a manqué pour finir) ; le
+  // passage suivant reprend le reste. « error » : rien n'a pu partir.
+  const status = failed === 0 && remaining === 0 ? 'ok' : sent > 0 || (failed === 0 && remaining > 0) ? 'partial' : 'error';
+  const message = [failed ? `${failed} restaurant(s) sans envoi${cause ? ` [${cause}]` : ''}${explain}` : '', remaining ? `${remaining} restaurant(s) reporté(s) au passage suivant (temps imparti atteint)` : ''].filter(Boolean).join(' ; ');
   await recordJobRun({
-    job: 'alerts-notify', startedAt, status: failed === 0 ? 'ok' : sent > 0 ? 'partial' : 'error',
-    summary: { restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, ...(blocked ? { stoppedSendingFor: blocked } : {}) },
-    error: failed ? `${failed} restaurant(s) sans envoi${cause ? ` [${cause}]` : ''}${explain}` : null,
+    job: 'alerts-notify', startedAt, status,
+    summary: { restaurants: Number(total), withAlerts: details.length, emails: sent, failed, skipped, remaining, reasons, ...(blocked ? { stoppedSendingFor: blocked } : {}) },
+    error: message || null,
   });
-  return { ranAt: (opts.now ?? new Date()).toISOString(), restaurants: all.length, withAlerts: details.length, emails: sent, failed, skipped, reasons, details };
+  return { ranAt: now.toISOString(), restaurants: Number(total), withAlerts: details.length, emails: sent, failed, skipped, remaining, reasons, details };
 }
