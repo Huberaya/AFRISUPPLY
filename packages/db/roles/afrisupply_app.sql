@@ -92,3 +92,55 @@ BEGIN
   END IF;
 END
 $$;
+
+-- =============================================================
+-- Journaux immuables — audit des privilèges (reprise P0-M, 17 novembre)
+--
+-- Constat : le droit d'écrire des lignes était accordé en bloc sur les 48 tables. Le rôle applicatif
+-- pouvait donc MODIFIER et SUPPRIMER une trace d'audit, un historique de prix, un mouvement de stock :
+-- exactement ce qu'un journal est censé rendre impossible. Un jeton volé, ou une requête maladroite,
+-- suffisait à effacer la piste.
+--
+-- Ce que le code fait réellement de ces tables (relevé sur toutes les sources hors tests) :
+--   audit_log        1 insertion (lib/ops.ts), 4 lectures — aucune modification, aucune suppression
+--   price_history    9 insertions simples — aucune modification, aucune suppression
+--   stock_movements  7 insertions simples — aucune modification, aucune suppression
+--   order_events     1 insertion simple  — aucune modification, aucune suppression
+--   usage_events     1 insertion simple  — aucune modification, aucune suppression
+--   forecasts        1 insertion simple  — aucune modification, aucune suppression
+-- Elles ne reçoivent donc que SELECT et INSERT : lire et ajouter, jamais réécrire ni effacer.
+--
+-- Deux tables à part : `sales` et `vendor_credit_terms` sont écrites par un UPSERT
+-- (« INSERT … ON CONFLICT DO UPDATE », qui exige le droit UPDATE) mais ne sont jamais supprimées par
+-- l'application. On leur retire DELETE et on leur laisse UPDATE.
+--
+-- Piège évité : retirer UPDATE à une table écrite par UPSERT la casse. Le relevé ci-dessus distingue
+-- les insertions simples des UPSERT ; `sales` en est un (routes/intelligence.ts, routes/quick.ts).
+--
+-- Le bloc est rejouable et sans effet sur une base où ces tables n'existent pas encore.
+-- =============================================================
+DO $$
+DECLARE
+  t text;
+BEGIN
+  -- Journaux : lire et ajouter, rien d'autre.
+  FOREACH t IN ARRAY ARRAY['audit_log', 'price_history', 'stock_movements', 'order_events', 'usage_events', 'forecasts']
+  LOOP
+    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = t) THEN
+      EXECUTE format('REVOKE UPDATE, DELETE ON TABLE public.%I FROM afrisupply_app', t);
+      EXECUTE format('REVOKE UPDATE, DELETE ON TABLE public.%I FROM PUBLIC', t);
+    END IF;
+  END LOOP;
+
+  -- UPSERT : UPDATE reste nécessaire, DELETE ne l'est pas.
+  FOREACH t IN ARRAY ARRAY['sales', 'vendor_credit_terms']
+  LOOP
+    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = t) THEN
+      EXECUTE format('REVOKE DELETE ON TABLE public.%I FROM afrisupply_app', t);
+      EXECUTE format('REVOKE DELETE ON TABLE public.%I FROM PUBLIC', t);
+    END IF;
+  END LOOP;
+END
+$$;
