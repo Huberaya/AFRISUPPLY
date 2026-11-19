@@ -53,6 +53,16 @@ limitée à ce seau (écriture + lecture + liste + suppression : la rétention s
    instance neuve, au disque vide, ne peut donc pas effacer une archive (cas testé).
 4. **Aucun succès simulé.** Refus d'identifiants, seau inexistant, région incorrecte, service
    injoignable : chaque cas produit un **échec nommé** (et une alerte administrateur), jamais un `ok`.
+5. **Le fichier local est vérifié dès son écriture.** Le nom est *réservé* par une création exclusive
+   (deux sauvegardes lancées ensemble ne peuvent plus retenir le même nom et s'écraser), le contenu
+   est publié par un renommage (sous le nom définitif il n'y a jamais de fichier à moitié écrit), puis
+   le fichier est **relu, décompressé et son empreinte contrôlée** : s'il ne se relit pas à
+   l'identique, il est supprimé et l'écriture est annoncée en échec. La liste des sauvegardes compare
+   en outre l'état réel du disque à la fiche (`integre`, `probleme`) : un fichier tronqué ou disparu
+   est dit, jamais présenté comme sain.
+6. **Tout ce qui appartient au restaurant est exporté**, y compris les conditions de crédit accordées
+   par les grossistes (`vendor_credit_terms`) : cette table manquait et une restauration perdait
+   silencieusement le délai de paiement, le plafond et l'éventuel blocage.
 
 ## Reprise après sinistre — la marche à suivre
 
@@ -67,6 +77,21 @@ limitée à ce seau (écriture + lecture + liste + suppression : la rétention s
 5. **Remettre les mots de passe** : le fichier `admin` contient les empreintes ; les comptes
    fonctionnent donc à l'identique. Un fichier `owner` (téléchargé par le restaurant) n'en contient
    pas : chaque membre doit alors choisir un nouveau mot de passe.
+6. **Numérotation** : les références de commande (`AFS-…`), de facture (`AFR-…`) et de litige (`LIT-…`)
+   viennent de **séquences PostgreSQL autonomes** (`order_ref_seq`, `subscription_invoice_seq`,
+   `claim_ref_seq`). Elles ne font partie d'aucune table et ne sont donc dans **aucun** fichier de
+   sauvegarde : dans une base restaurée, les lignes reviennent avec leurs numéros et le compteur
+   repart de 1. L'application réaligne la séquence sur le plus grand numéro réellement présent avant
+   d'en tirer un nouveau (`lib/reference.ts`, `syncSequenceToMax`), et le rôle applicatif reçoit le
+   droit `UPDATE` sur les séquences précisément pour ce `setval`. À contrôler après une restauration :
+   créer une commande de test et vérifier que sa référence est **au-dessus** de toutes celles
+   restaurées. C'est verrouillé par un test (`ops-backup.test.ts`, essai 10).
+7. **Comparer avant de rendre la main** : lignes par table (le rapport de restauration liste toute
+   table dont le compte diffère du fichier), comptes de l'équipe, et données critiques (stock,
+   commandes, avoirs). Ce qui peut manquer légitimement : les seules données de **tiers**
+   (commissions, avis, prix négociés, conditions de crédit, achats groupés) dont la référence
+   n'existe pas dans la base cible — elles sont listées nommément dans `skipped`, jamais perdues en
+   silence.
 
 ## Ce qu'il reste à faire côté humain
 

@@ -3718,10 +3718,31 @@ async function writeBackupFile(backup, dir = backupDir()) {
   await fs3.mkdir(dir, { recursive: true });
   const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").slice(0, 15);
   const base = `afs-${String(backup.restaurant.id).slice(0, 8)}-${stamp}-${backup.mode}`;
-  let name = `${base}.json.gz`;
-  for (let i = 2; await exists(path3.join(dir, name)); i++) name = `${base}-${i}.json.gz`;
   const body3 = gzipSync(Buffer.from(JSON.stringify(backup)));
-  await fs3.writeFile(path3.join(dir, name), body3);
+  let name = `${base}.json.gz`;
+  for (let i = 2; ; i++) {
+    try {
+      await fs3.writeFile(path3.join(dir, name), "", { flag: "wx" });
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      name = `${base}-${i}.json.gz`;
+    }
+  }
+  const provisoire = path3.join(dir, `.${name}.part-${process.pid}-${Date.now().toString(36)}`);
+  await fs3.writeFile(provisoire, body3);
+  await fs3.rename(provisoire, path3.join(dir, name));
+  const relu = await fs3.readFile(path3.join(dir, name));
+  let conforme = relu.length === body3.length;
+  try {
+    conforme = conforme && verifyBackup(JSON.parse(gunzipSync(relu).toString("utf8"))).checksumOk === true;
+  } catch {
+    conforme = false;
+  }
+  if (!conforme) {
+    await fs3.rm(path3.join(dir, name), { force: true });
+    throw new Error(`Sauvegarde refus\xE9e : le fichier \xE9crit \xAB ${name} \xBB ne se relit pas \xE0 l'identique (${relu.length} octets contre ${body3.length}) : il a \xE9t\xE9 supprim\xE9.`);
+  }
   const meta = {
     name,
     sizeBytes: body3.length,
@@ -3732,7 +3753,9 @@ async function writeBackupFile(backup, dir = backupDir()) {
     tables: backup.totals.tables,
     checksum: backup.checksum,
     version: backup.version,
-    mode: backup.mode
+    mode: backup.mode,
+    integre: true,
+    probleme: null
   };
   await fs3.writeFile(path3.join(dir, `${name}.meta.json`), JSON.stringify(meta, null, 2));
   return meta;
@@ -3743,13 +3766,24 @@ async function listBackups(dir = backupDir()) {
     const out = [];
     for (const f of files) {
       try {
-        out.push(JSON.parse(await fs3.readFile(path3.join(dir, f), "utf8")));
+        out.push(await etatReel(JSON.parse(await fs3.readFile(path3.join(dir, f), "utf8")), dir));
       } catch {
       }
     }
     return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch {
     return [];
+  }
+}
+async function etatReel(fiche, dir) {
+  try {
+    const reel = await fs3.stat(path3.join(dir, fiche.name));
+    if (typeof fiche.sizeBytes === "number" && reel.size !== fiche.sizeBytes) {
+      return { ...fiche, integre: false, probleme: `Fichier incomplet : ${reel.size} octets sur le disque contre ${fiche.sizeBytes} annonc\xE9s (\xE9criture interrompue ?).` };
+    }
+    return { ...fiche, integre: true, probleme: null };
+  } catch {
+    return { ...fiche, integre: false, probleme: "Fichier absent du disque : la fiche est rest\xE9e, la sauvegarde non." };
   }
 }
 async function readBackupFile(name, dir = backupDir()) {
@@ -3807,7 +3841,7 @@ async function backupStorageStats(dir = backupDir()) {
     note: backupDiskEphemere() ? "Les sauvegardes locales sont \xE9crites dans un dossier temporaire, effac\xE9 par la plateforme : seule la copie hors site est durable. Configurez BACKUP_S3_* et v\xE9rifiez l\u2019essai de restauration." : null
   };
 }
-var BACKUP_FORMAT, BACKUP_VERSION, BACKUP_TABLES, rid, checksumOf, CHUNK, exists, backupDir, backupDiskEphemere, retentionDays;
+var BACKUP_FORMAT, BACKUP_VERSION, BACKUP_TABLES, rid, checksumOf, CHUNK, backupDir, backupDiskEphemere, retentionDays;
 var init_backup = __esm({
   "apps/api/src/lib/backup.ts"() {
     "use strict";
@@ -3857,19 +3891,12 @@ var init_backup = __esm({
       { name: "commissions", table: commissions, scope: "external", column: "orderId", parent: "orders", note: "commissions AFRISUPPLY li\xE9es aux commandes" },
       { name: "vendor_reviews", table: vendorReviews, scope: "external", column: "restaurantId", note: "avis d\xE9pos\xE9s sur les grossistes" },
       { name: "vendor_customer_prices", table: vendorCustomerPrices, scope: "external", column: "restaurantId", note: "prix n\xE9goci\xE9s avec les grossistes" },
+      { name: "vendor_credit_terms", table: vendorCreditTerms, scope: "external", column: "restaurantId", note: "conditions de cr\xE9dit accord\xE9es par les grossistes (d\xE9lai, plafond, blocage)" },
       { name: "group_buy_participations", table: groupBuyParticipations, scope: "external", column: "restaurantId", note: "participations aux achats group\xE9s" }
     ];
     rid = (t) => t.table[t.column ?? "id"];
     checksumOf = (payload) => `sha256:${createHash3("sha256").update(stable(payload)).digest("hex")}`;
     CHUNK = 200;
-    exists = async (p) => {
-      try {
-        await fs3.access(p);
-        return true;
-      } catch {
-        return false;
-      }
-    };
     backupDir = () => process.env.BACKUP_DIR ?? (process.env.VERCEL ? path3.join(tmpdir(), "afrisupply-backups") : path3.join(process.cwd(), ".backups"));
     backupDiskEphemere = () => !process.env.BACKUP_DIR && Boolean(process.env.VERCEL);
     retentionDays = () => Math.max(1, Number(process.env.BACKUP_KEEP ?? 14));
