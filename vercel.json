@@ -4,6 +4,11 @@
   "buildCommand": "node scripts/deploy-migrate.mjs && npm run build -w apps/web && node api/build.mjs",
   "outputDirectory": "apps/web/dist",
   "framework": null,
+  "git": {
+    "deploymentEnabled": {
+      "main": false
+    }
+  },
   "regions": [
     "fra1"
   ],
