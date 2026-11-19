@@ -3857,7 +3857,6 @@ var init_backup = __esm({
       { name: "commissions", table: commissions, scope: "external", column: "orderId", parent: "orders", note: "commissions AFRISUPPLY li\xE9es aux commandes" },
       { name: "vendor_reviews", table: vendorReviews, scope: "external", column: "restaurantId", note: "avis d\xE9pos\xE9s sur les grossistes" },
       { name: "vendor_customer_prices", table: vendorCustomerPrices, scope: "external", column: "restaurantId", note: "prix n\xE9goci\xE9s avec les grossistes" },
-      { name: "vendor_credit_terms", table: vendorCreditTerms, scope: "external", column: "restaurantId", note: "conditions de cr\xE9dit accord\xE9es par les grossistes (d\xE9lai, plafond, blocage)" },
       { name: "group_buy_participations", table: groupBuyParticipations, scope: "external", column: "restaurantId", note: "participations aux achats group\xE9s" }
     ];
     rid = (t) => t.table[t.column ?? "id"];
