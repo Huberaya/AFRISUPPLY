@@ -1,0 +1,107 @@
+RÉPONSES HTTP (JSON mal formé, panier, mot de passe oublié, en-têtes) — même sonde, avant et après correction
+Sonde : celle de l'audit P0.1 (sonde_http, mode développement), inchangée.
+
+════ AVANT (commit 15c8b81) ════
+mode : developpement (NODE_ENV=development)
+
+## Cookie de session et jeton (connexion)
+statut, jeton présent dans le corps                                    [200,true]
+attributs du cookie                                                    afs_token=<jeton>; Max-Age=604800; Path=/; HttpOnly; SameSite=Lax
+
+## En-têtes de sécurité (GET /api/health)
+x-content-type-options                                                 nosniff
+x-frame-options                                                        DENY
+referrer-policy                                                        strict-origin-when-cross-origin
+permissions-policy                                                     camera=(), microphone=(), geolocation=()
+cache-control                                                          no-store
+strict-transport-security                                              (absent)
+content-security-policy                                                (absent)
+
+## CORS
+origine inconnue : access-control-allow-origin                         (absent)
+origine déclarée dans ALLOWED_ORIGINS                                  https://app.exemple.test
+
+## Corps JSON mal formé
+POST /api/auth/login                                                   {"status":500,"erreur":"Erreur serveur","detailRenvoye":true}
+POST /api/auth/register                                                {"status":500,"erreur":"Erreur serveur","detailRenvoye":true}
+POST /api/suppliers                                                    {"status":500,"erreur":"Erreur serveur","detailRenvoye":true}
+POST /api/orders                                                       {"status":500,"erreur":"Erreur serveur","detailRenvoye":true}
+POST /api/sales                                                        {"status":500,"erreur":"Erreur serveur","detailRenvoye":true}
+PUT /api/settings                                                      {"status":500,"erreur":"Erreur serveur","detailRenvoye":true}
+
+## Panier : commande sans ligne valide, quantité démesurée
+commandes avant (montants)                                             []
+offre inexistante : statut                                             500
+commandes après (montants)                                             [0]
+offre valide, 1 000 000 000 colis : statut                             500
+offre valide, 1 000 000 000 000 colis : statut                         500
+commandes à la fin (montants)                                          [0]
+
+## Énumération de comptes (mot de passe oublié)
+compte existant                                                        {"status":200,"champs":["delivered","devLink","message","ok","transport"],"message":"Si un compte existe avec cette adresse, un lien de réinitial"}
+compte inexistant                                                      {"status":200,"champs":["message","ok"],"message":"Si un compte existe avec cette adresse, un lien de réinitial"}
+réponses identiques                                                    false
+
+## Politique de mot de passe (inscription)
+« Abcdefg »                                                            400 Données invalides
+« Abcdefgh »                                                           201
+« password »                                                           400 Ce mot de passe est trop courant : choisissez-en un autre (par exemple trois mots qui n’ont rien à voir entre eux).
+« 12345678 »                                                           400 Ce mot de passe est trop courant : choisissez-en un autre (par exemple trois mots qui n’ont rien à voir entre eux).
+
+## Limitation de débit de la connexion (12 essais avec un mauvais mot de passe)
+statuts successifs                                                     [401,401,401,401,401,401,401,401,401,401,429,429]
+
+════ APRÈS (branche arena/326bcc8c-afrisupply) ════
+mode : developpement (NODE_ENV=development)
+
+## Cookie de session et jeton (connexion)
+statut, jeton présent dans le corps                                    [200,true]
+attributs du cookie                                                    afs_token=<jeton>; Max-Age=604800; Path=/; HttpOnly; SameSite=Lax
+
+## En-têtes de sécurité (GET /api/health)
+x-content-type-options                                                 nosniff
+x-frame-options                                                        DENY
+referrer-policy                                                        strict-origin-when-cross-origin
+permissions-policy                                                     camera=(), microphone=(), geolocation=()
+cache-control                                                          no-store
+strict-transport-security                                              (absent)
+content-security-policy                                                (absent)
+
+## CORS
+origine inconnue : access-control-allow-origin                         (absent)
+origine déclarée dans ALLOWED_ORIGINS                                  https://app.exemple.test
+
+## Corps JSON mal formé
+POST /api/auth/login                                                   {"status":400,"erreur":"Corps de requête illisible : du JSON valide est attendu.","detailRenvoye":false}
+POST /api/auth/register                                                {"status":400,"erreur":"Corps de requête illisible : du JSON valide est attendu.","detailRenvoye":false}
+POST /api/suppliers                                                    {"status":400,"erreur":"Corps de requête illisible : du JSON valide est attendu.","detailRenvoye":false}
+POST /api/orders                                                       {"status":400,"erreur":"Corps de requête illisible : du JSON valide est attendu.","detailRenvoye":false}
+POST /api/sales                                                        {"status":400,"erreur":"Corps de requête illisible : du JSON valide est attendu.","detailRenvoye":false}
+PUT /api/settings                                                      {"status":400,"erreur":"Corps de requête illisible : du JSON valide est attendu.","detailRenvoye":false}
+
+## Panier : commande sans ligne valide, quantité démesurée
+commandes avant (montants)                                             []
+offre inexistante : statut                                             400
+commandes après (montants)                                             []
+offre valide, 1 000 000 000 colis : statut                             400
+offre valide, 1 000 000 000 000 colis : statut                         400
+commandes à la fin (montants)                                          []
+
+## Énumération de comptes (mot de passe oublié)
+compte existant                                                        {"status":200,"champs":["delivered","devLink","message","ok"],"message":"Si un compte existe avec cette adresse, un lien de réinitial"}
+compte inexistant                                                      {"status":200,"champs":["delivered","message","ok"],"message":"Si un compte existe avec cette adresse, un lien de réinitial"}
+réponses identiques                                                    false
+
+## Politique de mot de passe (inscription)
+« Abcdefg »                                                            400 Données invalides
+« Abcdefgh »                                                           201
+« password »                                                           400 Ce mot de passe est trop courant : choisissez-en un autre (par exemple trois mots qui n’ont rien à voir entre eux).
+« 12345678 »                                                           400 Ce mot de passe est trop courant : choisissez-en un autre (par exemple trois mots qui n’ont rien à voir entre eux).
+
+## Limitation de débit de la connexion (12 essais avec un mauvais mot de passe)
+statuts successifs                                                     [401,401,401,401,401,401,401,401,401,401,429,429]
+
+Note de lecture : en mode développement, la réponse « mot de passe oublié » d'un compte existant porte en plus le lien de
+développement (devLink), jamais renvoyé en déploiement ; hors ce champ les deux réponses sont identiques (test dédié).
+Le mode « production » de cette sonde ne s'exécute plus : elle lance l'API en production sans base déclarée, ce que
+l'application refuse désormais (503) — c'est le comportement voulu, vérifié dans apps/api/src/test/p0-config.test.ts.

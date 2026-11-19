@@ -4,18 +4,21 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { getDb, products, leads } from '@afrisupply/db';
-import { requireAuth, type Env } from '../lib/auth.js';
+import { requireAuth, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { audit } from '../lib/ops.js';
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 const CATS = ['feculents', 'frais', 'viandes_poissons', 'epicerie', 'boissons', 'emballages'] as const;
 const UNITS = ['kg', 'g', 'L', 'mL', 'piece', 'botte', 'sac', 'carton'] as const;
-const body = z.object({ name: z.string().min(2).max(120), aliases: z.array(z.string().min(1).max(60)).max(30).default([]), category: z.enum(CATS), baseUnit: z.enum(UNITS), origin: z.string().max(120).nullable().optional(), shelfLifeDays: z.number().int().positive().nullable().optional(), imageUrl: z.string().url().nullable().optional().or(z.literal('')) });
+const fields = { name: z.string().min(2).max(120), aliases: z.array(z.string().min(1).max(60)).max(30), category: z.enum(CATS), baseUnit: z.enum(UNITS), origin: z.string().max(120).nullable().optional(), shelfLifeDays: z.number().int().positive().nullable().optional(), imageUrl: z.string().url().nullable().optional().or(z.literal('')) };
+const body = z.object({ ...fields, aliases: fields.aliases.default([]) });
+// Modification : aucune valeur par défaut (un champ absent n'est pas modifié — sinon renommer un
+// produit effacerait ses alias).
+const updateBody = z.object(fields).partial();
 
 export const referenceAdminRoutes = new Hono<Env>();
 referenceAdminRoutes.use('/admin/reference', requireAuth); referenceAdminRoutes.use('/admin/reference/*', requireAuth);
-referenceAdminRoutes.use('/admin/reference', async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
-referenceAdminRoutes.use('/admin/reference/*', async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+referenceAdminRoutes.use('/admin/reference', async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+referenceAdminRoutes.use('/admin/reference/*', async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
 
 referenceAdminRoutes.get('/admin/reference', async (c) => {
   const db = await getDb(); const q = (c.req.query('q') ?? '').trim(); const cat = c.req.query('category');
@@ -36,7 +39,7 @@ referenceAdminRoutes.post('/admin/reference', async (c) => {
 });
 
 referenceAdminRoutes.put('/admin/reference/:id', async (c) => {
-  const b = body.partial().safeParse(await c.req.json()); if (!b.success) return c.json({ error: 'Données invalides' }, 400);
+  const b = updateBody.safeParse(await c.req.json()); if (!b.success) return c.json({ error: 'Données invalides' }, 400);
   const db = await getDb(); const d = b.data;
   const [p] = await db.update(products).set({ ...d, imageUrl: d.imageUrl === '' ? null : d.imageUrl }).where(and(eq(products.id, c.req.param('id')), isNull(products.restaurantId))).returning(); if (!p) return c.json({ error: 'Produit introuvable' }, 404);
   await audit('reference.update', { actorEmail: c.get('user').email, target: p.id, meta: d });

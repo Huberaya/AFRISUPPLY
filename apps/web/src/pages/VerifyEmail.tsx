@@ -2,7 +2,7 @@
 //
 // Page ouverte depuis le lien reçu par e-mail (/verifier-email?token=…).
 // Elle dit exactement ce qui s'est passé : confirmée, déjà confirmée, expirée, lien inconnu.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { MailCheck, MailWarning } from 'lucide-react';
 import { api } from '../lib/api';
@@ -18,23 +18,34 @@ export default function VerifyEmail() {
   const [state, setState] = useState<{ done: boolean; ok: boolean; message: string; email?: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // `useCallback` : la tentative est unique mais l'effet ci-dessous doit dépendre d'une fonction
-  // stable, sinon il se relancerait à chaque rendu.
+  // Levée des blocages (chantier D) — UNE tentative par lien, quoi qu'il arrive ensuite.
+  // Défaut trouvé dans un vrai navigateur : pour une personne connectée, la confirmation réussie
+  // rafraîchissait la session, ce qui changeait `user`, ce qui recréait cette fonction, ce qui relançait
+  // l'envoi… une vingtaine de fois, jusqu'à la limite de débit. L'adresse était bien confirmée, mais la
+  // page finissait sur « Trop de tentatives ». La session est donc lue par une référence (toujours à
+  // jour, jamais une dépendance), et le lien déjà présenté est retenu.
+  const session = useRef({ user, refresh });
+  session.current = { user, refresh };
+  const dejaPresente = useRef<string | null>(null);
   const send = useCallback(async () => {
     if (!token) return;
     setBusy(true);
     try {
       const r = await api<Result>('/auth/verify-email', { method: 'POST', json: { token } });
       setState({ done: true, ok: true, message: r.message, email: r.email });
-      if (user) await refresh().catch(() => null);   // le bandeau disparaît tout de suite
+      if (session.current.user) await session.current.refresh().catch(() => null);   // le bandeau disparaît tout de suite
     } catch (e) {
       setState({ done: true, ok: false, message: (e as Error).message });
     } finally { setBusy(false); }
-  }, [token, user, refresh]);
+  }, [token]);
 
   // `send()` gère déjà les erreurs ; le `.catch` est une ceinture de sécurité : aucun échec
   // de cette page ne doit finir en « promesse non gérée » dans la console de l'utilisateur.
-  useEffect(() => { send().catch(() => {}); }, [send]);   // `send` dépend du jeton : une seule tentative, un lien ne sert qu'une fois
+  useEffect(() => {
+    if (!token || dejaPresente.current === token) return;
+    dejaPresente.current = token;
+    send().catch(() => {});
+  }, [token, send]);
 
   return (
     <div className="grid min-h-screen place-items-center p-6">

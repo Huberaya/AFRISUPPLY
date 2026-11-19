@@ -54,6 +54,33 @@ describe('Page /verifier-email', () => {
     expect(c.textContent).toContain('déjà confirmée');
   });
 
+  // Levée des blocages (chantier D) — défaut trouvé dans un vrai navigateur : pour une personne
+  // CONNECTÉE, la page renvoyait le lien en boucle (une vingtaine de fois, jusqu'à la limite de débit)
+  // et finissait sur « Trop de tentatives » alors que l'adresse venait d'être confirmée. La vraie
+  // session se comporte comme ici : la rafraîchir remplace l'objet `user` et relance un rendu.
+  it('personne connectée : le lien est présenté UNE fois, même si la session se rafraîchit — et le succès reste affiché', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const arbre = () => <MemoryRouter initialEntries={['/verifier-email?token=jeton-valide-1234567890']}><Routes><Route path="/verifier-email" element={<VerifyEmail />} /></Routes></MemoryRouter>;
+    h.user = { id: 'u1', email: 'awa@chezawa.fr' };
+    h.refresh.mockImplementation(async () => { h.user = { id: 'u1', email: 'awa@chezawa.fr', emailVerified: true }; root.render(arbre()); });
+    let appels = 0;
+    (globalThis.fetch as any).mockImplementation(() => {
+      appels += 1;
+      // Comme le serveur : le premier appel confirme ; au-delà de la limite de débit, il refuse.
+      return appels > 3 ? reponse(429, { error: 'Trop de tentatives, réessayez dans une minute.' }) : reponse(200, { ok: true, email: 'awa@chezawa.fr', alreadyVerified: appels > 1, message: appels > 1 ? 'Cette adresse est déjà confirmée : rien à faire.' : 'Adresse e-mail confirmée.' });
+    });
+    await act(async () => { root.render(arbre()); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 120)); });
+    h.user = null; h.refresh.mockImplementation(async () => {});
+    expect(appels).toBe(1);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('Adresse e-mail confirmée');
+    expect(container.textContent).not.toContain('Trop de tentatives');
+    expect(container.textContent).toContain('Retourner dans mon restaurant');
+  });
+
   it('signale un lien incomplet (copié à la main, sans jeton)', async () => {
     const c = await monter('/verifier-email');
     expect(c.textContent).toContain('lien est incomplet');

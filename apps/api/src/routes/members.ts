@@ -14,7 +14,8 @@ import { requireAuth, requireRestaurant, requireMinRole, hashPassword, type Env 
 import { memberCap } from '../lib/billing.js';
 import { issuePasswordLink } from '../lib/reset-link.js';
 import { sendMail, devLinksAllowed } from '../lib/mailer.js';
-import { audit } from '../lib/ops.js';
+import { audit, rateLimit } from '../lib/ops.js';
+import { h, zNomAffiche } from '../lib/html.js';
 
 export const memberRoutes = new Hono<Env>();
 memberRoutes.use('*', requireAuth, requireRestaurant);
@@ -54,10 +55,18 @@ memberRoutes.get('/members', async (c) => {
   });
 });
 
+/** Libellé d'un rôle tel qu'il est écrit dans l'application (et non son nom technique). */
+const ROLE_LABEL: Record<string, string> = { owner: 'Propriétaire', manager: 'Responsable', staff: 'Équipe (quotidien)' };
+
+// Chantier P0.5 — chaque invitation fait partir un e-mail vers une adresse choisie par le compte. Le
+// plafond d'utilisateurs de l'offre ne freine pas les envois (on peut retirer puis réinviter) : on
+// borne donc les invitations elles-mêmes, par restaurant.
+const freinInvitations = rateLimit({ windowMs: 60 * 60_000, max: 20, parAdresse: false, key: (c) => `invitations:${(c as unknown as { get: (k: string) => string }).get('restaurantId')}` });
+
 /** Invitation d'un membre par e-mail (propriétaire). */
-memberRoutes.post('/members', requireMinRole('owner'), async (c) => {
+memberRoutes.post('/members', requireMinRole('owner'), freinInvitations, async (c) => {
   const body = z.object({
-    email: z.string().email(), fullName: z.string().min(2).optional(), role: z.enum(ROLES).default('staff'),
+    email: z.string().email(), fullName: zNomAffiche.optional(), role: z.enum(ROLES).default('staff'),
   }).safeParse(await c.req.json().catch(() => ({})));
   if (!body.success) return c.json({ error: 'Données invalides', details: body.error.flatten() }, 400);
   const db = await getDb(); const rid = c.get('restaurantId'); const me = c.get('user');
@@ -92,8 +101,8 @@ memberRoutes.post('/members', requireMinRole('owner'), async (c) => {
     const { link, expiryMinutes } = await issuePasswordLink(user.id, { path: 'bienvenue', requestedIp: c.req.header('x-forwarded-for') ?? null, ttlMinutes: 7 * 24 * 60 });
     const res = await sendMail({
       to: email, subject: `${me.fullName} vous invite sur AFRISUPPLY — ${r?.name ?? 'restaurant'}`,
-      text: `Bonjour,\n\n${me.fullName} vous ouvre l'accès à AFRISUPPLY pour « ${r?.name ?? 'le restaurant'} » avec le rôle ${body.data.role}.\n\nChoisissez votre mot de passe (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours) : ${link}\n\nÀ bientôt,\nAFRISUPPLY`,
-      html: `<p>Bonjour,</p><p><b>${me.fullName}</b> vous ouvre l’accès à AFRISUPPLY pour « ${r?.name ?? 'le restaurant'} » avec le rôle <b>${body.data.role}</b>.</p><p><a href="${link}">Choisir mon mot de passe</a> (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours).</p><p>À bientôt,<br/>AFRISUPPLY</p>`,
+      text: `Bonjour,\n\n${me.fullName} vous ouvre l'accès à AFRISUPPLY pour « ${r?.name ?? 'le restaurant'} » avec le rôle « ${ROLE_LABEL[body.data.role]} ».\n\nChoisissez votre mot de passe (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours) : ${link}\n\nÀ bientôt,\nAFRISUPPLY`,
+      html: h`<p>Bonjour,</p><p><b>${me.fullName}</b> vous ouvre l’accès à AFRISUPPLY pour « ${r?.name ?? 'le restaurant'} » avec le rôle <b>${ROLE_LABEL[body.data.role]}</b>.</p><p><a href="${link}">Choisir mon mot de passe</a> (lien personnel, valable ${Math.round(expiryMinutes / 1440)} jours).</p><p>À bientôt,<br/>AFRISUPPLY</p>`,
       tags: { type: 'member_invite' },
     });
     // Chantier 5 (audit) : le lien n'est renvoyé que sur un poste de développement, et le message

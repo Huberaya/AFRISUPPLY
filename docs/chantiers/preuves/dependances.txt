@@ -1,0 +1,18 @@
+DÉPENDANCES — npm audit, avant et après (2026-11-12)
+
+AVANT (commit 15c8b81), dépendances de production : 4 vulnérabilités
+  critique  shell-quote 1.9.0          GHSA-pqg4-j6r4-53mv  (transitive : drizzle-orm → gel ; concurrently)
+  haute     zod 3.25.76                GHSA-mrhx-c7xc-m3w5  (directe : apps/api)
+  modérée   hono 4.13.8                GHSA-5r4p-p66f-jhc7  (directe)
+  modérée   @hono/node-server 1.19.17  GHSA-rmxm-3fg6-px4f  (directe)
+
+APRÈS, dépendances de production : 0 vulnérabilité
+  shell-quote        1.9.0   → 1.12.0  (règle « overrides » du package.json racine)
+  zod                3.25.76 → 4.6.7   (majeure : seule version corrigée ; voir P0_5 dans le suivi)
+  hono               4.13.8  → 4.13.18
+  @hono/node-server  1.19.17 → 2.1.8   (majeure : seule branche corrigée ; interface publique inchangée)
+  drizzle-orm        0.45.2/0.45.3 (trois copies) → 0.45.4 (une seule copie)
+
+Dépendances de développement (jamais déployées) : 16 vulnérabilités restantes (14 modérées, 2 hautes : vite, source-map-js).
+« npm audit fix » et « npm update » échouent sur cet arbre avec une erreur interne de npm 10.9.8
+(« Cannot read properties of null (reading 'edgesOut') ») : à reprendre avec une autre version de npm.

@@ -1,0 +1,186 @@
+RÔLES ET RÉFÉRENCES CROISÉES — même sonde, avant et après correction
+Sonde : celle de l'audit P0.1 (sonde_roles_et_references), inchangée. Base PostgreSQL embarquée.
+
+════ AVANT (commit 15c8b81) ════
+## S-05 — compte « staff » : route principale refusée, route parallèle acceptée
+POST /api/orders                                                               403
+POST /api/smart-cart/checkout                                                  201
+  commandes du restaurant A, avant → après                                     0 → 1
+POST /api/suppliers/:id/offers                                                 403
+POST /api/suppliers/:id/offers/batch                                           201
+  offres du restaurant A, avant → après                                        1 → 2
+POST /api/suppliers                                                            403
+POST /api/import/suppliers                                                     200
+  fournisseurs du restaurant A, avant → après                                  1 → 2
+PUT /api/reorder-rules/:inventoryItemId                                        200
+POST /api/reorder-rules/run                                                    200
+DELETE /api/stock/:itemId                                                      200
+  articles en stock du restaurant A, avant → après                             2 → 1
+
+## S-06 — références croisées (le restaurant A envoie des identifiants du restaurant B)
+préparation : produit privé et recette créés par B                             [201,201]
+POST /api/catalog/track avec le produit privé de B                             {"status":200,"ajoutes":1}
+  article créé dans le stock de A sur le produit de B                          1
+  routes de lecture de A qui renvoient le nom du produit privé de B            ["/api/quick/inventory","/api/stock","/api/dashboard","/api/forecast","/api/shopping/suggestions","/api/smart-cart","/api/digest/preview"]
+POST /api/sales avec la recette de B                                           {"status":200,"venteEnregistreeChezA":1,"nomDeLaRecetteRenvoye":false}
+
+## Cloisonnement — lectures et suppressions croisées (B présente les identifiants de A)
+préparation : règle de réassort et événement de prévision créés par A          [200,200]
+objets de A présentés par B                                                    ["suppliers","supplierOffers","inventoryItems","orders","recipes","products","reorderRules","forecastEvents","priceHistory"]
+routes balayées (GET et DELETE à un paramètre de chemin)                       23
+essais, répartition des réponses                                               {"essais":207,"codes":{"200":45,"404":162}}
+réponses contenant un libellé du restaurant A                                  0
+routes qui répondent 2xx quel que soit l'identifiant                           5
+  GET /api/prices/:productId/history → {"days":90,"series":[]}
+  DELETE /api/forecast/events/:id → {"deleted":true}
+  DELETE /api/reorder-rules/:inventoryItemId → {"ok":true}
+  GET /api/marketplace/vendors/:id/credit → {"terms":{"paymentDays":0,"creditLimitEur":null,"blocked":false},"exposure":{"outstandingEur":0,"overdueEur":0,"overdueCount":0,"openOrders":0,"oldest
+  GET /api/marketplace/vendors/:id/slots → {"slots":[],"hasRoutes":false}
+écriture croisée : PUT /api/suppliers/<identifiant de A>                       404 Fournisseur introuvable
+écriture croisée : POST /api/suppliers/<identifiant de A>/offers               404 Fournisseur introuvable
+écriture croisée : POST /api/suppliers/<identifiant de A>/offers/batch         404 Fournisseur introuvable
+écriture croisée : PUT /api/stock/<identifiant de A>                           404 Article introuvable
+écriture croisée : PUT /api/recipes/<identifiant de A>                         404 Recette introuvable
+écriture croisée : PUT /api/reorder-rules/<identifiant de A>                   404 Article introuvable
+écriture croisée : POST /api/orders/<identifiant de A>/send                    404 Commande introuvable
+écriture croisée : POST /api/orders                                            404 Fournisseur introuvable
+  suppliers de A, avant / après                                                2 ligne(s), empreinte d6bcc7aeea48 / 2 ligne(s), empreinte d6bcc7aeea48
+  supplierOffers de A, avant / après                                           3 ligne(s), empreinte be352e35e9c8 / 3 ligne(s), empreinte be352e35e9c8
+  inventoryItems de A, avant / après                                           4 ligne(s), empreinte a532159a70ee / 4 ligne(s), empreinte a532159a70ee
+  orders de A, avant / après                                                   1 ligne(s), empreinte bdc0ed5af9c3 / 1 ligne(s), empreinte bdc0ed5af9c3
+  recipes de A, avant / après                                                  1 ligne(s), empreinte 511b3f4ca111 / 1 ligne(s), empreinte 511b3f4ca111
+  products de A, avant / après                                                 1 ligne(s), empreinte 5b621aa0423f / 1 ligne(s), empreinte 5b621aa0423f
+  reorderRules de A, avant / après                                             1 ligne(s), empreinte 4fc652732ff5 / 1 ligne(s), empreinte 4fc652732ff5
+  forecastEvents de A, avant / après                                           1 ligne(s), empreinte 60796740a483 / 1 ligne(s), empreinte 60796740a483
+  priceHistory de A, avant / après                                             3 ligne(s), empreinte a7b8ee714ecb / 3 ligne(s), empreinte a7b8ee714ecb
+historique de prix d'un produit commun, lu par A (qui a une offre)             {"status":200,"series":2}
+historique de prix du même produit, lu par B                                   {"status":200,"series":0}
+GET /api/suppliers par B avec l'en-tête X-Restaurant-Id de A                   403
+
+## Cloisonnement entre fournisseurs (le fournisseur 2 présente les identifiants du fournisseur 1)
+préparation : inscriptions, offre, paliers, tournée, achat groupé du fournisseur 1 [201,201,201,200,201,201]
+objets du fournisseur 1 présentés                                              ["vendorOffers","vendorPriceTiers","vendorRoutes","groupBuys"]
+routes balayées (GET et DELETE à un paramètre de chemin)                       6
+essais, répartition des réponses                                               {"essais":24,"codes":{"200":4,"404":20}}
+routes qui répondent 2xx quel que soit l'identifiant                           1
+  DELETE /api/vendor/offers/:id → {"ok":true}
+écriture croisée : PUT /api/vendor/offers/<identifiant du fournisseur 1>/tiers 404 Offre introuvable
+écriture croisée : PUT /api/vendor/routes/<identifiant du fournisseur 1>       404 Tournée introuvable
+écriture croisée : POST /api/vendor/group-buys/<identifiant du fournisseur 1>/close 404 Introuvable
+écriture croisée : POST /api/vendor/group-buys                                 404 Offre introuvable
+GET /api/vendor/offers par le fournisseur 2 avec l'en-tête X-Vendor-Id du fournisseur 1 {"status":200,"offresRenvoyees":0}
+PUT /api/vendor/profile avec le même en-tête usurpé                            {"status":200,"ficheDuFournisseur1Modifiee":false}
+  vendorOffers du fournisseur 1, avant / après                                 1 ligne(s), empreinte d79e4d048bef / 1 ligne(s), empreinte d79e4d048bef
+  vendorPriceTiers du fournisseur 1, avant / après                             1 ligne(s), empreinte 13b95cb8a14f / 1 ligne(s), empreinte 13b95cb8a14f
+  vendorRoutes du fournisseur 1, avant / après                                 1 ligne(s), empreinte 8779aa03dfca / 1 ligne(s), empreinte 8779aa03dfca
+  groupBuys du fournisseur 1, avant / après                                    1 ligne(s), empreinte 3ebb9664cb79 / 1 ligne(s), empreinte 3ebb9664cb79
+
+## S-02 — inscription publique avec une adresse listée dans ADMIN_EMAILS
+GET /api/admin/dashboard avec le jeton reçu à l'inscription                    200
+adresse vérifiée au moment de l'appel                                          false
+
+## S-07 — GET /api/public/invite/:code, 40 appels consécutifs
+répartition des réponses (429 = limitation)                                    {"404":40}
+
+## S-09 — comptes et sessions
+mot de passe oublié, compte existant : champs de la réponse                    {"status":200,"champs":["delivered","devLink","message","ok","transport"]}
+mot de passe oublié, compte inexistant : champs de la réponse                  {"status":200,"champs":["message","ok"]}
+inscription avec le mot de passe « Abcdefgh »                                  {"status":201,"jetonDansLeCorps":true}
+connexion                                                                      {"status":200,"jetonDansLeCorps":true}
+cookie posé (NODE_ENV=test)                                                    afs_token=<jeton>; Max-Age=604800; Path=/; HttpOnly; SameSite=Lax
+POST /api/auth/logout                                                          200
+GET /api/auth/me avec le même jeton après déconnexion                          200
+POST /api/auth/logout-all                                                      200
+GET /api/auth/me avec le même jeton après déconnexion globale                  401
+
+════ APRÈS (branche arena/326bcc8c-afrisupply) ════
+## S-05 — compte « staff » : route principale refusée, route parallèle acceptée
+POST /api/orders                                                               403
+POST /api/smart-cart/checkout                                                  403
+  commandes du restaurant A, avant → après                                     0 → 0
+POST /api/suppliers/:id/offers                                                 403
+POST /api/suppliers/:id/offers/batch                                           403
+  offres du restaurant A, avant → après                                        1 → 1
+POST /api/suppliers                                                            403
+POST /api/import/suppliers                                                     403
+  fournisseurs du restaurant A, avant → après                                  1 → 1
+PUT /api/reorder-rules/:inventoryItemId                                        403
+POST /api/reorder-rules/run                                                    403
+DELETE /api/stock/:itemId                                                      403
+  articles en stock du restaurant A, avant → après                             1 → 1
+
+## S-06 — références croisées (le restaurant A envoie des identifiants du restaurant B)
+préparation : produit privé et recette créés par B                             [201,201]
+POST /api/catalog/track avec le produit privé de B                             {"status":404}
+  article créé dans le stock de A sur le produit de B                          0
+  routes de lecture de A qui renvoient le nom du produit privé de B            []
+POST /api/sales avec la recette de B                                           {"status":404,"venteEnregistreeChezA":0,"nomDeLaRecetteRenvoye":false}
+
+## Cloisonnement — lectures et suppressions croisées (B présente les identifiants de A)
+préparation : règle de réassort et événement de prévision créés par A          [200,200]
+objets de A présentés par B                                                    ["suppliers","supplierOffers","inventoryItems","recipes","products","reorderRules","forecastEvents","priceHistory"]
+routes balayées (GET et DELETE à un paramètre de chemin)                       23
+essais, répartition des réponses                                               {"essais":184,"codes":{"404":184}}
+réponses contenant un libellé du restaurant A                                  0
+routes qui répondent 2xx quel que soit l'identifiant                           0
+écriture croisée : PUT /api/suppliers/<identifiant de A>                       404 Fournisseur introuvable
+écriture croisée : POST /api/suppliers/<identifiant de A>/offers               404 Fournisseur introuvable
+écriture croisée : POST /api/suppliers/<identifiant de A>/offers/batch         404 Fournisseur introuvable
+écriture croisée : PUT /api/stock/<identifiant de A>                           404 Article introuvable
+écriture croisée : PUT /api/recipes/<identifiant de A>                         404 Recette introuvable
+écriture croisée : PUT /api/reorder-rules/<identifiant de A>                   404 Article introuvable
+écriture croisée : POST /api/orders/undefined/send                             404 Ressource introuvable
+écriture croisée : POST /api/orders                                            404 Fournisseur introuvable
+  suppliers de A, avant / après                                                1 ligne(s), empreinte 235e63d0a15e / 1 ligne(s), empreinte 235e63d0a15e
+  supplierOffers de A, avant / après                                           1 ligne(s), empreinte 3a2f00e02aff / 1 ligne(s), empreinte 3a2f00e02aff
+  inventoryItems de A, avant / après                                           2 ligne(s), empreinte 4573edca1711 / 2 ligne(s), empreinte 4573edca1711
+  orders de A, avant / après                                                   0 ligne(s), empreinte e3b0c44298fc / 0 ligne(s), empreinte e3b0c44298fc
+  recipes de A, avant / après                                                  1 ligne(s), empreinte 007ed2339498 / 1 ligne(s), empreinte 007ed2339498
+  products de A, avant / après                                                 1 ligne(s), empreinte 3585a347fcea / 1 ligne(s), empreinte 3585a347fcea
+  reorderRules de A, avant / après                                             1 ligne(s), empreinte 7e09e6cd8b99 / 1 ligne(s), empreinte 7e09e6cd8b99
+  forecastEvents de A, avant / après                                           1 ligne(s), empreinte c4a0f872e8bd / 1 ligne(s), empreinte c4a0f872e8bd
+  priceHistory de A, avant / après                                             1 ligne(s), empreinte 06e1d01bbd14 / 1 ligne(s), empreinte 06e1d01bbd14
+historique de prix d'un produit commun, lu par A (qui a une offre)             {"status":200,"series":1}
+historique de prix du même produit, lu par B                                   {"status":200,"series":0}
+GET /api/suppliers par B avec l'en-tête X-Restaurant-Id de A                   403
+
+## Cloisonnement entre fournisseurs (le fournisseur 2 présente les identifiants du fournisseur 1)
+préparation : inscriptions, offre, paliers, tournée, achat groupé du fournisseur 1 [201,201,201,200,201,201]
+objets du fournisseur 1 présentés                                              ["vendorOffers","vendorPriceTiers","vendorRoutes","groupBuys"]
+routes balayées (GET et DELETE à un paramètre de chemin)                       6
+essais, répartition des réponses                                               {"essais":24,"codes":{"404":24}}
+routes qui répondent 2xx quel que soit l'identifiant                           0
+écriture croisée : PUT /api/vendor/offers/<identifiant du fournisseur 1>/tiers 404 Offre introuvable
+écriture croisée : PUT /api/vendor/routes/<identifiant du fournisseur 1>       404 Tournée introuvable
+écriture croisée : POST /api/vendor/group-buys/<identifiant du fournisseur 1>/close 404 Introuvable
+écriture croisée : POST /api/vendor/group-buys                                 404 Offre introuvable
+GET /api/vendor/offers par le fournisseur 2 avec l'en-tête X-Vendor-Id du fournisseur 1 {"status":200,"offresRenvoyees":0}
+PUT /api/vendor/profile avec le même en-tête usurpé                            {"status":200,"ficheDuFournisseur1Modifiee":false}
+  vendorOffers du fournisseur 1, avant / après                                 1 ligne(s), empreinte 98a7346055d8 / 1 ligne(s), empreinte 98a7346055d8
+  vendorPriceTiers du fournisseur 1, avant / après                             1 ligne(s), empreinte 3d75bddf8f27 / 1 ligne(s), empreinte 3d75bddf8f27
+  vendorRoutes du fournisseur 1, avant / après                                 1 ligne(s), empreinte e6f2256d7d81 / 1 ligne(s), empreinte e6f2256d7d81
+  groupBuys du fournisseur 1, avant / après                                    1 ligne(s), empreinte 27291673c2cd / 1 ligne(s), empreinte 27291673c2cd
+
+## S-02 — inscription publique avec une adresse listée dans ADMIN_EMAILS
+GET /api/admin/dashboard avec le jeton reçu à l'inscription                    403
+adresse vérifiée au moment de l'appel                                          false
+
+## S-07 — GET /api/public/invite/:code, 40 appels consécutifs
+répartition des réponses (429 = limitation)                                    {"404":10,"429":30}
+
+## S-09 — comptes et sessions
+mot de passe oublié, compte existant : champs de la réponse                    {"status":200,"champs":["delivered","devLink","message","ok"]}
+mot de passe oublié, compte inexistant : champs de la réponse                  {"status":200,"champs":["delivered","message","ok"]}
+inscription avec le mot de passe « Abcdefgh »                                  {"status":201,"jetonDansLeCorps":true}
+connexion                                                                      {"status":200,"jetonDansLeCorps":true}
+cookie posé (NODE_ENV=test)                                                    afs_token=<jeton>; Max-Age=604800; Path=/; HttpOnly; SameSite=Lax
+POST /api/auth/logout                                                          200
+GET /api/auth/me avec le même jeton après déconnexion                          401
+POST /api/auth/logout-all                                                      401
+GET /api/auth/me avec le même jeton après déconnexion globale                  401
+
+Note de lecture (APRÈS) : la sonde ne peut plus créer de commande avec le compte « staff » ; les lignes qui visaient cette
+commande portent donc « undefined ». Sections S-02 et S-07 : le tableau de bord d'exploitant répond 403 tant que l'adresse
+n'est pas confirmée (avant : 200), et la lecture des codes d'invitation est limitée après 10 essais (avant : 40 acceptés).
+Section S-09 : la déconnexion invalide désormais le jeton ; « Abcdefgh » reste accepté (politique de mot de passe
+inchangée : 8 caractères, liste de mots de passe courants refusée — évolution laissée à une décision de produit).

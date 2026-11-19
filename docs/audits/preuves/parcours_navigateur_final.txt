@@ -1,0 +1,221 @@
+Navigateur : HeadlessChrome/153.0.8010.0 (@sparticuz/chromium)
+Site       : http://localhost:3100
+
+1. Le site public s’affiche (pages commerciales et légales)
+  [OK]   l’API répond derrière le site (même origine, comme en production) — HTTP 200
+  [OK]   page /
+  [OK]   page /pour-les-restaurants
+  [OK]   page /tarifs
+  [OK]   page /fonctionnalites
+  [OK]   page /faq
+  [OK]   page /cgv
+  [OK]   page /cgv-fournisseur
+  [OK]   page /mentions-legales
+  [OK]   page /statut
+  [OK]   page /catalogue
+  [OK]   page /connexion
+  [OK]   page /inscription
+  [OK]   page /mot-de-passe-oublie
+  [OK]   adresse inconnue : page « introuvable » propre, pas un écran blanc
+
+2. Sans session, l’espace client est fermé
+  [OK]   /app sans session renvoie à la connexion — arrivé sur /connexion
+  [OK]   /app/stock sans session renvoie à la connexion — arrivé sur /connexion
+
+3. [Op 1] Création du restaurant : inscription par le formulaire réel
+  [OK]   le formulaire annonce les conditions générales et la politique de confidentialité, avec leurs liens
+  [OK]   après l’inscription, on arrive dans l’espace client (parcours de démarrage) — arrivé sur /app/demarrer
+  [OK]   l’inscription a été acceptée par l’API — HTTP 201
+  [OK]   la session est un cookie illisible par le JavaScript (HttpOnly) — afs_token · HttpOnly=true · SameSite=Lax
+  [OK]   aucun jeton de session dans le stockage du navigateur
+  [OK]   l’écran de démarrage s’affiche sans erreur
+
+4. Chaque écran de l’espace client s’affiche (session réelle, données réelles)
+  [OK]   écran /app
+  [OK]   écran /app/stock
+  [OK]   écran /app/stock/prevision
+  [OK]   écran /app/achats
+  [OK]   écran /app/achats/panier
+  [OK]   écran /app/achats/ecarts
+  [OK]   écran /app/fournisseurs
+  [OK]   écran /app/catalogue
+  [OK]   écran /app/marketplace
+  [OK]   écran /app/courses
+  [OK]   écran /app/ventes
+  [OK]   écran /app/recettes
+  [OK]   écran /app/analyse
+  [OK]   écran /app/ia
+  [OK]   écran /app/express
+  [OK]   écran /app/import
+  [OK]   écran /app/parametres
+  [OK]   écran /app/equipe
+  [OK]   écran /app/abonnement
+  [OK]   écran /app/mes-donnees
+  [OK]   écran /app/profil
+  [OK]   écran /app/etablissements
+  [OK]   écran inconnu dans l’espace client : message propre
+
+5. [Op 2] Création d’un fournisseur par le formulaire
+  [OK]   la fenêtre « Nouveau fournisseur » couvre tout l’écran et tient dedans — voile 0→900 px, fenêtre 45→855 px, champ 150→188 px, écran 900 px
+  [OK]   son premier champ (obligatoire) est visible et cliquable — voile 0→900 px, fenêtre 45→855 px, champ 150→188 px, écran 900 px
+  [OK]   le fournisseur est créé par l’API — HTTP 201
+  [OK]   le fournisseur apparaît dans la liste
+  [OK]   il est toujours là après rechargement de la page (donnée enregistrée, pas seulement affichée)
+  [OK]   sa fiche s’ouvre
+
+5a. [Op 3] Produits : la carte du restaurant crée les recettes et le stock à suivre
+  [OK]   la carte est acceptée par l’API — HTTP 200
+  [OK]   l’écran annonce les recettes et les produits créés — 2 recettes créées · 16 produits identifiés · 16 ajoutés à votre stock
+  [OK]   les seuils d’alerte sont enregistrés — HTTP 200
+  [OK]   relecture en base : 16 produits suivis, 2 recettes — 16 produits, 2 recettes
+
+5c. [Op 3] Produits du fournisseur : ses prix, saisis dans sa fiche
+  [OK]   trois prix sont créés par l’API — 201, 201, 201
+  [OK]   la fiche affiche chaque prix ramené à l’unité (1,68 €/kg, 4,50 €/kg, 1,20 €/kg) — Catalogue & prix Ajouter en lot Ajouter un prix PRODUIT CONDITIONNEMENT PRIX / UNITÉ Riz parfumé Sac 25 kg 42,00 € 1,68 €/kg Cuisses de poulet Carton 10 kg 45,00 € 4,50 €/kg Oignon jaune Sac 10 kg 12,00 € 1,20 €/kg C
+  [OK]   les prix sont toujours là après rechargement (enregistrés, pas seulement affichés)
+
+5d. [Op 4] Comparaison des prix : un second fournisseur, moins cher sur le riz
+  [OK]   le second fournisseur reçoit un prix plus bas pour le riz (39,00 € le sac de 25 kg)
+  [OK]   la ligne « Riz parfumé » du stock propose de comparer les fournisseurs
+  [OK]   le comparateur liste les deux fournisseurs
+  [OK]   il affiche les deux prix à l’unité (1,56 € et 1,68 €)
+  [OK]   il recommande le moins cher — Commander chez Comptoir Sahel mwevrtyk
+  [OK]   l’écran de comparaison s’affiche sans erreur
+
+5b. [Op 10] Mise à jour du stock : premier inventaire, en une phrase
+  [OK]   l’inventaire est enregistré par l’API — HTTP 200
+  [OK]   relecture en base : 20 kg de riz, 15 kg de poulet, 10 kg d’oignon — {"riz":20,"poulet":15,"oignon":10}
+  [OK]   l’écran Stock affiche les quantités saisies
+
+5e. [Op 11] Enregistrement d’une vente : les ventes du jour, en une phrase
+  [OK]   les ventes sont enregistrées et l’écran dit combien de produits ont bougé — 2 lignes enregistrées · stock mis à jour sur 16 produits
+  [OK]   relecture en base : le stock a baissé des ingrédients vendus — {"riz":10.25,"poulet":0,"oignon":0}
+  [OK]   l’écran Ventes affiche les portions du jour
+
+5f. [Op 5] Constitution du panier
+  [OK]   le panier propose une commande chiffrée, répartie entre les deux fournisseurs — total 873,00 €
+  [OK]   le riz est attribué au moins cher (39,00 € le sac) — Riz parfumé Besoin 77,5 kg · Meilleur prix disponible Sac 25 kg · 39,00 € 156,00 € Sans offre fournis
+
+5g. [Op 6] Préparation de la commande
+  [OK]   le bouton « Préparer les commandes » reçoit bien le clic (rien ne le recouvre)
+  [OK]   les commandes sont créées par l’API — HTTP 201
+  [OK]   relecture en base : une commande « préparée » par fournisseur, rien n’est encore envoyé — AFS-2026-000118 preparee, AFS-2026-000117 preparee
+  [OK]   l’écran Achats affiche les commandes en cours
+
+5h. [Op 7] Validation et émission de la commande
+  [OK]   le message au fournisseur est prêt : référence, produits, quantités — Envoyer AFS-2026-000117 Afro Distribution mwevrtyk · message prêt à envoyer Bonjour, Merci de préparer la commande AFS-2026-000117 pour Chez
+  [OK]   la commande est marquée « envoyée » par l’API — HTTP 200
+  [OK]   relecture en base : statut « envoyée » — envoyee
+
+5i. [Op 8] Réception de la livraison — [Op 9] avec un écart
+  [OK]   la fenêtre de réception rappelle les quantités commandées — Réception — AFS-2026-000117 Afro Distribution mwevrtyk. Corrigez les quantités réellement reçues. Saisissez ce que vous avez réellement reçu. Chaque ligne affic
+  [OK]   la réception est enregistrée par l’API — HTTP 200
+  [OK]   [Op 9] l’écart est détecté et la réclamation est rédigée (130 kg commandés, 120 reçus) — commandé 130 kg, reçu 120 kg (manquant 10 kg)
+  [OK]   [Op 9] la facture plus élevée que la commande est chiffrée (+ 36,00 €) — Facture plus élevée que la commande : +36,00 € Cuisses de poulet : 4,50 € → 4,80 €/kg (+6.7 %) 
+  [OK]   la touche Échap ferme la fenêtre
+  [OK]   [Op 10] relecture en base : le stock augmente de ce qui a été REÇU (120 kg de poulet, 110 kg d’oignon) — poulet 0 → 120, oignon 0 → 110
+  [OK]   [Op 9] l’écran Écarts montre l’écart ouvert et sa valeur (10 kg × 4,50 € = 45,00 €) — ÉCARTS OUVERTS 1 VALEUR À RÉCUPÉRER 45,00 € manquants × prix commandé FOUR
+  [OK]   [Op 9] relecture en base : un écart, rattaché à cette commande — 1 écart(s)
+
+5j. [Op 12] Alertes et prévisions
+  [OK]   relecture en base : la réception a créé une alerte d’écart et une alerte de facture plus élevée — ecart_livraison, hausse_prix
+  [OK]   l’accueil affiche ces alertes — Écart sur la livraison AFS-2026-000117
+  [OK]   l’accueil compte les premiers pas réalisés (6 sur 7 : le septième est déclaratif) — Vos 7 premiers pas — 6/7 faits
+  [OK]   la prévision est calculée par l’API à partir des ventes saisies — /api/forecast → 200
+  [OK]   l’écran Prévision affiche les produits du restaurant
+
+5k. [Op 15] Export des données
+  [OK]   l’écran « Mes données » propose de télécharger ses données
+  [OK]   l’export est produit par l’API — HTTP 200
+  [OK]   le fichier contient le restaurant, ses fournisseurs, sa commande et son écart — 50554 caractères
+  [OK]   il ne contient ni mot de passe, ni jeton, ni un autre restaurant
+
+6. [Op 13] Invitation d’un collaborateur
+  [OK]   l’invitation est acceptée par l’API — /api/members → HTTP 201
+  [OK]   la personne invitée apparaît dans l’équipe
+
+7. [Op 14] Droits : un client n’entre pas dans les écrans d’exploitation
+  [OK]   l’API refuse les données d’exploitation à un client (403) — /api/admin/ops → 403, /api/admin/backups → 403, /api/admin/audit → 403
+  [OK]   aucune donnée d’exploitation n’est affichée — AFRISUPPLY Retour à l’accueil RESTAURANT Chez Navigateur mwevrtyk Essai Gratuit Connecté·e comme Propriétaire AUJOURD’HU
+
+8. [Op 16] Déconnexion
+  [OK]   la déconnexion est enregistrée par l’API — HTTP 200
+  [OK]   on quitte l’espace client — arrivé sur /connexion
+  [OK]   après déconnexion, l’espace client est de nouveau fermé — arrivé sur /connexion
+
+8 bis. [Op 14] La personne invitée accepte l’invitation, se connecte, et n’a que les droits de son rôle
+  [OK]   l’e-mail d’invitation est réellement écrit, avec un lien personnel — Subject: Awa Navigateur vous invite sur AFRISUPPLY — Chez Navigateur mwevrtyk
+  [OK]   l’e-mail ne contient aucun mot de passe
+  [OK]   le mot de passe est choisi par la personne elle-même (lien accepté par l’API) — HTTP 200
+  [OK]   elle entre dans le restaurant qui l’a invitée — /app
+  [OK]   rôle « équipe » : l’écran Équipe ne lui propose pas d’inviter
+  [OK]   sa session lit le stock (200) mais ne modifie pas les réglages (403) et n’invite personne (403) — {"lecture":200,"ecriture":403,"invitation":403}
+  [OK]   aucune erreur de page pendant ce parcours
+  [OK]   le lien d’invitation ne sert qu’une fois — AFRISUPPLY Retour à l’accueil Nouveau mot de passe Ce lien n’est plus valable (expiré ou déjà utilisé)
+
+9. [Op 18] Reconnexion
+  [OK]   mauvais mot de passe : message clair, on reste sur la page de connexion — © 2026 AFRISUPPLY · Connexion chiffrée, session protégée Retour à l’accueil Connexion E-mail ou mot de passe incorrect V
+  [OK]   bon mot de passe : on entre dans l’espace client — arrivé sur /app
+  [OK]   on retrouve ses données (le fournisseur créé plus haut)
+
+10. [Op 17] Expiration de la session
+  [OK]   session expirée : retour à la connexion, sans écran cassé — arrivé sur /connexion
+  [OK]   aucune erreur JavaScript pendant l’expiration
+
+11. [Op 17] Révocation : une session fermée ne peut plus servir
+  [OK]   témoin : tant que la session est ouverte, son jeton est accepté
+  [OK]   après la déconnexion, le même jeton rejoué est refusé par le serveur (401) — HTTP 401
+
+12. Cloisonnement : un autre restaurant ne voit rien du premier
+  [OK]   huit écrans du second restaurant : aucune donnée du premier
+  [OK]   témoin : il voit bien SON fournisseur
+  [OK]   les identifiants du premier restaurant, présentés par le second, sont tous refusés (404) — {"ficheFournisseur":404,"modifierFournisseur":404,"messageCommande":404,"changerCommande":404,"recevoirCommande":404}
+  [OK]   son export ne contient rien du premier restaurant
+  [OK]   la fiche du fournisseur du premier, ouverte par son adresse, n’affiche rien
+
+13. Exploitant : aucun droit avant la confirmation de l’adresse, tous après
+  [OK]   adresse non confirmée : le menu d’administration n’est pas proposé
+  [OK]   adresse non confirmée : l’API refuse toutes les données d’exploitation (403) — {"exploitation":403,"sauvegardes":403,"journal":403}
+  [OK]   un nouvel e-mail de confirmation est demandé depuis le bandeau — HTTP 200
+  [OK]   l’e-mail est réellement écrit, avec un lien personnel — 6 lien(s) : inscription, puis renvoi
+  [OK]   le lien de l’inscription, remplacé par le renvoi, n’est plus accepté — AFRISUPPLY Retour à l’accueil Confirmation de mon adresse Ce lien a déjà été utilisé. Demandez un nouveau lien
+  [OK]   … et l’adresse n’est toujours pas confirmée
+  [OK]   le dernier lien confirme l’adresse — HTTP 200
+  [OK]   adresse confirmée : le menu d’administration apparaît
+  [OK]   adresse confirmée : l’API ouvre les données d’exploitation (200) — {"exploitation":200,"sauvegardes":200,"journal":200}
+  [OK]   l’écran « Exploitation » s’affiche pour l’exploitant confirmé
+  [OK]   le lien ne sert qu’une fois : rejoué, il ne change plus rien — AFRISUPPLY Retour à l’accueil Confirmation de mon adresse Cette adresse est déjà confirmée : rien à faire
+
+13 bis. Clerk coupé : la connexion par mot de passe suffit à tout le parcours
+  [OK]   le serveur annonce Clerk hors service — {"enabled":false,"mode":null,"problem":null}
+  [OK]   une identité envoyée dans le corps de la requête n’ouvre aucune session (401 ou 503) — HTTP 401 clerk_token_required
+  [OK]   pendant tout le parcours, le navigateur n’a rien demandé à un domaine de Clerk
+
+14. Ménage : seuls les comptes créés par ce parcours sont supprimés
+  [OK]   les comptes d’essai sont supprimés avec leurs restaurants ; leur session est ensuite refusée — {"invite":"supprimé","proprietaire":"supprimé","voisin":"supprimé","exploitant":"supprimé"}
+  [OK]   le restaurant de démonstration, lui, n’a pas été touché — toujours présent
+
+Appels à l’API vus par le navigateur : 469 (dont 0 en erreur 5xx)
+
+Opérations de la mission :
+  [OK]    1. Création d’un restaurant — 6/6
+  [OK]    2. Création d’un fournisseur — 6/6
+  [OK]    3. Création d’un produit fournisseur — 7/7
+  [OK]    4. Consultation et comparaison des prix — 6/6
+  [OK]    5. Constitution d’un panier — 2/2
+  [OK]    6. Préparation d’une commande — 4/4
+  [OK]    7. Validation et émission d’une commande — 3/3
+  [OK]    8. Réception d’une livraison — 8/8
+  [OK]    9. Déclaration d’un écart — 8/8
+  [OK]   10. Mise à jour du stock — 4/4
+  [OK]   11. Enregistrement d’une vente — 3/3
+  [OK]   12. Vérification des alertes et prévisions — 5/5
+  [OK]   13. Invitation d’un collaborateur — 2/2
+  [OK]   14. Vérification des droits du collaborateur — 10/10
+  [OK]   15. Export des données — 4/4
+  [OK]   16. Déconnexion — 3/3
+  [OK]   17. Expiration et révocation de session — 4/4
+  [OK]   18. Reconnexion — 3/3
+OPÉRATIONS : 18/18 rejouées avec succès
+BILAN NAVIGATEUR : 140/140 vérifications réussies
+code de sortie=0

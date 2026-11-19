@@ -58,7 +58,7 @@ describe('chantier 12 — page publique d’état : la même vérité que l’ex
     const el = await monter(enPanne);
     expect(texte(el)).toContain('Un système nécessite notre attention');
     expect(texte(el)).toContain('E-mail du matin');
-    expect(texte(el)).toContain('dernier passage error il y a 1 h');
+    expect(texte(el)).toContain('dernier passage en échec il y a 1 h');
     const sain = await monter(charge({ ok: true, checks: { ...charge().checks, jobs: { daily: { state: 'ok', maxHours: 30, lastRun: { status: 'ok', finishedAt: new Date().toISOString(), hoursAgo: 1 } } } } }));
     expect(texte(sain)).toContain('Tous les systèmes fonctionnent');
   });

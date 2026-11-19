@@ -12,6 +12,7 @@ import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { runMigrations, getDb, vendors, commissionInvoices, commissions, orders, restaurants, suppliers } from '@afrisupply/db';
 import { app } from '../app.js';
+import { confirmerAdresse } from './aide-comptes.js';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret';
@@ -73,7 +74,7 @@ let vid = ''; let vid2 = ''; let invoiceId = '';
 describe('chantier 8 — moyen de paiement fournisseur', () => {
   beforeAll(async () => {
     V = await reg('grossiste8@test.fr', 'Chez Gros'); W = await reg('grossiste8-b@test.fr', 'Chez Pareil');
-    ADMIN = (await reg('admin@afrisupply.fr', 'Admin')).h;
+    ADMIN = (await reg('admin@afrisupply.fr', 'Admin')).h; await confirmerAdresse('admin@afrisupply.fr');
     const a = await call('POST', '/api/vendor/register', { name: 'Grossiste Huit', city: 'Nantes', deliveryZones: ['Nantes'], acceptCgv: true, contactEmail: 'contact@grossiste8.fr' }, V.h);
     const b = await call('POST', '/api/vendor/register', { name: 'Grossiste Huit Bis', city: 'Rennes', deliveryZones: ['Rennes'], acceptCgv: true }, W.h);
     expect(a.status).toBe(201); expect(b.status).toBe(201);

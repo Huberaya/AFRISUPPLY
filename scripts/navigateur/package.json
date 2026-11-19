@@ -1,0 +1,16 @@
+{
+  "name": "afrisupply-verification-navigateur",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Vérification des parcours dans un vrai navigateur (chantier P0.6). Hors des workspaces : ces dépendances lourdes ne sont installées ni au build ni en production.",
+  "scripts": {
+    "parcours": "node parcours.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.17.0"
+  },
+  "optionalDependencies": {
+    "@sparticuz/chromium": "^153.0.0"
+  }
+}

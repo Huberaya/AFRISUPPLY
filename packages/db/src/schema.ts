@@ -35,7 +35,8 @@ export const plan = pgEnum('plan', ['trial', 'starter', 'pro', 'business']);
 // -------------------------------------------------------------
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clerkId: text('clerk_id').unique(),
+  // Nom de contrainte aligné sur la migration 0028 (`ADD COLUMN … UNIQUE` → `users_clerk_id_key`).
+  clerkId: text('clerk_id').unique('users_clerk_id_key'),
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash'),
   fullName: text('full_name').notNull(),

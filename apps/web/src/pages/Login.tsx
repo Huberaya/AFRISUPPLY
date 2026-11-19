@@ -2,12 +2,13 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { SignIn } from '@clerk/clerk-react';
 import { useAuth } from '../lib/auth';
+import { clerkEnabled } from '../lib/clerk';
 import { Logo, HomeButton } from '../components/AppLayout';
 
 const DEMO_LOGIN = import.meta.env.VITE_DEMO_LOGIN as string | undefined;
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, logout, accessNotice, clearAccessNotice } = useAuth();
   const nav = useNavigate();
   const [sp] = useSearchParams();
   const next = sp.get('next')?.startsWith('/') ? sp.get('next')! : '/app';
@@ -72,7 +73,7 @@ export default function Login() {
           </p>
         </div>
         <div className="flex items-center justify-between text-xs text-stone-500 pt-8 border-t border-stone-800">
-          <p>© {new Date().getFullYear()} AFRISUPPLY · Authentification sécurisée par Clerk & Neon</p>
+          <p>© {new Date().getFullYear()} AFRISUPPLY · Connexion chiffrée, session protégée</p>
         </div>
       </div>
 
@@ -91,16 +92,28 @@ export default function Login() {
 
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-2xl font-extrabold">Connexion</h1>
-            <button
-              type="button"
-              onClick={() => setUseClerkMode(!useClerkMode)}
-              className="text-xs text-brand-700 hover:underline font-semibold bg-brand-50 px-2.5 py-1 rounded-lg border border-brand-200"
-            >
-              {useClerkMode ? 'Connexion standard' : 'Connexion Clerk'}
-            </button>
+            {clerkEnabled && (
+              <button
+                type="button"
+                onClick={() => setUseClerkMode(!useClerkMode)}
+                className="text-xs text-brand-700 hover:underline font-semibold bg-brand-50 px-2.5 py-1 rounded-lg border border-brand-200"
+              >
+                {useClerkMode ? 'Connexion standard' : 'Connexion Clerk'}
+              </button>
+            )}
           </div>
 
-          {useClerkMode ? (
+          {/* La connexion par Clerk a été refusée par le serveur : on dit pourquoi, et comment en sortir. */}
+          {accessNotice && (
+            <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 space-y-2">
+              <p>{accessNotice}</p>
+              <button type="button" className="text-xs font-semibold underline" onClick={() => { clearAccessNotice(); void logout(); }}>
+                Fermer cette session et réessayer
+              </button>
+            </div>
+          )}
+
+          {clerkEnabled && useClerkMode ? (
             <div className="space-y-4">
               <div className="flex justify-center w-full">
                 <SignIn
@@ -198,16 +211,18 @@ export default function Login() {
                   Mot de passe oublié ?
                 </Link>
               </p>
-              <div className="rounded-xl bg-brand-50/50 border border-brand-100 p-3 text-center space-y-1">
-                <p className="text-xs text-stone-600 font-medium">Vous utilisez Google ou la connexion sans mot de passe ?</p>
-                <button
-                  type="button"
-                  onClick={() => setUseClerkMode(true)}
-                  className="text-xs text-brand-700 hover:text-brand-800 font-bold underline"
-                >
-                  Ouvrir la connexion Clerk →
-                </button>
-              </div>
+              {clerkEnabled && (
+                <div className="rounded-xl bg-brand-50/50 border border-brand-100 p-3 text-center space-y-1">
+                  <p className="text-xs text-stone-600 font-medium">Vous utilisez Google ou la connexion sans mot de passe ?</p>
+                  <button
+                    type="button"
+                    onClick={() => setUseClerkMode(true)}
+                    className="text-xs text-brand-700 hover:text-brand-800 font-bold underline"
+                  >
+                    Ouvrir la connexion Clerk →
+                  </button>
+                </div>
+              )}
               <p className="text-center text-sm text-stone-500">
                 Pas encore de compte ?{' '}
                 <Link to="/inscription" className="font-semibold text-brand-700">

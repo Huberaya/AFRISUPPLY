@@ -1,5 +1,11 @@
 # Prospection — restaurants africains, Paris & petite couronne (19/09/2026)
 
+> **Les fichiers de données ne sont plus dans le dépôt.** Ce dépôt est public, et ces listes contiennent des
+> coordonnées de tiers (noms de dirigeants, téléphones, adresses e-mail). Elles ont été retirées de la branche
+> le 13 novembre 2026 ; elles restent dans l'historique Git tant qu'il n'est pas purgé
+> (`docs/audits/DEPOT_PUBLIC_DONNEES_PERSONNELLES.md`). La liste de travail se conserve hors du dépôt et s'importe
+> dans l'application par l'écran « Prospection » du back-office. Ce document ne décrit plus que la méthode.
+
 - `restaurants_africains_paris.xlsx` / `.csv` : 198 établissements (156 Paris intra-muros, 42 petite couronne), avec nom, adresse, code postal, ville, téléphone (96), e-mail (34), site/réseau (69), cuisine, raison sociale + SIREN + dirigeant (90), lien vers la fiche source.
 - Les 198 fiches sont **importées dans l'onglet Admin → Prospection** (section Restaurants), statut « À contacter ».
 

@@ -6,11 +6,17 @@ import { z } from 'zod';
 import { and, eq, isNull, sql, inArray } from 'drizzle-orm';
 import { getDb, products, suppliers, supplierOffers, priceHistory, inventoryItems, recipes, recipeIngredients, trackProducts } from '@afrisupply/db';
 import { REFERENCE_PRODUCTS, RECIPE_TEMPLATES, findReferenceProduct, normalize } from '@afrisupply/db/data';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
 import { parseCsv, pick, toNumber, parsePack } from '../lib/csv.js';
+import { unusableProductIds, PRODUCT_NOT_FOUND } from '../lib/tenant.js';
 
 export const catalogRoutes = new Hono<Env>();
 catalogRoutes.use('*', requireAuth, requireRestaurant);
+// Chantier P0.2 — mêmes rôles que les routes « principales » : créer des fournisseurs et leurs prix
+// (import), ou des recettes (carte type), relève du responsable. Avant, un employé y parvenait par
+// ces routes alors que POST /api/suppliers et POST /api/recipes le lui refusaient.
+catalogRoutes.on(['POST'], '/import/suppliers', requireMinRole('manager'));
+catalogRoutes.on(['POST'], '/onboarding/apply', requireMinRole('manager'));
 
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 
@@ -63,6 +69,10 @@ catalogRoutes.post('/catalog/track', async (c) => {
   const rid = c.get('restaurantId');
   const body = z.object({ productIds: z.array(z.string().uuid()).min(1), criticalLevel: z.number().nonnegative().optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
+  // Chantier P0.2 (cloisonnement) : seuls le référentiel commun et les produits de ce restaurant
+  // peuvent être suivis. Avant, l'identifiant du produit privé d'un autre restaurant était accepté
+  // et son nom apparaissait ensuite dans le stock de l'appelant.
+  if ((await unusableProductIds(rid, body.data.productIds)).length) return c.json(PRODUCT_NOT_FOUND, 404);
   const added = await trackProducts(rid, body.data.productIds, { criticalLevel: body.data.criticalLevel });
   return c.json({ added: added.length, items: added });
 });
@@ -80,7 +90,7 @@ catalogRoutes.get('/onboarding/templates', (c) => {
 
 catalogRoutes.post('/onboarding/apply', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
-  const body = z.object({ templates: z.array(z.string()).min(1), prices: z.record(z.number()).optional() }).safeParse(await c.req.json());
+  const body = z.object({ templates: z.array(z.string()).min(1), prices: z.record(z.string(), z.number()).optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const byName = await ensureReference();
   const chosen = RECIPE_TEMPLATES.filter((t) => body.data.templates.includes(t.name));

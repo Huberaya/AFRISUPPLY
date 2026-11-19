@@ -15,6 +15,9 @@ const EXAMPLES = ['vendu 40 mafé 25 yassa 12 thiep', 'reste 3 kg plantain, 2 sa
 type SR = { start: () => void; stop: () => void; lang: string; interimResults: boolean; onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null };
 const getSR = (): (new () => SR) | null => (window as unknown as { SpeechRecognition?: new () => SR; webkitSpeechRecognition?: new () => SR }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => SR }).webkitSpeechRecognition ?? null;
 
+/** Nombre de PRODUITS dont le stock a bougé (un ingrédient commun à deux plats ne compte qu'une fois). */
+const stockTouches = (r: { stockLinesUpdated?: number; stockProductsUpdated?: number }) => r.stockProductsUpdated ?? r.stockLinesUpdated ?? 0;
+
 export default function Express() {
   const [tab, setTab] = useState<'phrase' | 'inventaire' | 'facture'>('phrase');
   return (
@@ -49,8 +52,8 @@ function Phrase() {
   const apply = async () => {
     if (!parsed || !ready.length) return; setBusy(true); setErr(null);
     try {
-      const r = await api<{ applied: number; stockLinesUpdated?: number }>('/quick/apply', { method: 'POST', json: { kind: parsed.kind, lines: ready.map((l) => ({ id: l.chosen!.id, qty: l.qty })) } });
-      setDone(`${KIND_EMOJI[parsed.kind]} ${r.applied} ligne${r.applied > 1 ? 's' : ''} enregistrée${r.applied > 1 ? 's' : ''}${r.stockLinesUpdated ? ` · stock mis à jour sur ${r.stockLinesUpdated} produits` : ''}.`);
+      const r = await api<{ applied: number; stockLinesUpdated?: number; stockProductsUpdated?: number }>('/quick/apply', { method: 'POST', json: { kind: parsed.kind, lines: ready.map((l) => ({ id: l.chosen!.id, qty: l.qty })) } });
+      setDone(`${KIND_EMOJI[parsed.kind]} ${r.applied} ligne${r.applied > 1 ? 's' : ''} enregistrée${r.applied > 1 ? 's' : ''}${stockTouches(r) ? ` · stock mis à jour sur ${stockTouches(r)} produit${stockTouches(r) > 1 ? 's' : ''}` : ''}.`);
       setParsed(null); setText('');
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };

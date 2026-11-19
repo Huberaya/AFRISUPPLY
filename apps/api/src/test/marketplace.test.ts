@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { runMigrations } from '@afrisupply/db';
 import { app } from '../app.js';
+import { confirmerAdresse } from './aide-comptes.js';
 
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.PGLITE_DIR = 'memory://mkt'; process.env.ADMIN_EMAILS = 'admin@afrisupply.fr';
 type Json = Record<string, any>;
@@ -17,7 +18,7 @@ let V: Record<string, string>; let R1: { h: Record<string, string>; rid: string 
 beforeAll(async () => {
   await runMigrations();
   V = (await reg('grossiste@sahel.fr', 'compte grossiste')).h; // le grossiste a aussi un « restaurant » vide : non gênant
-  R1 = await reg('r1@resto.fr', 'Resto Un'); R2 = await reg('r2@resto.fr', 'Resto Deux'); ADM = (await reg('admin@afrisupply.fr', 'Admin')).h;
+  R1 = await reg('r1@resto.fr', 'Resto Un'); R2 = await reg('r2@resto.fr', 'Resto Deux'); ADM = (await reg('admin@afrisupply.fr', 'Admin')).h; await confirmerAdresse('admin@afrisupply.fr');
   await call('POST', '/api/onboarding/apply', { templates: ['Mafé bœuf', 'Yassa poulet'] }, R1.h);
   const t = await call('GET', '/api/onboarding/templates', undefined, R1.h); await call('POST', '/api/onboarding/apply', { templates: t.json.templates.slice(0, 2).map((x: Json) => x.id ?? x.name) }, R1.h);
   await call('POST', '/api/onboarding/apply', { templates: t.json.templates.slice(0, 2).map((x: Json) => x.id ?? x.name) }, R2.h);

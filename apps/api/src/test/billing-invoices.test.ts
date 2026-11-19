@@ -14,6 +14,7 @@ import { runMigrations, getDb, restaurants, subscriptionInvoices, billingEvents,
 import { app } from '../app.js';
 import { billingHealth, nextInvoiceNumber, recordSubscriptionInvoice, billingRecipient, syncInvoiceSequence } from '../lib/billing.js';
 import { emitterComplete } from '../lib/pdf.js';
+import { confirmerAdresse } from './aide-comptes.js';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret';
@@ -102,7 +103,7 @@ describe('préparation de l’encaissement', () => {
 });
 
 describe('souscription réelle (faux Stripe local)', () => {
-  beforeAll(async () => { R = await reg('b7-resto@test.fr', 'Chez Awa'); OTHER = await reg('b7-autre@test.fr', 'Chez Kofi'); ADMIN = (await reg('admin@afrisupply.fr', 'Admin AFS')).h; });
+  beforeAll(async () => { R = await reg('b7-resto@test.fr', 'Chez Awa'); OTHER = await reg('b7-autre@test.fr', 'Chez Kofi'); ADMIN = (await reg('admin@afrisupply.fr', 'Admin AFS')).h; await confirmerAdresse('admin@afrisupply.fr'); });
 
   it('checkout : client créé (idempotent), abonnement Pro avec l’essai restant conservé', async () => {
     const r = await call('POST', '/api/billing/checkout', { plan: 'pro' }, R.h);

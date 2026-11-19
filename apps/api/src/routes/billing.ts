@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, sql, desc } from 'drizzle-orm';
 import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors, orders, restaurantMembers, users } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { applyOrderPayment, createOrderCheckout, paymentAvailability } from '../lib/payments.js';
 import { PLANS, FOUNDER_OFFER } from './public.js';
 import { SUPPORT } from '../lib/ops-health.js';
@@ -17,8 +17,8 @@ import { invoicePdf, emitterComplete } from '../lib/pdf.js';
 import { recordJobRun } from '../lib/job-runs.js';
 import { sendMail } from '../lib/mailer.js';
 import { audit } from '../lib/ops.js';
+import { h } from '../lib/html.js';
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
 
 // ---------- Webhook Stripe (public, signé) ----------
@@ -83,7 +83,7 @@ async function mailInvoice(invoice: typeof subscriptionInvoices.$inferSelect, re
   const res = await sendMail({
     to, subject: `Votre facture AFRISUPPLY ${invoice.number} — ${eur(ttc)} TTC`,
     text: `Bonjour,\n\nVoici votre facture ${invoice.number} pour ${restaurantName} :\n• Formule ${invoice.plan}${invoice.founder ? ' (tarif pilote fondateur −50 %)' : ''}\n• Période : du ${invoice.periodStart.toLocaleDateString('fr-FR')} au ${invoice.periodEnd.toLocaleDateString('fr-FR')}\n• Montant : ${eur(Number(invoice.amountEur))} HT — ${eur(ttc)} TTC\n\nLa facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.\n\nMerci de votre confiance,\nL'équipe AFRISUPPLY`,
-    html: `<p>Bonjour,</p><p>Voici votre facture <b>${invoice.number}</b> pour <b>${restaurantName}</b> :</p><ul><li>Formule ${invoice.plan}${invoice.founder ? ' (tarif pilote fondateur −50 %)' : ''}</li><li>Période : du ${invoice.periodStart.toLocaleDateString('fr-FR')} au ${invoice.periodEnd.toLocaleDateString('fr-FR')}</li><li>Montant : ${eur(Number(invoice.amountEur))} HT — <b>${eur(ttc)} TTC</b></li></ul><p>La facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.</p><p>Merci de votre confiance,<br>L'équipe AFRISUPPLY</p>`,
+    html: h`<p>Bonjour,</p><p>Voici votre facture <b>${invoice.number}</b> pour <b>${restaurantName}</b> :</p><ul><li>Formule ${invoice.plan}${invoice.founder ? ' (tarif pilote fondateur −50 %)' : ''}</li><li>Période : du ${invoice.periodStart.toLocaleDateString('fr-FR')} au ${invoice.periodEnd.toLocaleDateString('fr-FR')}</li><li>Montant : ${eur(Number(invoice.amountEur))} HT — <b>${eur(ttc)} TTC</b></li></ul><p>La facture est jointe à ce message (PDF) et reste disponible dans votre espace, rubrique Abonnement.</p><p>Merci de votre confiance,<br>L'équipe AFRISUPPLY</p>`,
     tags: { type: 'subscription_invoice', restaurant: invoice.restaurantId }, attachments: [{ filename: `${invoice.number}.pdf`, content: pdf, contentType: 'application/pdf' }],
   });
   await recordJobRun({
@@ -139,7 +139,7 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
           await sendMail({
             to: owner.email, subject: `AFRISUPPLY — votre abonnement ${applied.plan} est actif 🎉`,
             text: `Bonjour ${first},\n\nC'est confirmé : l'abonnement ${applied.plan} d'AFRISUPPLY est actif pour « ${rr?.name ?? 'votre restaurant'} ».\n\nProchain prélèvement le ${when}. Vous gérez tout (factures, carte, résiliation) depuis l'application : Abonnement.\n\nMerci de nous faire confiance — une question, répondez à cet e-mail.\n\nL'équipe AFRISUPPLY`,
-            html: `<p>Bonjour ${first},</p><p>C'est confirmé : l'abonnement <b>${applied.plan}</b> d'AFRISUPPLY est actif pour <b>« ${rr?.name ?? 'votre restaurant'} »</b>.</p><p>Prochain prélèvement le <b>${when}</b>. Factures, carte et résiliation se gèrent depuis <b>Abonnement</b> dans l'application.</p><p>Merci de nous faire confiance — une question, répondez à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`,
+            html: h`<p>Bonjour ${first},</p><p>C'est confirmé : l'abonnement <b>${applied.plan}</b> d'AFRISUPPLY est actif pour <b>« ${rr?.name ?? 'votre restaurant'} »</b>.</p><p>Prochain prélèvement le <b>${when}</b>. Factures, carte et résiliation se gèrent depuis <b>Abonnement</b> dans l'application.</p><p>Merci de nous faire confiance — une question, répondez à cet e-mail.</p><p>L'équipe AFRISUPPLY</p>`,
             tags: { type: 'subscription_active' },
           });
         }
@@ -174,6 +174,8 @@ billingRoutes.on(['POST'], '/billing/checkout', requireMinRole('owner'));
 billingRoutes.on(['POST'], '/billing/portal', requireMinRole('owner'));
 billingRoutes.on(['POST'], '/billing/sync', requireMinRole('owner'));
 billingRoutes.use('*', requireAuth, requireRestaurant);
+// Chantier P0.2 — renvoyer une facture d'abonnement par e-mail : propriétaire, comme le reste de la facturation.
+billingRoutes.on(['POST'], '/billing/invoices/:id/send', requireMinRole('owner'));
 
 // Chantier 25 : payer une commande marketplace en ligne (CB / SEPA) — responsable ou propriétaire.
 billingRoutes.on(['POST'], '/orders/:id/pay', requireMinRole('manager'));
@@ -279,7 +281,7 @@ billingAdminRoutes.use('/admin/billing/*', requireAuth);
 billingAdminRoutes.use('/admin/billing', requireAuth);
 
 billingAdminRoutes.get('/admin/billing', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const db = await getDb();
   const rows = await db.select({ id: restaurants.id, name: restaurants.name, city: restaurants.city, plan: restaurants.plan, founder: restaurants.founder, subscriptionStatus: restaurants.subscriptionStatus, trialEndsAt: restaurants.trialEndsAt, currentPeriodEnd: restaurants.currentPeriodEnd, createdAt: restaurants.createdAt }).from(restaurants).orderBy(desc(restaurants.createdAt));
   const founders = rows.filter((r) => r.founder).length;
@@ -295,7 +297,7 @@ billingAdminRoutes.get('/admin/billing', async (c) => {
 
 /** Émet une facture d'abonnement à la main (paiement par virement, geste commercial) et l'envoie. */
 billingAdminRoutes.post('/admin/billing/restaurants/:id/invoice', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ amountEur: z.number().positive().max(100000).optional(), vatRate: z.number().min(0).max(20).optional(), months: z.number().int().min(1).max(12).default(1), send: z.boolean().default(true), note: z.string().max(300).optional() }).parse(await c.req.json().catch(() => ({})));
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.req.param('id')));
   if (!r) return c.json({ error: 'Restaurant introuvable' }, 404);
@@ -313,7 +315,7 @@ billingAdminRoutes.post('/admin/billing/restaurants/:id/invoice', async (c) => {
 
 /** Marque une facture d'abonnement payée (virement reçu) ou annulée. */
 billingAdminRoutes.put('/admin/billing/invoices/:id', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ status: z.enum(['payee', 'ouverte', 'annulee']) }).parse(await c.req.json());
   const db = await getDb();
   const [upd] = await db.update(subscriptionInvoices).set({ status: b.status, paidAt: b.status === 'payee' ? new Date() : null }).where(eq(subscriptionInvoices.id, c.req.param('id'))).returning();
@@ -324,7 +326,7 @@ billingAdminRoutes.put('/admin/billing/invoices/:id', async (c) => {
 
 /** Marque un restaurant « pilote fondateur » (−50 % à vie), prolonge l'essai si demandé. */
 billingAdminRoutes.put('/admin/billing/restaurants/:id', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ founder: z.boolean().optional(), extendTrialDays: z.number().int().min(1).max(180).optional(), plan: z.enum(['trial', 'starter', 'pro', 'business']).optional(), subscriptionStatus: z.enum(['trialing', 'active', 'past_due', 'canceled', 'expired']).optional() }).parse(await c.req.json());
   const db = await getDb(); const [r] = await db.select().from(restaurants).where(eq(restaurants.id, c.req.param('id'))); if (!r) return c.json({ error: 'Restaurant introuvable' }, 404);
   const patch: Partial<typeof restaurants.$inferInsert> = {};
@@ -377,7 +379,7 @@ export async function invoiceCommissions(period: string, opts: { dryRun?: boolea
       to,
       subject: mode === 'prelevement' ? `AFRISUPPLY — commission ${period} : ${eur(amount)} HT (prélevée sur votre carte)` : `AFRISUPPLY — facture de commission ${period} : ${eur(amount)} HT (${eur(ttc)} TTC)`,
       text: `Bonjour,\n\nFacture de commission ${period} pour ${v.name} :\n- ${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}\n- Commission ${Number(v.commissionPct).toFixed(2).replace('.', ',')} % : ${eur(amount)} HT — ${eur(ttc)} TTC\n\n${mode === 'prelevement' ? 'Prélèvement automatique sur la carte enregistrée dans votre espace fournisseur : aucune action de votre part.' : "Règlement sous 15 jours par virement (ou activez le prélèvement automatique dans votre espace fournisseur)."}\n\nLa facture est jointe à ce message (PDF).\n\nMerci de votre confiance,\nL'équipe AFRISUPPLY`,
-      html: `<p>Bonjour,</p><p>Facture de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur(amount)} HT</b> — ${eur(ttc)} TTC</li></ul><p>${mode === 'prelevement' ? 'Prélèvement automatique sur la carte enregistrée : aucune action de votre part.' : 'Règlement sous 15 jours par virement, ou activez le prélèvement automatique dans votre espace fournisseur.'}</p><p>La facture est jointe à ce message (PDF).</p><p>L'équipe AFRISUPPLY</p>`,
+      html: h`<p>Bonjour,</p><p>Facture de commission <b>${period}</b> pour <b>${v.name}</b> :</p><ul><li>${r.orders} commande(s) confirmée(s), base ${eur(Number(r.base))}</li><li>Commission ${Number(v.commissionPct)} % : <b>${eur(amount)} HT</b> — ${eur(ttc)} TTC</li></ul><p>${mode === 'prelevement' ? 'Prélèvement automatique sur la carte enregistrée : aucune action de votre part.' : 'Règlement sous 15 jours par virement, ou activez le prélèvement automatique dans votre espace fournisseur.'}</p><p>La facture est jointe à ce message (PDF).</p><p>L'équipe AFRISUPPLY</p>`,
       tags: { type: 'commission', vendor: v.id }, attachments: [{ filename: `commission-${period}.pdf`, content: pdf, contentType: 'application/pdf' }],
     });
     await db.insert(commissionInvoices).values({ vendorId: v.id, period, orders: Number(r.orders), baseEur: Number(r.base).toFixed(2), amountEur: amount.toFixed(2), stripeInvoiceId, // « emise » tant que Stripe n'a pas confirmé l'encaissement (le webhook invoice.paid passe en « payee ») :
@@ -390,7 +392,7 @@ export async function invoiceCommissions(period: string, opts: { dryRun?: boolea
 }
 
 billingAdminRoutes.post('/admin/billing/commissions/invoice', async (c) => {
-  if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const b = z.object({ period: z.string().regex(/^\d{4}-\d{2}$/).optional(), dryRun: z.boolean().optional() }).parse(await c.req.json().catch(() => ({})));
   const prev = new Date(); prev.setUTCDate(0); // dernier jour du mois précédent
   const res = await invoiceCommissions(b.period ?? prev.toISOString().slice(0, 7), { dryRun: b.dryRun });

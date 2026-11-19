@@ -22,7 +22,8 @@ type AuditRow = { at: string; actorEmail: string | null; action: string; target:
 type Drill = { ok: boolean; tookMs: number; inserted: Record<string, number>; relu: { restaurants: number; rows: number }; accountsToReset?: string[]; incomplets?: string[]; error?: string };
 type Restore = { ok: boolean; totals: { inserted: number; skipped: number }; accountsToReset?: string[]; error?: string };
 
-const JOB_LABEL: Record<string, string> = { daily: 'Digest du matin', reminders: 'Relances grossistes', 'alerts-notify': 'Alertes urgentes', backup: 'Sauvegardes' };
+const JOB_LABEL: Record<string, string> = { daily: 'Digest du matin', reminders: 'Relances grossistes', 'alerts-notify': 'Alertes urgentes', backup: 'Sauvegardes', 'offsite-backup': 'Copie externe des sauvegardes' };
+const RESULTAT: Record<string, string> = { ok: 'réussi', partial: 'partiel', error: 'en échec', running: 'en cours', interrompue: 'interrompu (coupé en plein travail)', incomplete: 'inachevé (à reprendre)' };
 const DOT: Record<Job['state'], string> = { ok: '🟢', never: '⚪', degraded: '🔴', stale: '🟠' };
 const ETAT: Record<Job['state'], string> = { ok: 'à jour', never: 'jamais exécutée', degraded: 'en échec', stale: 'en retard' };
 const taille = (b: number) => (b < 1024 ? `${b} o` : b < 1_048_576 ? `${(b / 1024).toFixed(0)} Ko` : `${(b / 1_048_576).toFixed(1)} Mo`);
@@ -122,7 +123,7 @@ export default function AdminOps() {
                 <tr key={job}>
                   <td className="p-3 font-semibold">{JOB_LABEL[job] ?? job}</td>
                   <td className="p-3">{DOT[j.state]} {ETAT[j.state]}</td>
-                  <td className="p-3 text-stone-600">{j.lastRun ? `${j.lastRun.status} · il y a ${j.lastRun.hoursAgo} h` : '—'}</td>
+                  <td className="p-3 text-stone-600">{j.lastRun ? `${RESULTAT[j.lastRun.status] ?? j.lastRun.status} · il y a ${j.lastRun.hoursAgo} h` : '—'}</td>
                   <td className="p-3 text-stone-500">≤ {j.maxHours} h</td>
                   <td className="p-3 text-xs text-stone-500">{j.lastRun?.error ?? (j.lastRun ? JSON.stringify(j.lastRun.summary).slice(0, 120) : 'aucun passage enregistré')}</td>
                 </tr>

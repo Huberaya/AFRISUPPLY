@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, desc, eq, ilike, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb, leads, products, feedback, restaurants, REFERENCE_PRODUCTS, RECIPE_TEMPLATES } from '@afrisupply/db';
-import { requireAuth, type Env } from '../lib/auth.js';
+import { requireAuth, isPlatformAdmin, type Env } from '../lib/auth.js';
 
 export const publicRoutes = new Hono<Env>();
 
@@ -45,7 +45,7 @@ const leadBody = z.object({
   restaurantName: z.string().min(2).max(120), contactName: z.string().min(2).max(120), email: z.string().email(), phone: z.string().max(40).optional(),
   city: z.string().max(80).optional(), cuisine: z.string().max(80).optional(), coversPerDay: z.number().int().positive().max(5000).optional(),
   message: z.string().max(2000).optional(), planInterest: z.enum(['starter', 'pro', 'business', 'pilote']).optional(), source: z.string().max(40).optional(),
-  utm: z.record(z.string()).optional(), website: z.string().optional(), // honeypot anti-spam : doit rester vide (sinon on répond ok sans enregistrer)
+  utm: z.record(z.string(), z.string()).optional(), website: z.string().optional(), // honeypot anti-spam : doit rester vide (sinon on répond ok sans enregistrer)
 });
 
 // anti-abus minimal en mémoire : 5 demandes / IP / heure
@@ -68,8 +68,7 @@ publicRoutes.post('/public/leads', async (c) => {
 
 // Admin léger : liste des leads (réservé aux utilisateurs dont l'e-mail est dans ADMIN_EMAILS)
 publicRoutes.get('/admin/leads', requireAuth, async (c) => {
-  const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  if (!admins.includes(c.get('user').email.toLowerCase())) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const db = await getDb();
   const rows = await db.select().from(leads).orderBy(desc(leads.createdAt)).limit(500);
   const [{ total }] = await db.select({ total: sql<number>`count(*)` }).from(leads);
@@ -77,8 +76,7 @@ publicRoutes.get('/admin/leads', requireAuth, async (c) => {
 });
 
 publicRoutes.put('/admin/leads/:id', requireAuth, async (c) => {
-  const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  if (!admins.includes(c.get('user').email.toLowerCase())) return c.json({ error: 'Accès réservé' }, 403);
+  if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403);
   const body = z.object({ status: z.enum(['nouveau', 'contacte', 'demo', 'pilote', 'client', 'perdu']).optional(), notes: z.string().nullable().optional() }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const db = await getDb();

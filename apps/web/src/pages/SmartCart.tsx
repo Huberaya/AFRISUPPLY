@@ -65,7 +65,14 @@ export default function SmartCart() {
         ))}
       </div>
       {data.unavailable.length > 0 && <div className="card mt-4 text-sm"><h3 className="font-semibold mb-1">Sans offre fournisseur</h3><p className="text-stone-600">{data.unavailable.map((u) => `${u.productName} (${fmtQty(u.neededQty, u.unit)})`).join(', ')}. Ajoutez une offre via <Link to="/app/import" className="underline">l’import CSV</Link> ou la fiche fournisseur.</p></div>}
-      {data.suppliers.length > 0 && <div className="sticky bottom-4 mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-lg">
+      {/* Levée des réserves (chantier E) — cette barre reste visible en bas de l'écran pendant le défilement.
+          Deux éléments fixes occupent déjà le bas de l'écran : la barre de navigation du téléphone et le
+          bouton « Un avis, un bug ? ». Mesuré dans un navigateur : sur ordinateur, le bouton d'avis
+          recouvrait « Préparer les commandes » (un clic au milieu ouvrait la fenêtre d'avis) ; sur
+          téléphone, la barre de navigation le recouvrait entièrement. La barre se place donc au-dessus de
+          la navigation du téléphone (bottom-20) et laisse libre la colonne du bouton d'avis (pr-16, puis
+          pr-52 quand ce bouton affiche son libellé). */}
+      {data.suppliers.length > 0 && <div className="sticky bottom-20 mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white p-4 pr-16 shadow-lg sm:pr-52 lg:bottom-4" data-barre-action>
         <div><div className="text-xs text-stone-500">Total avec livraison</div><div className="text-xl font-bold">{fmtEur(total)}</div></div>
         <button className="btn-primary" disabled={busy} onClick={() => void checkout()}><Check size={16} /> Préparer les commandes</button>
       </div>}

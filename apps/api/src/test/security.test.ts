@@ -172,7 +172,11 @@ describe('5. Rôles : attribuables et réellement appliqués', () => {
     await fresh();
     expect((await call('GET', '/api/stock', undefined, staff)).status).toBe(200);
     const tpl = await call('GET', '/api/onboarding/templates', undefined, staff);
-    await call('POST', '/api/onboarding/apply', { templates: tpl.json.templates.slice(0, 1).map((t: Json) => t.name) }, staff);
+    // Chantier P0.2 : appliquer une carte type crée des recettes — réservé au responsable, comme POST /api/recipes.
+    const carte = { templates: tpl.json.templates.slice(0, 1).map((t: Json) => t.name) };
+    const refus = await call('POST', '/api/onboarding/apply', carte, staff);
+    expect(refus.status).toBe(403); expect(refus.json.code).toBe('role_required');
+    expect((await call('POST', '/api/onboarding/apply', carte, owner)).status).toBe(200);
     const stock = await call('GET', '/api/stock', undefined, staff);
     const item = stock.json.items[0];
     expect((await call('PUT', `/api/stock/${item.itemId ?? item.id}`, { criticalLevel: 10, quantity: 12 }, staff)).status).toBe(200);

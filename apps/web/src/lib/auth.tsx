@@ -1,5 +1,5 @@
 // Contexte d'authentification AFRISUPPLY — Intégration Clerk & base de données Neon
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useUser, useClerk } from '@clerk/clerk-react';
 import { api, tokenStore } from './api';
 
@@ -39,30 +39,42 @@ type Ctx = {
 
 const AuthContext = createContext<Ctx | undefined>(undefined);
 
-function useSafeClerk() {
-  try {
-    const userHook = useUser();
-    const clerk = useClerk();
-    return {
-      available: true,
-      isLoaded: userHook.isLoaded,
-      isSignedIn: userHook.isSignedIn ?? false,
-      clerkUser: userHook.user,
-      clerk,
-    };
-  } catch {
-    return {
-      available: false,
-      isLoaded: true,
-      isSignedIn: false,
-      clerkUser: null,
-      clerk: null,
-    };
-  }
+/** Ce que le contexte d'authentification a besoin de savoir de Clerk (rien de plus). */
+type ClerkBridge = {
+  available: boolean;
+  isLoaded: boolean;
+  isSignedIn: boolean;
+  /** Identifiant de la personne connectée chez Clerk : sert uniquement à relancer la synchronisation quand il change. */
+  userId: string | null;
+  /** Jeton de session Clerk à présenter au serveur (preuve d'identité vérifiée côté serveur). */
+  getToken: () => Promise<string | null>;
+  signOut: () => Promise<void>;
+};
+
+const NO_CLERK: ClerkBridge = { available: false, isLoaded: true, isSignedIn: false, userId: null, getToken: async () => null, signOut: async () => {} };
+
+/** Contexte d'authentification SANS Clerk (aucune clé publique configurée, ou tests) : e-mail et mot de passe. */
+export function AuthProvider({ children }: { children: ReactNode }) {
+  return <AuthCore clerk={NO_CLERK}>{children}</AuthCore>;
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const { available: clerkAvailable, isLoaded: clerkLoaded, isSignedIn, clerkUser, clerk } = useSafeClerk();
+/** Contexte d'authentification AVEC Clerk : à monter à l'intérieur de `ClerkProvider`. */
+export function ClerkAuthProvider({ children }: { children: ReactNode }) {
+  const { isLoaded, isSignedIn, user } = useUser();
+  const clerk = useClerk();
+  const bridge = useMemo<ClerkBridge>(() => ({
+    available: true,
+    isLoaded,
+    isSignedIn: isSignedIn ?? false,
+    userId: user?.id ?? null,
+    getToken: async () => (await clerk.session?.getToken()) ?? null,
+    signOut: async () => { await clerk.signOut(); },
+  }), [isLoaded, isSignedIn, user?.id, clerk]);
+  return <AuthCore clerk={bridge}>{children}</AuthCore>;
+}
+
+function AuthCore({ children, clerk }: { children: ReactNode; clerk: ClerkBridge }) {
+  const { available: clerkAvailable, isLoaded: clerkLoaded, isSignedIn, userId: clerkUserId } = clerk;
 
   const [user, setUser] = useState<User | null>(null);
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
@@ -104,26 +116,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Synchronisation avec Clerk ou session existante
   useEffect(() => {
-    // 1. Si Clerk est connecté avec un utilisateur : synchronisation avec Neon
-    if (clerkAvailable && isSignedIn && clerkUser) {
-      const currentClerkUser = clerkUser;
+    // 1. Clerk a une personne connectée : on échange son jeton de session Clerk contre une session
+    //    AFRISUPPLY. Le serveur vérifie le jeton et lit lui-même l'identité chez Clerk : le
+    //    navigateur n'envoie plus ni identifiant ni adresse e-mail (chantier P0.2).
+    if (clerkAvailable && isSignedIn && clerkUserId) {
       let active = true;
       setLoading(true);
 
-      api<{
-        ok: boolean;
-        token: string;
-        user: User;
-        restaurants: Restaurant[];
-      }>('/auth/clerk-sync', {
-        method: 'POST',
-        json: {
-          clerkId: currentClerkUser.id,
-          email: currentClerkUser.primaryEmailAddress?.emailAddress,
-          fullName: currentClerkUser.fullName || currentClerkUser.firstName || currentClerkUser.username,
-          phone: currentClerkUser.primaryPhoneNumber?.phoneNumber,
-        },
-      }).then((res) => {
+      (async () => {
+        const sessionToken = await clerk.getToken();
+        if (!sessionToken) throw new Error('Session Clerk indisponible');
+        return api<{ ok: boolean; token: string; user: User; restaurants: Restaurant[] }>('/auth/clerk-sync', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        });
+      })().then((res) => {
         if (active) {
           tokenStore.setAuthed();
           setUser(res.user);
@@ -138,7 +145,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
       }).catch((err) => {
-        console.error('[auth] Sync Clerk ↔ Neon failed:', err);
+        console.error('[auth] connexion Clerk refusée par le serveur :', err);
+        // Le serveur explique pourquoi (adresse non vérifiée, compte à confirmer, service indisponible…).
+        if (active) setAccessNotice(err instanceof Error && err.message ? err.message : 'La connexion par Clerk a échoué.');
       }).finally(() => {
         if (active) setLoading(false);
       });
@@ -160,7 +169,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRestaurants([]);
       setLoading(false);
     }
-  }, [clerkAvailable, clerkLoaded, isSignedIn, clerkUser, refresh]);
+    // `clerk` ne change d'identité que lorsque l'état de connexion Clerk change (voir ClerkAuthProvider).
+  }, [clerk, clerkAvailable, clerkLoaded, isSignedIn, clerkUserId, refresh]);
 
   useEffect(() => {
     const onAccess = (e: Event) => {
@@ -191,9 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     try {
       await api('/auth/logout', { method: 'POST' }).catch(() => null);
-      if (clerk && clerk.signOut) {
-        await clerk.signOut();
-      }
+      await clerk.signOut();
     } finally {
       tokenStore.clear();
       setUser(null);

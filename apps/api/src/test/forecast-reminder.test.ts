@@ -12,6 +12,7 @@ import { eq } from 'drizzle-orm';
 import { runMigrations, getDb, restaurants, alerts, sales, recipes } from '@afrisupply/db';
 import { checkMissingSales, weekKey, buildDigestForRestaurant } from '../jobs/daily.js';
 import { pendingImmediateAlerts } from '../lib/notify.js';
+import { enProprietaire } from './en-proprietaire.js';   // remise à zéro du décor : pas une opération de l'application
 
 const dayOf = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 let rid = ''; let recipeId = '';
@@ -50,8 +51,7 @@ describe('chantier 9 — relance graduée des ventes non saisies', () => {
   });
 
   it('ventes d’avant-hier : rappel doux, sans e-mail, une seule fois par jour', async () => {
-    const db = await getDb();
-    await db.delete(sales).where(eq(sales.restaurantId, rid));
+    await enProprietaire((d) => d.delete(sales).where(eq(sales.restaurantId, rid)));   // `sales` est en UPSERT : le rôle applicatif n'y supprime rien
     await saisir(2);
     const now = new Date();
     const res = await checkMissingSales(rid, now);
@@ -71,9 +71,8 @@ describe('chantier 9 — relance graduée des ventes non saisies', () => {
   });
 
   it('la relance en attente est réellement affichée dans le mail du matin (jamais annoncée dans le vide)', async () => {
-    const db = await getDb();
-    await db.delete(sales).where(eq(sales.restaurantId, rid));
-    await db.delete(alerts).where(eq(alerts.restaurantId, rid));
+    await enProprietaire((d) => d.delete(sales).where(eq(sales.restaurantId, rid)));   // `sales` est en UPSERT : le rôle applicatif n'y supprime rien
+    await enProprietaire((d) => d.delete(alerts).where(eq(alerts.restaurantId, rid)));
     const res = await checkMissingSales(rid, new Date());
     expect(res.created).toBe(true);
     const { input } = await buildDigestForRestaurant(rid);
@@ -85,13 +84,12 @@ describe('chantier 9 — relance graduée des ventes non saisies', () => {
     expect(html.text).toContain('/app/ventes');          // le lien de saisie est dans la version texte
     expect(html.html).toContain('Saisir mes ventes');    // et le bouton dans la version HTML
     expect(html.subject).not.toMatch(/sous contrôle/i);
-    await db.delete(alerts).where(eq(alerts.restaurantId, rid));
+    await enProprietaire((d) => d.delete(alerts).where(eq(alerts.restaurantId, rid)));
   });
 
   it('ventes de la semaine dernière : relance ferme créée et bien envoyée par e-mail', async () => {
-    const db = await getDb();
-    await db.delete(sales).where(eq(sales.restaurantId, rid));
-    await db.delete(alerts).where(eq(alerts.restaurantId, rid));
+    await enProprietaire((d) => d.delete(sales).where(eq(sales.restaurantId, rid)));   // `sales` est en UPSERT : le rôle applicatif n'y supprime rien
+    await enProprietaire((d) => d.delete(alerts).where(eq(alerts.restaurantId, rid)));
     await saisir(5);
     const res = await checkMissingSales(rid, new Date());
     expect(res.gapDays).toBe(5);

@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { SignUp } from '@clerk/clerk-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { clerkEnabled } from '../lib/clerk';
 import { Logo, HomeButton } from '../components/AppLayout';
 
 export default function Register() {
@@ -76,13 +77,15 @@ export default function Register() {
         </div>
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-extrabold">Créer mon espace</h1>
-          <button
-            type="button"
-            onClick={() => setUseClerkMode(!useClerkMode)}
-            className="text-xs text-brand-700 hover:underline font-semibold bg-brand-50 px-2.5 py-1 rounded-lg border border-brand-200"
-          >
-            {useClerkMode ? 'Inscription directe' : 'Inscription Clerk'}
-          </button>
+          {clerkEnabled && (
+            <button
+              type="button"
+              onClick={() => setUseClerkMode(!useClerkMode)}
+              className="text-xs text-brand-700 hover:underline font-semibold bg-brand-50 px-2.5 py-1 rounded-lg border border-brand-200"
+            >
+              {useClerkMode ? 'Inscription directe' : 'Inscription Clerk'}
+            </button>
+          )}
         </div>
         <p className="text-sm text-stone-500">
           {sp.get('next') === '/panier'
@@ -97,7 +100,7 @@ export default function Register() {
           </p>
         )}
 
-        {useClerkMode ? (
+        {clerkEnabled && useClerkMode ? (
           <div className="space-y-4">
             <div className="flex justify-center w-full">
               <SignUp
@@ -201,15 +204,17 @@ export default function Register() {
                 Politique de confidentialité
               </Link>.
             </p>
-            <div className="rounded-xl bg-brand-50/50 border border-brand-100 p-2.5 text-center">
-              <button
-                type="button"
-                onClick={() => setUseClerkMode(true)}
-                className="text-xs text-brand-700 hover:text-brand-800 font-bold underline"
-              >
-                Ou s'inscrire en 1 clic avec Google via Clerk →
-              </button>
-            </div>
+            {clerkEnabled && (
+              <div className="rounded-xl bg-brand-50/50 border border-brand-100 p-2.5 text-center">
+                <button
+                  type="button"
+                  onClick={() => setUseClerkMode(true)}
+                  className="text-xs text-brand-700 hover:text-brand-800 font-bold underline"
+                >
+                  Ou s'inscrire en 1 clic avec Google via Clerk →
+                </button>
+              </div>
+            )}
             <p className="text-center text-sm text-stone-500">
               Déjà un compte ?{' '}
               <Link

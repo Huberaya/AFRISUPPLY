@@ -64,6 +64,7 @@ export async function llmRephrase(question: string, facts: string, draft: string
   try {
     const res = await fetch(`${base}/chat/completions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.LLM_API_KEY}` },
+      signal: AbortSignal.timeout(20_000),   // chantier P0.4 : au-delà, la réponse calculée sans LLM est renvoyée (voir le `catch`)
       body: JSON.stringify({ model, temperature: 0.2, max_tokens: 400, messages: [
         { role: 'system', content: 'Tu es l\'assistant achats d\'un restaurant africain. Réponds en français, de façon concise et concrète, en tutoyant. Tu ne peux utiliser QUE les faits fournis : n\'invente aucun chiffre, prix, fournisseur ou produit. Si les faits ne suffisent pas, dis-le.' },
         { role: 'user', content: `Question : ${question}\n\nFaits (source de vérité) :\n${facts}\n\nBrouillon de réponse à améliorer (garde tous les chiffres) :\n${draft}` },

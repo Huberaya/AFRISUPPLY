@@ -1,0 +1,48 @@
+Vérifications de bout en bout — 13 scripts contre une API réellement démarrée (base PostgreSQL embarquée, faux stockage S3)
+
+PASSAGE 3 — après l'échappement du HTML des e-mails, la règle sur les noms, le frein sur les invitations,
+la correction des fenêtres de dialogue et le réglage de la région (base neuve, code courant)
+Début 2026-11-12T18:28:50Z — fin 2026-11-12T18:44:50Z — code de sortie 0
+TOTAL : 535/535 vérifications · 13/13 scripts OK (mêmes comptes par script que le passage 2)
+
+PASSAGE 2 — arbre de travail de la branche arena/326bcc8c-afrisupply, après le chantier P0.4
+(passe quotidienne par tranches, délais des appels sortants, contrôle des régions)
+Début 2026-11-12T17:51:11Z — fin 2026-11-12T18:04:59Z — code de sortie 0
+
+chantier1_verif              RÉSULTAT CHANTIER 1 : 23/23 vérifications en direct OK
+chantier2_verif              === 41/41 vérifications réussies ===
+scenario_tests               BILAN : 49/49 OK, 0 KO
+chantier3_verif              === 26/26 vérifications réussies ===
+chantier4_verif              RÉSULTAT : 51/51 vérifications OK
+chantier5_verif              RÉSULTAT CHANTIER 5 : 42/42 vérifications OK
+chantier6_verif              === Résultat : 44/44 vérifications passées ===
+chantier7_verif              === Chantier 7 — 47/47 vérifications réussies ===
+chantier8_verif              === Chantier 8 — 36/36 vérifications réussies ===
+chantier9_verif              === Chantier 9 — 41/41 vérifications réussies ===
+chantier11_verif             === Chantier 11 — 40/40 vérifications réussies ===
+chantier12_verif             === Chantier 12 — 71/71 vérifications réussies ===
+chantier13_verif             CHANTIER 13 — 24/24 vérifications réussies
+
+TOTAL : 535/535 vérifications · 13/13 scripts OK
+
+Ce qui a changé dans les scripts pour ce passage (3 fichiers) :
+  - chantier6, chantier9, chantier12 : la passe quotidienne est demandée avec « force=1 ». Une passe par
+    jour étant désormais la règle, un script qui veut VOIR tourner la passe maintenant le demande
+    explicitement (comme le ferait un exploitant).
+  - chantier9 : +1 vérification — un second déclenchement ordinaire le même jour répond
+    « alreadyComplete » et ne refait rien.
+
+PASSAGE 1 — après les corrections P0.2 à P0.5 (commit dbbeaaf)
+Début 2026-11-12T15:21:34Z — fin 2026-11-12T15:35:27Z — code de sortie 0 — 534/534, 13/13 scripts.
+
+Référence avant corrections (commit 15c8b81, 2026-11-12 09:22–09:36Z) : 530/530.
+Écart cumulé : +5 vérifications (les droits d'exploitant exigent une adresse confirmée : scripts 7, 8,
+12 et 13 ; une passe par jour : script 9).
+
+Intégration continue (GitHub Actions, demande de fusion n° 1) — mêmes 13 scripts, sur les serveurs de GitHub :
+  45fc754  exécution 43252514046  Qualité : réussi (2 min 56 s) · Bout en bout : réussi (14 min 51 s)
+  2bf98b2  exécution 43256024698  Qualité : réussi (2 min 26 s) · Bout en bout : réussi (14 min 39 s)
+  dc0d382  exécution 43276393451  Qualité : réussi (1 min 52 s) · Bout en bout : réussi (14 min 45 s)
+  c2b843f  exécution 43283984008  Qualité : réussi (2 min 34 s) · Bout en bout : réussi (14 min 56 s) · Navigateur : réussi (1 min 15 s, 72/72)
+Ce sont les premières exécutions réussies de l'intégration continue depuis le 2026-09-23.
+Durées lues sur GitHub (heure de début et de fin de chaque tâche).

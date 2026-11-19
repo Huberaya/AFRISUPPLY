@@ -11,13 +11,25 @@ import {
 } from '@afrisupply/db';
 
 import { insertWithFreshReference } from '../lib/reference.js';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, type Env } from '../lib/auth.js';
+import { foreignRecipeIds } from '../lib/tenant.js';
+import { assertPlausibleQuantity } from './restaurant.js';
 import { forecastRecipes, forecastProducts, buildSmartCart, type CartOffer } from '../lib/forecast.js';
 import { compareOffers, recipeCost, marginAnalysis, supplierReliability, daysOfStock, stockStatus } from '../lib/engines.js';
 import { classifyIntent, llmRephrase, llmEnabled, EXAMPLE_QUESTIONS, eur, qty } from '../lib/assistant.js';
 
 export const intelligenceRoutes = new Hono<Env>();
 intelligenceRoutes.use('*', requireAuth, requireRestaurant);
+// Chantier P0.2 — préparer des commandes et régler le réassort automatique engage les achats du
+// restaurant : responsable requis, comme pour POST /api/orders. Avant, un employé créait des
+// commandes par le panier intelligent ou le réassort alors que la route principale le lui refusait.
+intelligenceRoutes.on(['POST'], '/smart-cart/checkout', requireMinRole('manager'));
+intelligenceRoutes.on(['PUT', 'DELETE'], '/reorder-rules/:inventoryItemId', requireMinRole('manager'));
+intelligenceRoutes.on(['POST'], '/reorder-rules/run', requireMinRole('manager'));
+
+/** Plafonds structurels d'un panier (mêmes valeurs que les autres chemins de commande). */
+const MAX_PACKS_PER_LINE = 1000;
+const MAX_ORDER_LINES = 80;
 const n = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 
 // -------------------------------------------------------------
@@ -135,7 +147,9 @@ intelligenceRoutes.delete('/forecast/events/:id', async (c) => {
     return c.json({ error: 'Identifiant d’événement invalide.' }, 400);
   }
   const db = await getDb();
-  await db.delete(forecastEvents).where(and(eq(forecastEvents.id, id), eq(forecastEvents.restaurantId, rid)));
+  // Chantier P0.3 : « supprimé » n'est répondu que si un événement de CE restaurant l'a réellement été.
+  const del = await db.delete(forecastEvents).where(and(eq(forecastEvents.id, id), eq(forecastEvents.restaurantId, rid))).returning({ id: forecastEvents.id });
+  if (!del.length) return c.json({ error: 'Événement introuvable' }, 404);
   return c.json({ deleted: true });
 });
 
@@ -159,22 +173,58 @@ intelligenceRoutes.get('/smart-cart', async (c) => {
   return c.json({ ...cart, needsCount: needs.length, horizonDays: ctx.horizon });
 });
 
-/** Transforme le panier (éventuellement modifié) en commandes préparées, une par fournisseur. */
+/**
+ * Transforme le panier (éventuellement modifié) en commandes préparées, une par fournisseur.
+ *
+ * Chantier P0.3 — tout est vérifié AVANT la première écriture, puis tout est créé ou rien :
+ *   - un fournisseur ou une offre qui n'appartient pas au restaurant fait refuser le panier
+ *     (avant : la ligne était ignorée en silence, et un panier sans ligne valide laissait une
+ *     commande orpheline à 0 € derrière une réponse 500) ;
+ *   - les quantités sont bornées comme pour une commande manuelle (colis par ligne, plausibilité
+ *     au regard de la consommation réelle), avec la même confirmation explicite `override`.
+ */
 intelligenceRoutes.post('/smart-cart/checkout', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb(); const user = c.get('user');
-  const body = z.object({ suppliers: z.array(z.object({ supplierId: z.string().uuid(), lines: z.array(z.object({ offerId: z.string().uuid(), packs: z.number().int().positive() })).min(1) })).min(1), source: z.string().default('panier_ia') }).safeParse(await c.req.json());
-  if (!body.success) return c.json({ error: 'Données invalides' }, 400);
-  const created: { reference: string; supplierName: string; total: number }[] = [];
+  const body = z.object({
+    suppliers: z.array(z.object({
+      supplierId: z.string().uuid(),
+      lines: z.array(z.object({ offerId: z.string().uuid(), packs: z.number().int().positive().max(MAX_PACKS_PER_LINE) })).min(1).max(MAX_ORDER_LINES),
+    })).min(1).max(50),
+    source: z.string().max(40).default('panier_ia'),
+    /** Confirmation explicite : autorise un volume au-delà du plafond de plausibilité. */
+    override: z.boolean().optional(),
+  }).safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: `Panier invalide : chaque ligne attend un nombre de colis entre 1 et ${MAX_PACKS_PER_LINE}.`, details: body.error.flatten() }, 400);
+
+  // --- 1. Validation complète, sans aucune écriture ---
+  type Prepared = { sup: typeof suppliers.$inferSelect; lines: { productId: string; offerId: string; packLabel: string; packs: number; quantity: string; unitPriceEur: string; lineTotalEur: string }[]; total: number };
+  const prepared: Prepared[] = [];
+  const asked: Parameters<typeof assertPlausibleQuantity>[1] = [];
   for (const s of body.data.suppliers) {
     const [sup] = await db.select().from(suppliers).where(and(eq(suppliers.id, s.supplierId), eq(suppliers.restaurantId, rid)));
-    if (!sup) continue;
-    const offs = await db.select().from(supplierOffers).where(and(eq(supplierOffers.supplierId, sup.id), inArray(supplierOffers.id, s.lines.map((l) => l.offerId))));
-    const lines = s.lines.flatMap((l) => { const o = offs.find((x) => x.id === l.offerId); if (!o) return []; const unit = n(o.packPriceEur) / n(o.packQty); return [{ productId: o.productId, offerId: o.id, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * n(o.packQty)).toFixed(3), unitPriceEur: unit.toFixed(4), lineTotalEur: (l.packs * n(o.packPriceEur)).toFixed(2) }]; });
-    const total = lines.reduce((a, l) => a + Number(l.lineTotalEur), 0);
+    if (!sup) return c.json({ error: 'Fournisseur introuvable' }, 404);
+    const wanted = [...new Set(s.lines.map((l) => l.offerId))];
+    const offs = await db.select({ offer: supplierOffers, product: products }).from(supplierOffers)
+      .innerJoin(products, eq(products.id, supplierOffers.productId))
+      .where(and(eq(supplierOffers.supplierId, sup.id), eq(supplierOffers.restaurantId, rid), inArray(supplierOffers.id, wanted)));
+    if (offs.length !== wanted.length) return c.json({ error: `Offre invalide pour ${sup.name} : rechargez le panier.`, code: 'offer_not_found' }, 400);
+    const lines = s.lines.map((l) => {
+      const { offer: o, product } = offs.find((x) => x.offer.id === l.offerId)!;
+      const packQty = n(o.packQty) || 1;
+      asked.push({ productId: product.id, productName: product.name, unit: product.baseUnit, category: product.category, packQty, packs: l.packs, quantity: l.packs * packQty });
+      return { productId: o.productId, offerId: o.id, packLabel: o.packLabel, packs: l.packs, quantity: (l.packs * packQty).toFixed(3), unitPriceEur: (n(o.packPriceEur) / packQty).toFixed(4), lineTotalEur: (l.packs * n(o.packPriceEur)).toFixed(2) };
+    });
+    prepared.push({ sup, lines, total: lines.reduce((a, l) => a + Number(l.lineTotalEur), 0) });
+  }
+  const outOfRange = await assertPlausibleQuantity(rid, asked, { override: body.data.override });
+  if (outOfRange) return c.json(outOfRange, 400);
+
+  // --- 2. Création : une commande préparée par fournisseur ---
+  const created: { reference: string; supplierName: string; total: number }[] = [];
+  for (const { sup, lines, total } of prepared) {
     const [order] = await insertWithFreshReference((reference) => db.insert(orders).values({ restaurantId: rid, supplierId: sup.id, reference, status: 'preparee', channel: sup.preferredChannel, expectedAt: new Date(Date.now() + sup.leadTimeHours * 3_600_000).toISOString().slice(0, 10), totalEur: total.toFixed(2), deliveryFeeEur: sup.deliveryFeeEur, source: body.data.source, createdBy: user.id }).returning());
-    const reference = order.reference;
     await db.insert(orderLines).values(lines.map((l) => ({ ...l, orderId: order.id })));
-    created.push({ reference, supplierName: sup.name, total });
+    created.push({ reference: order.reference, supplierName: sup.name, total });
   }
   return c.json({ created, message: `${created.length} commande${created.length > 1 ? 's' : ''} préparée${created.length > 1 ? 's' : ''} pour ${eur(created.reduce((a, x) => a + x.total, 0))}. Validez-les dans Achats.` }, 201);
 });
@@ -201,7 +251,8 @@ intelligenceRoutes.put('/reorder-rules/:inventoryItemId', async (c) => {
 
 intelligenceRoutes.delete('/reorder-rules/:inventoryItemId', async (c) => {
   const rid = c.get('restaurantId'); const db = await getDb();
-  await db.delete(reorderRules).where(and(eq(reorderRules.inventoryItemId, c.req.param('inventoryItemId')), eq(reorderRules.restaurantId, rid)));
+  const del = await db.delete(reorderRules).where(and(eq(reorderRules.inventoryItemId, c.req.param('inventoryItemId')), eq(reorderRules.restaurantId, rid))).returning({ id: reorderRules.id });
+  if (!del.length) return c.json({ error: 'Règle de réassort introuvable' }, 404);
   return c.json({ ok: true });
 });
 
@@ -227,6 +278,10 @@ intelligenceRoutes.post('/sales', async (c) => {
   const body = z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), lines: z.array(z.object({ recipeId: z.string().uuid(), portions: z.number().int().nonnegative() })), decrementStock: z.boolean().default(true) }).safeParse(await c.req.json());
   if (!body.success) return c.json({ error: 'Données invalides' }, 400);
   const { day, lines, decrementStock } = body.data;
+  // Chantier P0.2 (cloisonnement) : une vente ne peut porter que sur une recette de CE restaurant.
+  // Avant, l'identifiant d'une recette d'un autre restaurant était accepté : la vente était
+  // enregistrée et le stock de l'appelant décrémenté d'après les ingrédients de cette recette.
+  if ((await foreignRecipeIds(rid, lines.map((l) => l.recipeId))).length) return c.json({ error: 'Recette introuvable', code: 'recipe_not_found' }, 404);
   const prev = await db.select().from(sales).where(and(eq(sales.restaurantId, rid), eq(sales.day, day)));
   const prevMap = new Map(prev.map((p) => [p.recipeId, p.portions]));
   let consumed = 0;

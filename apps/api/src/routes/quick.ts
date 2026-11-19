@@ -43,6 +43,8 @@ quickRoutes.post('/quick/apply', async (c) => {
     const valid = new Set((await db.select({ id: recipes.id }).from(recipes).where(and(eq(recipes.restaurantId, rid), inArray(recipes.id, ids)))).map((r) => r.id));
     const prev = new Map((await db.select().from(sales).where(and(eq(sales.restaurantId, rid), eq(sales.day, day)))).map((p) => [p.recipeId, p.portions]));
     let applied = 0; let consumed = 0;
+    // Produits distincts dont le stock a bougé : deux plats qui partagent un ingrédient ne le comptent qu'une fois.
+    const touched = new Set<string>();
     for (const l of d.lines) {
       if (!valid.has(l.id)) continue;
       const portions = Math.round(l.qty); const delta = portions - (prev.get(l.id) ?? 0);
@@ -55,10 +57,10 @@ quickRoutes.post('/quick/apply', async (c) => {
         if (!item) continue;
         const q = n(ing.quantity) * delta; if (!q) continue;
         await db.insert(stockMovements).values({ restaurantId: rid, inventoryItemId: item.id, type: 'consommation', quantity: (-q).toFixed(3), note: `Saisie express ventes ${day}`, createdBy: user.id });
-        await db.update(inventoryItems).set({ quantity: Math.max(0, n(item.quantity) - q).toFixed(3), updatedAt: new Date() }).where(eq(inventoryItems.id, item.id)); consumed++;
+        await db.update(inventoryItems).set({ quantity: Math.max(0, n(item.quantity) - q).toFixed(3), updatedAt: new Date() }).where(eq(inventoryItems.id, item.id)); consumed++; touched.add(item.id);
       }
     }
-    return c.json({ ok: true, kind: d.kind, day, applied, stockLinesUpdated: consumed });
+    return c.json({ ok: true, kind: d.kind, day, applied, stockLinesUpdated: consumed, stockProductsUpdated: touched.size });
   }
 
   const ids = d.lines.map((l) => l.id);

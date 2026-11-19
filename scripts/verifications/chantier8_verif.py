@@ -266,6 +266,10 @@ try:
 
     st, adm, _ = register(API, "admin@afrisupply.fr", "Admin C8", full="Admin AFS")  # l'admin des deux instances
     ADMIN_TOK = adm["token"] if st == 201 else None
+    # Chantier P0.2 : l'exploitant prouve son adresse par le lien de confirmation reçu à l'inscription.
+    lien_admin = ((adm or {}).get("emailVerification") or {}).get("devLink", "")
+    st_v, _v, _ = call(API, "POST", "/auth/verify-email", body={"token": lien_admin.split("token=")[-1]})
+    check("l'exploitant confirme son adresse (condition de ses droits)", st_v == 200, f"HTTP {st_v}")
     period = time.strftime("%Y-%m")
     st, dry, _ = call(API, "POST", "/admin/billing/commissions/invoice", ADMIN_TOK, body={"period": period, "dryRun": True})  # simulation : rien n'est émis
     mine = next((i for i in (dry.get("invoices") or []) if i.get("vendorId") == VID), None) if st == 200 else None

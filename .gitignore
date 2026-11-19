@@ -11,3 +11,16 @@ docs_*.png
 # Chantier 12 — sauvegardes et essais de restauration : des données clients ne se committent jamais.
 .backups/
 *.json.gz
+
+# Dépôt public : aucun fichier de données (tableur, export, carnet d'adresses, sauvegarde) n'y entre.
+# Le contrôle scripts/controle-depot-public.mjs échoue en intégration continue si l'un d'eux est suivi.
+*.xlsx
+*.xls
+*.ods
+*.vcf
+*.dump
+*.bak
+docs/**/*.csv
+docs/prospection/*
+!docs/prospection/README.md
+!docs/prospection/README_fournisseurs.md

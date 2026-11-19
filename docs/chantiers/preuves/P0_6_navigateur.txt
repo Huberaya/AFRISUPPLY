@@ -1,0 +1,188 @@
+P0.6 — PARCOURS DANS UN VRAI NAVIGATEUR : PREUVES
+==================================================
+Relevés du 2026-11-12. Navigateur réel (Chromium 153, sans affichage) piloté par
+scripts/navigateur/parcours.mjs, contre :
+  - le site CONSTRUIT (npm run build -w apps/web, servi tel quel — le même paquet JavaScript que celui
+    que la plateforme d'hébergement sert en production) ;
+  - une API réellement démarrée (npm run start -w apps/api), base PostgreSQL embarquée, e-mails écrits
+    sur disque.
+
+Ce que cela prouve : le site construit fonctionne dans un navigateur, de l'inscription à la
+déconnexion, avec l'API du dépôt. Ce que cela ne prouve PAS : le site de production (autre base, autres
+variables), ni la connexion par Clerk (service externe, injoignable depuis l'environnement de l'agent).
+C'est la première validation par navigateur du projet : l'audit P0.1 n'en avait aucune.
+
+Rejouer :
+  npm run build -w apps/web && npm run start -w apps/api &
+  (cd apps/web && API_URL=http://localhost:8787 npx vite preview --port 3100 --strictPort) &
+  npm run verifs:navigateur
+En intégration continue : tâche « Parcours dans un navigateur » (.github/workflows/ci.yml), avec le
+Chrome de la machine ; le rapport et les captures d'écran sont joints à chaque exécution.
+
+Première exécution sur GitHub (machine neuve, autre navigateur que celui de l'agent) :
+  commit c2b843f, exécution 43283984008, tâche « Parcours dans un navigateur » : réussie en 1 min 15 s
+  journal de la tâche : « Appels à l'API vus par le navigateur : 215 (dont 0 en erreur 5xx) »
+                        « BILAN NAVIGATEUR : 72/72 vérifications réussies »
+  pièce jointe « parcours-navigateur » : 21 fichiers (rapport et captures d'écran)
+L'application y tourne sous Node 20, comme les autres tâches ; seul l'outil de pilotage utilise Node 22.
+
+
+1. DÉFAUT TROUVÉ PAR CE PARCOURS — fenêtre « Nouveau fournisseur » hors de l'écran
+--------------------------------------------------------------------------------------------
+Constat (premier passage du parcours, avant correction) : sur un restaurant qui vient de s'inscrire,
+le parcours n'a pas pu saisir le nom du fournisseur — le champ n'était pas cliquable.
+
+Mesures dans le navigateur, écran de 1366 × 900, AVANT correction :
+
+  A. Restaurant neuf (liste de fournisseurs vide)
+     page animée   : transform = matrix(1, 0, 0, 1, 0, 0)   haut 198 → bas 278 (80 px de haut)
+     voile         : haut 198 → bas 278, gauche 288 → droite 1334      ne couvre PAS l'écran
+     fenêtre       : haut -167 → bas 643                               167 px au-dessus de l'écran
+     champ « Nom du fournisseur » (obligatoire) : haut -62 → bas -24   HORS de l'écran, non cliquable
+
+  B. Restaurant de démonstration (liste pleine)
+     voile         : haut 198 → bas 810                                ne couvre pas l'écran
+     fenêtre       : haut 99 → bas 909 ; champ : 204 → 242             visible
+
+Cause : les pages de l'espace client ont une animation d'entrée qui se terminait sur
+« transform: translateY(0) » et gardait cet état. Une transformation, même nulle, fait de l'élément le
+repère de tout ce qui est en « position: fixed » à l'intérieur : les fenêtres de dialogue se plaçaient
+donc par rapport à la PAGE et non à l'écran. Avec une page courte (un client qui démarre), le haut de la
+fenêtre sortait de l'écran. Le défaut ne se voyait pas sur le compte de démonstration, dont les listes
+sont longues — c'est le compte avec lequel l'application a été mise au point.
+
+Portée : 13 écrans ouvrent une fenêtre de dialogue de cette façon ; 34 écrans portent l'animation.
+Les tests existants ne pouvaient pas le voir : ils s'exécutent sans moteur de mise en page.
+
+Correction :
+  - apps/web/tailwind.config.js : l'animation se termine sur « transform: none » ;
+  - apps/web/src/components/Modal.tsx : la fenêtre est rendue dans le document (portail), jamais dans
+    la page qui l'ouvre.
+
+Mesures APRÈS correction (identiques pour A et B) :
+     voile   : haut 0 → bas 900, gauche 0 → droite 1366     couvre tout l'écran
+     fenêtre : haut 45 → bas 855                             dans l'écran
+     champ   : haut 150 → bas 188                            visible et cliquable
+
+Captures : navigateur/fenetre-fournisseur-AVANT-restaurant-neuf.jpg, …-APRES-restaurant-neuf.jpg,
+…-AVANT-restaurant-demo.jpg.
+Garde-fous : le parcours mesure cette géométrie à chaque exécution (parcours 5) ;
+apps/web/src/components/Modal.render.test.tsx (3 tests).
+
+
+2. AUTRES CONSTATS DU PARCOURS
+--------------------------------------------------------------------------------------------
+  - Page de statut publique : la tâche « offsite-backup » s'affichait sous son nom technique, et le
+    résultat des passages en anglais (« ok », « error »). Corrigé : libellés en français.
+  - E-mail d'invitation : le rôle était écrit sous son nom technique (« staff »). Corrigé : « Équipe
+    (quotidien) », comme dans l'application.
+  - Page « Abonnement » sans paiement en ligne configuré : le client voit la liste des variables à
+    renseigner (STRIPE_SECRET_KEY…). Comportement voulu et testé par le dépôt (transparence) ; relevé
+    pour le dossier de commercialisation, non modifié.
+  - Captures : les émoticônes ne s'affichent pas (police absente du navigateur d'essai) — sans rapport
+    avec l'application.
+
+
+3. PASSAGE COMPLET — code courant, base neuve
+--------------------------------------------------------------------------------------------
+Navigateur : HeadlessChrome/153.0.8010.0 (@sparticuz/chromium)
+Site       : http://localhost:3100
+
+1. Le site public s’affiche (pages commerciales et légales)
+  [OK]   l’API répond derrière le site (même origine, comme en production) — HTTP 200
+  [OK]   page /
+  [OK]   page /pour-les-restaurants
+  [OK]   page /tarifs
+  [OK]   page /fonctionnalites
+  [OK]   page /faq
+  [OK]   page /cgv
+  [OK]   page /cgv-fournisseur
+  [OK]   page /mentions-legales
+  [OK]   page /statut
+  [OK]   page /catalogue
+  [OK]   page /connexion
+  [OK]   page /inscription
+  [OK]   page /mot-de-passe-oublie
+  [OK]   adresse inconnue : page « introuvable » propre, pas un écran blanc
+
+2. Sans session, l’espace client est fermé
+  [OK]   /app sans session renvoie à la connexion — arrivé sur /connexion
+  [OK]   /app/stock sans session renvoie à la connexion — arrivé sur /connexion
+
+3. Inscription et création du restaurant (formulaire réel)
+  [OK]   le formulaire annonce les conditions générales et la politique de confidentialité, avec leurs liens
+  [OK]   après l’inscription, on arrive dans l’espace client (parcours de démarrage) — arrivé sur /app/demarrer
+  [OK]   l’inscription a été acceptée par l’API — HTTP 201
+  [OK]   la session est un cookie illisible par le JavaScript (HttpOnly) — afs_token · HttpOnly=true · SameSite=Lax
+  [OK]   aucun jeton de session dans le stockage du navigateur
+  [OK]   l’écran de démarrage s’affiche sans erreur
+
+4. Chaque écran de l’espace client s’affiche (session réelle, données réelles)
+  [OK]   écran /app
+  [OK]   écran /app/stock
+  [OK]   écran /app/stock/prevision
+  [OK]   écran /app/achats
+  [OK]   écran /app/achats/panier
+  [OK]   écran /app/achats/ecarts
+  [OK]   écran /app/fournisseurs
+  [OK]   écran /app/catalogue
+  [OK]   écran /app/marketplace
+  [OK]   écran /app/courses
+  [OK]   écran /app/ventes
+  [OK]   écran /app/recettes
+  [OK]   écran /app/analyse
+  [OK]   écran /app/ia
+  [OK]   écran /app/express
+  [OK]   écran /app/import
+  [OK]   écran /app/parametres
+  [OK]   écran /app/equipe
+  [OK]   écran /app/abonnement
+  [OK]   écran /app/mes-donnees
+  [OK]   écran /app/profil
+  [OK]   écran /app/etablissements
+  [OK]   écran inconnu dans l’espace client : message propre
+
+5. Fournisseurs : création par le formulaire
+  [OK]   la fenêtre « Nouveau fournisseur » couvre tout l’écran et tient dedans — voile 0→900 px, fenêtre 45→855 px, champ 150→188 px, écran 900 px
+  [OK]   son premier champ (obligatoire) est visible et cliquable — voile 0→900 px, fenêtre 45→855 px, champ 150→188 px, écran 900 px
+  [OK]   le fournisseur est créé par l’API — HTTP 201
+  [OK]   le fournisseur apparaît dans la liste
+  [OK]   il est toujours là après rechargement de la page (donnée enregistrée, pas seulement affichée)
+  [OK]   sa fiche s’ouvre
+
+6. Équipe : invitation d’un membre
+  [OK]   l’invitation est acceptée par l’API — /api/members → HTTP 201
+  [OK]   la personne invitée apparaît dans l’équipe
+
+7. Droits : un client n’entre pas dans les écrans d’exploitation
+  [OK]   l’API refuse les données d’exploitation à un client (403) — /api/admin/ops → 403, /api/admin/backups → 403, /api/admin/audit → 403
+  [OK]   aucune donnée d’exploitation n’est affichée — AFRISUPPLY Retour à l’accueil RESTAURANT Chez Navigateur mwdvryyf Essai Gratuit Connecté·e comme Propriétaire AUJOURD’HU
+
+8. Déconnexion
+  [OK]   la déconnexion est enregistrée par l’API — HTTP 200
+  [OK]   on quitte l’espace client — arrivé sur /connexion
+  [OK]   après déconnexion, l’espace client est de nouveau fermé — arrivé sur /connexion
+
+8 bis. La personne invitée accepte l’invitation, se connecte, et n’a que les droits de son rôle
+  [OK]   l’e-mail d’invitation est réellement écrit, avec un lien personnel — Subject: Awa Navigateur vous invite sur AFRISUPPLY — Chez Navigateur mwdvryyf
+  [OK]   l’e-mail ne contient aucun mot de passe
+  [OK]   le mot de passe est choisi par la personne elle-même (lien accepté par l’API) — HTTP 200
+  [OK]   elle entre dans le restaurant qui l’a invitée — /app
+  [OK]   rôle « équipe » : l’écran Équipe ne lui propose pas d’inviter
+  [OK]   sa session lit le stock (200) mais ne modifie pas les réglages (403) et n’invite personne (403) — {"lecture":200,"ecriture":403,"invitation":403}
+  [OK]   aucune erreur de page pendant ce parcours
+  [OK]   le lien d’invitation ne sert qu’une fois — AFRISUPPLY Retour à l’accueil Nouveau mot de passe Ce lien n’est plus valable (expiré ou déjà utilisé)
+
+9. Connexion
+  [OK]   mauvais mot de passe : message clair, on reste sur la page de connexion — © 2026 AFRISUPPLY · Connexion chiffrée, session protégée Retour à l’accueil Connexion E-mail ou mot de passe incorrect V
+  [OK]   bon mot de passe : on entre dans l’espace client — arrivé sur /app
+  [OK]   on retrouve ses données (le fournisseur créé plus haut)
+
+10. Expiration de la session
+  [OK]   session expirée : retour à la connexion, sans écran cassé — arrivé sur /connexion
+  [OK]   aucune erreur JavaScript pendant l’expiration
+
+Appels à l’API vus par le navigateur : 215 (dont 0 en erreur 5xx)
+BILAN NAVIGATEUR : 72/72 vérifications réussies
+code de sortie=0
+fin 2026-11-12T18:28:43Z

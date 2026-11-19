@@ -11,6 +11,7 @@
 // régénérait pas le bundle. On exige donc désormais que le build Vercel le régénère lui-même
 // (`node api/build.mjs` dans `vercel.json`).
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -76,4 +77,45 @@ try {
   }
 }
 
-process.exit(ok && deploieLeBundle ? 0 : 1);
+// --- Troisième contrôle : la fonction déployée charge-t-elle les mêmes dépendances que les tests ? ---
+// `api/index.js` est à la racine du dépôt : à l'exécution, ses dépendances externes (hono, zod,
+// drizzle-orm…) sont cherchées depuis la RACINE. Les tests, eux, s'exécutent dans `apps/api` et
+// `packages/db`. Si une dépendance n'est installée que dans un espace de travail, ou y existe dans
+// une autre version qu'à la racine, la production charge autre chose que ce qui a été testé — ou ne
+// démarre pas du tout (module introuvable). Constaté lors du chantier P0.5 : après une mise à jour,
+// `zod` et `@hono/node-server` n'étaient plus résolus à la racine dans la version testée.
+const requireDepuis = (dossier) => createRequire(path.join(root, dossier, 'package.json'));
+const versionVue = (dossier, paquet) => {
+  // On remonte les dossiers node_modules comme le fait Node, sans dépendre du champ « exports » du paquet.
+  for (const base of requireDepuis(dossier).resolve.paths(paquet) ?? []) {
+    const fichier = path.join(base, paquet, 'package.json');
+    if (existsSync(fichier)) return JSON.parse(readFileSync(fichier, 'utf8')).version;
+  }
+  return null;
+};
+const nomDuPaquet = (specifier) => (specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0]);
+const source = readFileSync(BUNDLE, 'utf8');
+// Imports statiques (`import … from "paquet"`) et chargements à la demande (`await import("paquet")`).
+const specifiers = [
+  ...[...source.matchAll(/^import\s[^'"]*from\s+["']([^"'.][^"']*)["'];?$/gm)].map((m) => m[1]),
+  ...[...source.matchAll(/\bimport\(\s*["']([^"'.][^"']*)["']\s*\)/g)].map((m) => m[1]),
+];
+const externes = [...new Set(specifiers.filter((s) => !s.startsWith('node:')).map(nomDuPaquet))].sort();
+let dependancesCoherentes = true;
+for (const paquet of externes) {
+  const racine = versionVue('.', paquet);
+  const api = versionVue('apps/api', paquet);
+  const db = versionVue('packages/db', paquet);
+  if (!racine) {
+    dependancesCoherentes = false;
+    console.error(`\n✖ ${paquet} est importé par ${BUNDLE} mais introuvable depuis la racine du dépôt : la fonction déployée ne démarrerait pas.`);
+    console.error('  → déclarez-le dans les dépendances du package.json racine, à la même version que dans les espaces de travail.');
+  } else if ((api && api !== racine) || (db && db !== racine)) {
+    dependancesCoherentes = false;
+    console.error(`\n✖ ${paquet} : la fonction déployée chargerait la version ${racine}, les tests utilisent ${[api, db].filter((v) => v && v !== racine).join(' / ')}.`);
+    console.error('  → alignez les versions (package.json racine, apps/api, packages/db) puis relancez `npm install`.');
+  }
+}
+if (dependancesCoherentes) console.log(`✓ les ${externes.length} dépendances externes du bundle se résolvent depuis la racine, dans la version testée.`);
+
+process.exit(ok && deploieLeBundle && dependancesCoherentes ? 0 : 1);

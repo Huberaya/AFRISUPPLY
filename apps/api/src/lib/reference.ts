@@ -41,15 +41,27 @@ export async function syncSequenceToMax(opts: {
   pattern: string;
 }): Promise<number> {
   const db = await getDb();
-  await db.execute(sql.raw(`create sequence if not exists ${opts.sequence}`));
   // On lit, puis on n'écrit que si la séquence est réellement en retard : `setval` refuse 0 (une
   // séquence commence à 1) et une base neuve ne doit pas être modifiée pour rien.
-  const res = await db.execute(sql.raw(`
-    select
-      coalesce((select last_value from pg_sequences where schemaname = current_schema() and sequencename = '${opts.sequence}'), 0) as cur,
-      coalesce((select max(substring(${opts.column} from ${opts.digitsFrom})::int) from ${opts.table} where ${opts.column} ~ '${opts.pattern}'), 0) as maxref`));
-  const rows = (res as unknown as { rows?: Record<string, unknown>[] }).rows ?? (res as unknown as Record<string, unknown>[]);
-  const row = (Array.isArray(rows) ? rows[0] : rows) as { cur: string | number; maxref: string | number };
+  const lire = async () => {
+    const res = await db.execute(sql.raw(`
+      select
+        (select count(*)::int from pg_sequences where schemaname = current_schema() and sequencename = '${opts.sequence}') as existe,
+        coalesce((select last_value from pg_sequences where schemaname = current_schema() and sequencename = '${opts.sequence}'), 0) as cur,
+        coalesce((select max(substring(${opts.column} from ${opts.digitsFrom})::int) from ${opts.table} where ${opts.column} ~ '${opts.pattern}'), 0) as maxref`));
+    const rows = (res as unknown as { rows?: Record<string, unknown>[] }).rows ?? (res as unknown as Record<string, unknown>[]);
+    return (Array.isArray(rows) ? rows[0] : rows) as { existe: string | number; cur: string | number; maxref: string | number };
+  };
+  let row = await lire();
+  if (!Number(row?.existe ?? 0)) {
+    // Levée des réserves (chantier C) : la séquence n'est créée QUE si elle manque (base neuve, base
+    // restaurée). Avant, « create sequence if not exists » partait à chaque commande : une instruction
+    // de structure à chaque numéro, qu'un rôle PostgreSQL limité à la lecture et à l'écriture de
+    // lignes ne peut pas exécuter — même quand la séquence existe déjà. Avec le rôle applicatif
+    // minimal, les séquences sont créées d'avance par le propriétaire (packages/db/roles/afrisupply_app.sql).
+    await db.execute(sql.raw(`create sequence if not exists ${opts.sequence}`));
+    row = await lire();
+  }
   const cur = Number(row?.cur ?? 0);
   const maxref = Number(row?.maxref ?? 0);
   if (maxref > cur) {
@@ -58,6 +70,9 @@ export async function syncSequenceToMax(opts: {
   }
   return cur;
 }
+
+/** Séquences de numérotation de l'application (commandes, factures d'abonnement, litiges). Aucune n'est créée par une migration. */
+export const SEQUENCES_NUMEROTATION = ['order_ref_seq', 'subscription_invoice_seq', 'claim_ref_seq'] as const;
 
 /** Références de commande `AFS-AAAA-NNNNNN`. */
 export const syncOrderReferenceSequence = () =>

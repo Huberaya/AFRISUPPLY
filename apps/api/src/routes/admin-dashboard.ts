@@ -2,12 +2,11 @@
 import { Hono } from 'hono';
 import { desc, eq, gte, isNull, sql } from 'drizzle-orm';
 import { getDb, users, restaurants, vendors, vendorOffers, products, orders, inventoryItems, prospects, leads, commissions, auditLog } from '@afrisupply/db';
-import { requireAuth, type Env } from '../lib/auth.js';
+import { requireAuth, isPlatformAdmin, type Env } from '../lib/auth.js';
 
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 const n = (v: unknown) => Number(v ?? 0);
 export const adminDashboardRoutes = new Hono<Env>();
-adminDashboardRoutes.use('/admin/dashboard', requireAuth, async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+adminDashboardRoutes.use('/admin/dashboard', requireAuth, async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
 
 adminDashboardRoutes.get('/admin/dashboard', async (c) => {
   const db = await getDb(); const d30 = sql`now() - interval '30 days'`; const d7 = sql`now() - interval '7 days'`;

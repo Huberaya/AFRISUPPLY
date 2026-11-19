@@ -5,17 +5,17 @@ import { syncSequenceToMax } from '../lib/reference.js';
 import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb, claims, orders, orderLines, products, deliveryDiscrepancies, deliveries, vendors, vendorMembers, restaurants, restaurantMembers, users, alerts } from '@afrisupply/db';
-import { requireAuth, requireRestaurant, type Env } from '../lib/auth.js';
+import { requireAuth, requireRestaurant, requireMinRole, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { sendMessage } from '../lib/sms.js';
 import { logOrderEvent } from '../lib/order-events.js';
 import { audit } from '../lib/ops.js';
+import { h, nl2br } from '../lib/html.js';
 
 const APP_URL = () => process.env.APP_URL ?? 'http://localhost:5173';
 const n = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
 const KIND: Record<string, string> = { manquant: 'Manquant', abime: 'Abîmé / casse', erreur_produit: 'Erreur de produit', qualite: 'Qualité / DLC', autre: 'Autre' };
-const isAdmin = (email: string) => (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).includes(email.toLowerCase());
 
 // Numéro de litige `LIT-AAAA-NNNN` : même rattrapage de séquence que les commandes et les factures
 // (une base restaurée contient déjà des LIT-… et la séquence repartirait de 1).
@@ -28,13 +28,13 @@ async function nextClaimRef() {
 }
 async function notifyVendor(vendorId: string, subject: string, text: string, kind: 'order.confirmed' = 'order.confirmed') {
   const db = await getDb(); const [v] = await db.select().from(vendors).where(eq(vendors.id, vendorId)); if (!v) return;
-  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject, text, html: `<p>${text.replace(/\n/g, '<br>')}</p><p><a href="${APP_URL()}/fournisseur">Ouvrir mon espace</a></p>`, tags: { type: 'claim' } });
+  if (v.contactEmail) void sendMail({ to: v.contactEmail, subject, text, html: h`<p>${nl2br(text)}</p><p><a href="${APP_URL()}/fournisseur">Ouvrir mon espace</a></p>`, tags: { type: 'claim' } });
   const phone = v.whatsapp || v.contactPhone; if (phone) void sendMessage({ to: phone, prefer: v.whatsapp ? 'whatsapp' : 'sms', kind, vendorId, body: `AFRISUPPLY — ${subject}\n${text}\n${APP_URL()}/fournisseur` });
 }
 async function notifyRestaurant(restaurantId: string, subject: string, text: string) {
   const db = await getDb(); const [r] = await db.select({ settings: restaurants.settings }).from(restaurants).where(eq(restaurants.id, restaurantId));
   const rcpts = await db.select({ email: users.email }).from(restaurantMembers).innerJoin(users, eq(users.id, restaurantMembers.userId)).where(eq(restaurantMembers.restaurantId, restaurantId));
-  for (const x of rcpts) void sendMail({ to: x.email, subject, text, html: `<p>${text.replace(/\n/g, '<br>')}</p><p><a href="${APP_URL()}/app/achats/ecarts">Voir mes litiges</a></p>`, tags: { type: 'claim' } });
+  for (const x of rcpts) void sendMail({ to: x.email, subject, text, html: h`<p>${nl2br(text)}</p><p><a href="${APP_URL()}/app/achats/ecarts">Voir mes litiges</a></p>`, tags: { type: 'claim' } });
   if (r?.settings?.notifyPhone) void sendMessage({ to: r.settings.notifyPhone, kind: 'order.confirmed', restaurantId, body: `AFRISUPPLY — ${subject}\n${text}` });
 }
 const publicClaim = (c: typeof claims.$inferSelect) => ({ ...c, photo: undefined, hasPhoto: !!c.photo, kindLabel: KIND[c.kind] ?? c.kind });
@@ -42,6 +42,10 @@ const publicClaim = (c: typeof claims.$inferSelect) => ({ ...c, photo: undefined
 // ---------------- Restaurant ----------------
 export const claimRoutes = new Hono<Env>();
 claimRoutes.use('/claims', requireAuth, requireRestaurant); claimRoutes.use('/claims/*', requireAuth, requireRestaurant);
+// Chantier P0.2 — ouvrir, accepter ou escalader un litige engage le restaurant auprès de son grossiste :
+// responsable requis (l'écran « Écarts & réclamations » lui est déjà réservé).
+claimRoutes.on(['POST'], '/claims', requireMinRole('manager'));
+claimRoutes.on(['POST'], '/claims/:id/close', requireMinRole('manager'));
 
 claimRoutes.get('/claims', async (c) => {
   const db = await getDb(); const rid = c.get('restaurantId');
@@ -96,7 +100,7 @@ claimRoutes.post('/claims/:id/close', async (c) => {
   const [upd] = await db.update(claims).set({ status: 'escalade', message: body.data.message ? `${cl.message ?? ''}\n[Escalade] ${body.data.message}`.trim() : cl.message }).where(eq(claims.id, cl.id)).returning();
   void logOrderEvent(cl.orderId, 'note', `Litige ${cl.reference} escaladé à AFRISUPPLY`, 'restaurant');
   const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  for (const to of admins) void sendMail({ to, subject: `🚨 Litige escaladé ${cl.reference} (${eur(n(cl.claimedEur))})`, text: `Le restaurant conteste la réponse du grossiste.\nLitige : ${cl.reference} — ${cl.productName} — réclamé ${eur(n(cl.claimedEur))}, proposé ${cl.resolution ?? '—'} ${cl.creditEur ? eur(n(cl.creditEur)) : ''}.\nMessage : ${body.data.message ?? '—'}\n${APP_URL()}/app/admin/litiges`, html: `<p>Litige <b>${cl.reference}</b> escaladé — ${cl.productName}, réclamé ${eur(n(cl.claimedEur))}.</p><p><a href="${APP_URL()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: 'claim' } });
+  for (const to of admins) void sendMail({ to, subject: `🚨 Litige escaladé ${cl.reference} (${eur(n(cl.claimedEur))})`, text: `Le restaurant conteste la réponse du grossiste.\nLitige : ${cl.reference} — ${cl.productName} — réclamé ${eur(n(cl.claimedEur))}, proposé ${cl.resolution ?? '—'} ${cl.creditEur ? eur(n(cl.creditEur)) : ''}.\nMessage : ${body.data.message ?? '—'}\n${APP_URL()}/app/admin/litiges`, html: h`<p>Litige <b>${cl.reference}</b> escaladé — ${cl.productName}, réclamé ${eur(n(cl.claimedEur))}.</p><p><a href="${APP_URL()}/app/admin/litiges">Arbitrer</a></p>`, tags: { type: 'claim' } });
   return c.json({ claim: publicClaim(upd), message: 'AFRISUPPLY a été prévenu et arbitrera sous 3 jours ouvrés.' });
 });
 
@@ -134,8 +138,8 @@ vendorClaimRoutes.post('/vendor/claims/:id/respond', async (c) => {
 
 // ---------------- Admin : arbitrage ----------------
 export const adminClaimRoutes = new Hono<Env>();
-adminClaimRoutes.use('/admin/claims/*', requireAuth, async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
-adminClaimRoutes.use('/admin/claims', requireAuth, async (c, next) => { if (!isAdmin(c.get('user').email)) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+adminClaimRoutes.use('/admin/claims/*', requireAuth, async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
+adminClaimRoutes.use('/admin/claims', requireAuth, async (c, next) => { if (!isPlatformAdmin(c.get('user'))) return c.json({ error: 'Accès réservé' }, 403); await next(); });
 adminClaimRoutes.get('/admin/claims', async (c) => {
   const db = await getDb();
   const rows = await db.select({ cl: claims, restaurantName: restaurants.name, vendorName: vendors.name, reference: orders.reference }).from(claims).innerJoin(restaurants, eq(restaurants.id, claims.restaurantId)).innerJoin(vendors, eq(vendors.id, claims.vendorId)).innerJoin(orders, eq(orders.id, claims.orderId)).orderBy(desc(claims.createdAt)).limit(300);

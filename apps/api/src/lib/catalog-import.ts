@@ -78,7 +78,7 @@ export async function extractCatalogFromImage(imageDataUrl: string): Promise<{ o
   if (!process.env.LLM_API_KEY) return { ok: false, error: 'Lecture de photo indisponible : LLM_API_KEY non configuré. Collez le texte du tarif ou importez un fichier CSV/Excel.' };
   const base = process.env.LLM_BASE_URL ?? 'https://api.openai.com/v1'; const model = process.env.LLM_VISION_MODEL ?? process.env.LLM_MODEL ?? 'gpt-4o-mini';
   try {
-    const res = await fetch(`${base}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.LLM_API_KEY}` }, signal: AbortSignal.timeout(60_000),
+    const res = await fetch(`${base}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.LLM_API_KEY}` }, signal: AbortSignal.timeout(50_000),   // chantier P0.4 : sous la durée maximale d'une fonction (60 s), pour que l'erreur prévue soit réellement renvoyée
       body: JSON.stringify({ model, temperature: 0, max_tokens: 4000, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: CATALOG_PROMPT }, { role: 'user', content: [{ type: 'text', text: 'Voici le tarif.' }, { type: 'image_url', image_url: { url: imageDataUrl, detail: 'high' } }] }] }) });
     if (!res.ok) return { ok: false, error: `LLM HTTP ${res.status}` };
     const data = await res.json() as { choices?: { message?: { content?: string } }[] };

@@ -6,6 +6,7 @@ import { sendMessage } from '../lib/sms.js';
 import { recordJobRun, statusFrom } from '../lib/job-runs.js';
 import { notifyAllRestaurants } from '../lib/notify.js';
 import { watchdog } from '../lib/ops-health.js';
+import { h, nl2br } from '../lib/html.js';
 
 const APP_URL = () => process.env.APP_URL ?? 'http://localhost:5173';
 const eur = (v: number) => `${v.toFixed(2).replace('.', ',')} €`;
@@ -21,8 +22,15 @@ export async function remindPendingVendorOrders(opts: { hours?: number; now?: Da
     const text = `AFRISUPPLY — Rappel : la commande ${o.reference} de ${r.name} (${eur(Number(o.totalEur))}) attend votre réponse depuis ${Math.round((now.getTime() - (o.sentAt ?? o.createdAt).getTime()) / 3_600_000)} h.\nConfirmer / refuser : ${APP_URL()}/fournisseur/commandes`;
     const phone = v.whatsapp || v.contactPhone; let channel = 'none'; let ok = false;
     if (phone) { const res = await sendMessage({ to: phone, prefer: v.whatsapp ? 'whatsapp' : 'sms', kind: 'order.reminder', orderId: o.id, vendorId: v.id, restaurantId: r.id, body: text }); channel = res.channel; ok = res.ok; }
-    if (v.contactEmail) { const m = await sendMail({ to: v.contactEmail, subject: `⏰ Rappel : commande ${o.reference} de ${r.name} en attente`, text, html: `<p>${text.replace(/\n/g, '<br>')}</p>`, tags: { type: 'order_reminder' } }); ok = ok || m.ok; channel = channel === 'none' ? 'email' : `${channel}+email`; }
-    await db.update(orders).set({ vendorRemindedAt: now }).where(eq(orders.id, o.id));
+    if (v.contactEmail) { const m = await sendMail({ to: v.contactEmail, subject: `⏰ Rappel : commande ${o.reference} de ${r.name} en attente`, text, html: h`<p>${nl2br(text)}</p>`, tags: { type: 'order_reminder' } }); ok = ok || m.ok; channel = channel === 'none' ? 'email' : `${channel}+email`; }
+    // Reprise P0-M : une relance qui n'a rien remis ne doit pas marquer la commande comme relancée.
+    // Avant, `vendor_reminded_at` était posé dans tous les cas : un échec (prestataire en panne,
+    // expéditeur d'essai, canal non configuré) signifiait « plus jamais relancée », alors que le
+    // grossiste n'avait rien reçu. On ne marque que si au moins un canal a remis le message, ou
+    // s'il n'y avait aucun canal à essayer (aucun téléphone ni e-mail : rien à réessayer, et
+    // marquer évite de recompter la même commande en échec à chaque passage). Sinon la commande
+    // reste candidate au passage suivant : la relance repart, une seule fois, dès que l'envoi marche.
+    if (ok || channel === 'none') await db.update(orders).set({ vendorRemindedAt: now }).where(eq(orders.id, o.id));
     out.push({ reference: o.reference, vendor: v.name, channel, ok });
   }
   // Chantier 6 (audit) : chaque passage de job laisse une trace supervisable (qui a été relancé, par quel canal).
