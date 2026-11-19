@@ -21,6 +21,7 @@ import { runMigrations, getDb, trackProducts, visibleProductIds } from '@afrisup
 import { app } from '../app.js';
 import { _resetRateLimits } from '../lib/ops.js';
 import { creerAppel, inscrire, ajouterMembre, confirmerAdresse, type Compte, type Rep } from './aide-comptes.js';
+import { enProprietaire } from './en-proprietaire.js';   // remise à zéro du décor : pas une opération de l'application
 
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.DATABASE_URL = '';
 process.env.PGLITE_DIR = 'memory://p0-cloisonnement'; process.env.ADMIN_EMAILS = 'exploitant@afrisupply.test';
@@ -458,7 +459,7 @@ describe('3. Fournisseurs de la place de marché : cloisonnement entre eux, part
     expect(encours.status).toBe(200);
     expect(encours.text).not.toContain('Restaurant B');
     expect(encours.text).not.toContain(B.compte.rid);
-    await db.delete(dbm.vendorCreditTerms).where(eq(dbm.vendorCreditTerms.restaurantId, B.compte.rid));
+    await enProprietaire((d) => d.delete(dbm.vendorCreditTerms).where(eq(dbm.vendorCreditTerms.restaurantId, B.compte.rid)));   // table en UPSERT : suppression réservée au propriétaire
     // Le client légitime, lui, peut recevoir des conditions.
     const client = await appel('PUT', `/api/vendor/credit/${A.compte.rid}`, { paymentDays: 30 }, g1.h);
     expect(client.status).toBe(200);
