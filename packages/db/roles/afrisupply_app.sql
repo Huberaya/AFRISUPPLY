@@ -69,7 +69,7 @@ CREATE SEQUENCE IF NOT EXISTS claim_ref_seq;
 GRANT USAGE ON SCHEMA public TO afrisupply_app;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO afrisupply_app;
 -- DELETE est refusé par défaut ; seules les tables avec suppression physique métier le reçoivent.
-DO $
+DO $$
 DECLARE
   t text;
 BEGIN
@@ -89,7 +89,7 @@ BEGIN
     EXECUTE format('REVOKE DELETE ON TABLE public.%I FROM afrisupply_app', t);
   END LOOP;
 END
-$;
+$$;
 -- UPDATE sur une séquence = droit de la réaligner (setval) après la restauration d'une sauvegarde.
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO afrisupply_app;
 
