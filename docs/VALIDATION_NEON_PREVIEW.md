@@ -152,3 +152,53 @@ insert into drizzle.__drizzle_migrations (hash, created_at) values ('x', 0);  --
 Interdits inchangés : aucune écriture sur la branche de production, aucune migration, aucun mot de
 passe ni chaîne de connexion dans une conversation ou dans le dépôt. Une adresse ne se confirme que
 par le lien reçu par e-mail, jamais par une écriture en base.
+
+## 8. Mise à jour du 19 novembre 2026 — le rôle minimal est qualifié en Preview
+
+### 8.1 Ce que les relevés en lecture seule du 19 novembre établissent
+
+Relevés **vérifiés par le titulaire** sur la branche Preview `preview-clean-20261117`, en lecture
+seule. L'agent n'a aucun accès à Neon (aucun connecteur, `psql` et `neonctl` absents, réseau sortant
+fermé) : ces lignes rapportent son contrôle, pas le sien.
+
+| Constat | État |
+|---|---|
+| Connexion effective sous `afrisupply_app` | ÉTABLI |
+| Rôle non superutilisateur, sans `BYPASSRLS`, sans création de rôles ni de bases | ÉTABLI |
+| Aucune appartenance à un autre rôle | ÉTABLI |
+| 29 migrations visibles | ÉTABLI |
+| Restrictions `UPDATE` / `DELETE` vérifiées sur les tables sensibles | ÉTABLI |
+| Aucun droit `UPDATE` / `DELETE` correspondant pour `PUBLIC` | ÉTABLI |
+
+La qualification **du rôle applicatif minimal en Preview est donc prouvée**. C'est la condition 11 de
+`docs/audits/VALIDATION_PRE_FUSION.md` : elle passe d'« EN ATTENTE EXTERNE » à « PROUVÉ ».
+
+### 8.2 Les trois choses à ne pas confondre
+
+Cette section existe parce que les trois se ressemblent et ne se prouvent pas l'une par l'autre.
+
+| # | Objet | État | Ce qui le prouve, ou son absence |
+|---|---|---|---|
+| 1 | **Les droits du rôle applicatif en Preview** | **PROUVÉ** | Les six constats du § 8.1, relevés par le titulaire sur `preview-clean-20261117` |
+| 2 | **L'indépendance de l'environnement et l'absence de données réelles** | **NON DÉMONTRÉ** | Cette Preview est **issue de la branche Production**. Le § 4.1 l'établit déjà : parent `br-soft-snow-b1g7doab` (production), `init_source = parent-data`. Rien dans les relevés du 19 novembre ne porte sur le contenu des tables ni sur une séparation d'avec les données réelles. **Ne pas présenter cette Preview comme indépendante ni comme vide** |
+| 3 | **Les qualifications Production** | **DISTINCTES, NON FAITES** | Aucun relevé du 19 novembre ne porte sur la branche Production. Les conditions 7, 9, 10, 13, 14, 15 et 17 de `VALIDATION_PRE_FUSION.md` restent inchangées |
+
+Le point 2 est celui qui prête le plus à confusion : un rôle correctement restreint sur une copie de
+la production ne dit rien sur l'isolement de cette copie. Les deux se qualifient séparément.
+
+### 8.3 Ce que l'agent a vérifié lui-même ce jour, côté code
+
+Sur la tête de la demande de fusion n° 1 (`83710a78d0333aea96a6daf27bca880dfc91e99d`) :
+
+- le fichier de droits `packages/db/roles/afrisupply_app.sql` révoque `UPDATE` et `DELETE` sur les six
+  journaux (`audit_log`, `price_history`, `stock_movements`, `order_events`, `usage_events`,
+  `forecasts`) et `DELETE` sur `sales` et `vendor_credit_terms`, les mêmes révocations s'appliquant à
+  `PUBLIC` — c'est l'objet du commit `f468294` ;
+- la suite `levee-blocages-role.test.ts` verrouille ces attentes (19 essais) — commit `f38f42c` ;
+- les essais qui préparaient leur décor par un `DELETE` le font désormais sous le rôle propriétaire
+  (`en-proprietaire.ts`) — commit `83710a7` ;
+- l'exécution CI `44430488327` sur ce SHA exact est **verte, 4 tâches sur 4**, dont « API sous le rôle
+  PostgreSQL minimal ».
+
+Ce qui reste hors de portée de l'agent, inchangé : toute écriture sur Neon, la pose de
+`PREVIEW_DATABASE_URL`, et les qualifications Production.

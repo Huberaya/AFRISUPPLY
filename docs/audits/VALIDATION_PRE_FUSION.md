@@ -145,3 +145,92 @@ prestataire remet **à son seul titulaire de compte** (expéditeur d'essai). Le 
 réussie : l'API répond donc, et l'échec vient des restaurants en erreur d'envoi. Les journaux
 détaillés ne sont pas lisibles d'ici (l'hôte `results-receiver.actions.githubusercontent.com` n'est pas
 joignable depuis l'environnement de l'agent) — constat à confirmer dans l'interface GitHub.
+
+## 7. Mise à jour du 19 novembre 2026 — la fusion déclenche un déploiement Production
+
+### 7.1 Identité vérifiée ce jour sur GitHub
+
+| | |
+|---|---|
+| Demande de fusion n° 1 | `OPEN`, **brouillon**, `mergeable = MERGEABLE`, `mergeState = UNSTABLE` (un contrôle en cours) |
+| Branche source | `arena/326bcc8c-afrisupply` @ `83710a78d0333aea96a6daf27bca880dfc91e99d` |
+| Cible | `main` @ `15c8b81e665ab0b01e35e76fbae5f22c9c0271b0` — inchangé |
+| Diff | 194 fichiers, +27 465 / −9 871 |
+
+Chaîne des trois commits ajoutés pour lever les blocages de droits :
+
+```
+8002291 (déployé en Preview le 17 novembre)
+  └─ f468294  durcissement SQL — journaux en écriture seule, aucune suppression de trace
+      └─ f38f42c  suite de droits alignée (12 → 19 essais)
+          └─ 83710a7  décor préparé sous le rôle propriétaire   ← tête de la demande de fusion
+```
+
+### 7.2 Intégration continue sur le SHA exact de la tête
+
+| Exécution | Événement | SHA testé | Résultat |
+|---|---|---|---|
+| `44430488327` (tentative 2) | `workflow_dispatch` | `83710a78…` | **success**, 4 tâches sur 4 |
+| `44474784594` | `pull_request` | `83710a78…` | Qualité, rôle minimal et navigateur : **success** ; vérifications de bout en encore en cours au moment de cette rédaction |
+
+Sur `44430488327` : Qualité 2 m 35 s, vérifications de bout en bout 14 m 38 s, rôle minimal 2 m 04 s,
+navigateur 2 m 08 s. La tentative 1 avait vu le parcours navigateur interrompu à 19 m 42 s par le
+délai de 20 minutes du job ; relancé sur le même SHA, il a réussi en 1 m 35 s — blocage du pilote de
+navigateur, non régression.
+
+### 7.3 Le mécanisme qui interdit la fusion sans autorisation de déploiement
+
+Constat lu sur GitHub, pas déduit.
+
+1. **Chaque poussée crée un déploiement « Preview »** par `vercel[bot]` — le dernier porte la ref
+   `83710a78d033`, créé le 19 novembre à 00 h 37 UTC.
+2. **Les déploiements « Production » suivent `main`.** Le plus récent porte la ref
+   `15c8b81e665ab0b01e35e76fbae5f22c9c0271b0`, créé le 5 octobre à 08 h 19 UTC : c'est exactement le
+   HEAD actuel de `main`. Les cinq refs Production les plus récentes sont toutes des ancêtres de
+   `main` (vérifié par `git merge-base --is-ancestor`).
+3. **Deux contrôles Vercel sont attachés à la demande de fusion** (« Vercel » et « Vercel Preview
+   Comments ») : l'intégration Git Vercel est active sur ce dépôt.
+
+Conclusion : **fusionner la demande n° 1 dans `main` déclenche automatiquement un déploiement
+Production.** Aucun déploiement Production n'étant autorisé par la mission, la fusion est arrêtée
+avant d'être faite. Ce n'est pas une réserve de qualité du code : c'est une conséquence du câblage
+Vercel, que seul le titulaire peut lever.
+
+Ce que ce déploiement ferait, et ne ferait pas, côté base :
+
+- `vercel.json` pose `buildCommand = node scripts/deploy-migrate.mjs && npm run build -w apps/web && node api/build.mjs` ;
+- `scripts/deploy-migrate.mjs` **n'applique rien par défaut**. En production il exécute un contrôle en
+  lecture seule (`migrate:status`) et interrompt le déploiement si la base est en retard sur le code ;
+- les migrations ne sont appliquées que si `MIGRATE_ON_BUILD=apply` est posé pour cet environnement.
+  `VERCEL_MATRICE_ENVIRONNEMENTS.md` la note **absente** en Production, avec la mention « non vérifié » :
+  l'agent ne lit pas les variables et ne peut donc pas le confirmer ;
+- une prévisualisation ne se connecte jamais à `DATABASE_URL` : elle ne regarde que
+  `PREVIEW_DATABASE_URL`, et refuse si les deux désignent la même base.
+
+Le risque de migration involontaire est donc borné par le code. Le risque de **mise en ligne** du code
+de la branche sur l'URL de Production ne l'est pas : c'est lui qui rend la fusion non autorisée ici.
+
+### 7.4 Geste du titulaire pour autoriser la fusion
+
+Au choix, dans l'ordre du moins au plus engageant :
+
+1. autoriser explicitement le déploiement Production qui suivra la fusion ;
+2. ou, dans le projet Vercel, détacher `main` de la branche de production le temps de la fusion, puis
+   la rétablir ;
+3. ou protéger `main` et exiger un déploiement manuel.
+
+Aucune de ces trois actions n'est à la portée de l'agent : elles se font sur le tableau de bord
+Vercel ou dans les réglages du dépôt.
+
+### 7.5 Ce que cette passe a levé, et ce qui reste
+
+| # | Condition | Au 17 novembre | Au 19 novembre |
+|---|---|---|---|
+| 2 | Tâches CI vertes | à constater | **PROUVÉ** sur `83710a78` (exécution `44430488327`, 4 sur 4) |
+| 11 | Rôle minimal testé sur Neon Preview | EN ATTENTE EXTERNE | **PROUVÉ** (relevés du titulaire, `VALIDATION_NEON_PREVIEW.md` § 8.1) |
+| 17 | Données personnelles du dépôt public | branche PROUVÉ, historique BLOQUÉ | inchangé. Précision vérifiée : la tête de la branche ne contient plus que `docs/prospection/README.md` et `README_fournisseurs.md` ; les quatre fichiers de données (`.csv`, `.xlsx`) ont été retirés. **L'historique de `main` les contient toujours** (6 fichiers à `15c8b81`) : la décision privé/purge reste au titulaire |
+| 7, 9, 10, 13, 14, 15, 16 | Accès de l'exploitant, Clerk Preview, indépendance de la Preview, envoi réel, alertes, variables Vercel, quota | EN ATTENTE EXTERNE | **inchangé** — ces points portent sur des comptes et des services que l'agent n'ouvre pas |
+
+**Fusion : non effectuée.** Non pas pour un défaut du code, mais parce qu'elle déclenche un
+déploiement Production (§ 7.3), ce que la mission interdit. Le critère manquant est unique et précis :
+une autorisation de déploiement Production, ou un détachement temporaire de `main` côté Vercel.
