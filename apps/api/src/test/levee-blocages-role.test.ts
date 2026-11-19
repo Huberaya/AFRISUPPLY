@@ -29,6 +29,13 @@ const TABLES_DU_CODE = [...readFileSync(path.join(racine, 'packages/db/src/schem
 const JOURNAUX_IMMUABLES = ['audit_log', 'forecasts', 'order_events', 'price_history', 'stock_movements', 'usage_events'];
 /** Tables écrites par « INSERT … ON CONFLICT DO UPDATE » : UPDATE nécessaire, DELETE jamais utilisé. */
 const UPSERT_SANS_SUPPRESSION = ['sales', 'vendor_credit_terms'];
+/** Tables où le code effectue une suppression physique, relevées dans les routes métier. */
+const TABLES_AVEC_SUPPRESSION = [
+  'forecast_events', 'group_buy_participations', 'inventory_items', 'order_lines', 'products',
+  'prospects', 'rate_limits', 'recipe_ingredients', 'recipes', 'recurring_orders', 'reorder_rules',
+  'restaurant_members', 'restaurants', 'shopping_lists', 'supplier_offers', 'users',
+  'vendor_customer_prices', 'vendor_offers', 'vendor_price_tiers', 'vendor_routes',
+].sort();
 
 type Brut = { exec: (q: string) => Promise<unknown>; query: (q: string) => Promise<{ rows: Record<string, unknown>[] }> };
 const brut = (db: Db) => (db as unknown as { $client: Brut }).$client;
@@ -104,16 +111,17 @@ describe('rôle applicatif : les privilèges nécessaires, et aucun autre', () =
     for (const d of droits) expect(d, String(d.t)).toMatchObject({ lire: true, ajouter: true, vider: false, referencer: false, declencher: false, proprietaire: false });
   });
 
-  // Répartition exacte des droits d'écriture : 48 tables, dont 6 journaux (lecture + insertion seules)
-  // et 2 tables écrites par UPSERT (modification nécessaire, suppression inutile). Reprise P0-M, 17/11.
+  // Répartition exacte : seules les 20 tables avec une suppression métier conservent DELETE.
+  // Les 6 journaux sont immuables ; les 2 tables UPSERT gardent UPDATE mais pas DELETE.
   it('écriture : 40 tables en lecture/insertion/modification/suppression, 6 journaux sans modification ni suppression, 2 UPSERT sans suppression', async () => {
     const droits = await lignes(neuve, `
       select c.relname as t, has_table_privilege('${R}', c.oid, 'UPDATE') as modifier, has_table_privilege('${R}', c.oid, 'DELETE') as supprimer
       from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' order by 1`);
     const sans = (k: 'modifier' | 'supprimer') => droits.filter((d) => !d[k]).map((d) => String(d.t));
     expect(sans('modifier')).toEqual(JOURNAUX_IMMUABLES);
-    expect(sans('supprimer')).toEqual([...JOURNAUX_IMMUABLES, ...UPSERT_SANS_SUPPRESSION].sort());
-    expect(droits.filter((d) => d.modifier && d.supprimer)).toHaveLength(40);
+    expect(droits.filter((d) => d.supprimer).map((d) => String(d.t))).toEqual(TABLES_AVEC_SUPPRESSION);
+    expect(sans('supprimer')).toEqual(TABLES_DU_CODE.filter((t) => !TABLES_AVEC_SUPPRESSION.includes(t)).sort());
+    expect(droits.filter((d) => d.modifier && d.supprimer)).toHaveLength(20);
   });
 
   it('journal des migrations : lecture seule', async () => {
@@ -146,11 +154,11 @@ describe('rôle applicatif : les privilèges nécessaires, et aucun autre', () =
   // créé par une migration suivante ne devient donc immuable que si son nom est ajouté à
   // JOURNAUX_IMMUABLES et le fichier rejoué. Ce test verrouille ce comportement pour qu'il ne puisse
   // pas changer en silence.
-  it('privilèges par défaut : une table future reçoit les quatre droits d’écriture — un journal futur doit être ajouté à la liste', async () => {
+  it('privilèges par défaut : une table future reçoit SELECT/INSERT/UPDATE, jamais DELETE', async () => {
     await brut(neuve).exec('create table table_d_une_migration_future (id int primary key)');
     const [d] = await lignes(neuve, `select has_table_privilege('${R}', 'table_d_une_migration_future', 'SELECT') as lire, has_table_privilege('${R}', 'table_d_une_migration_future', 'INSERT') as ajouter, has_table_privilege('${R}', 'table_d_une_migration_future', 'UPDATE') as modifier, has_table_privilege('${R}', 'table_d_une_migration_future', 'DELETE') as supprimer, has_table_privilege('${R}', 'table_d_une_migration_future', 'TRUNCATE') as vider`);
     await brut(neuve).exec('drop table table_d_une_migration_future');
-    expect(d).toEqual({ lire: true, ajouter: true, modifier: true, supprimer: true, vider: false });
+    expect(d).toEqual({ lire: true, ajouter: true, modifier: true, supprimer: false, vider: false });
   });
 
   it('à l’usage : le rôle lit et écrit, et tout le reste lui est refusé', async () => {
@@ -185,7 +193,8 @@ describe('journaux immuables : une trace ne se réécrit pas et ne s’efface pa
   it('les six journaux sont protégés de la même façon, et personne d’autre ne l’est par accident', async () => {
     const droits = await lignes(neuve, `select c.relname as t, has_table_privilege('${R}', c.oid, 'UPDATE') as modifier, has_table_privilege('${R}', c.oid, 'DELETE') as supprimer
       from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' order by 1`);
-    expect(droits.filter((d) => !d.modifier || !d.supprimer).map((d) => String(d.t))).toEqual([...JOURNAUX_IMMUABLES, ...UPSERT_SANS_SUPPRESSION].sort());
+    expect(droits.filter((d) => !d.modifier).map((d) => String(d.t))).toEqual(JOURNAUX_IMMUABLES);
+    expect(droits.filter((d) => !d.supprimer).map((d) => String(d.t))).toEqual(TABLES_DU_CODE.filter((t) => !TABLES_AVEC_SUPPRESSION.includes(t)).sort());
     for (const t of JOURNAUX_IMMUABLES) {
       const [d] = await lignes(neuve, `select has_table_privilege('${R}', '${t}', 'SELECT') as lire, has_table_privilege('${R}', '${t}', 'INSERT') as ajouter, has_table_privilege('${R}', '${t}', 'TRUNCATE') as vider`);
       expect(d, t).toEqual({ lire: true, ajouter: true, vider: false });
