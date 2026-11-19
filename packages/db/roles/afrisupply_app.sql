@@ -67,7 +67,29 @@ CREATE SEQUENCE IF NOT EXISTS claim_ref_seq;
 
 -- Lire et écrire des lignes dans les tables de l'application, rien d'autre.
 GRANT USAGE ON SCHEMA public TO afrisupply_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO afrisupply_app;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO afrisupply_app;
+-- DELETE est refusé par défaut ; seules les tables avec suppression physique métier le reçoivent.
+DO $
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['forecast_events', 'group_buy_participations', 'inventory_items', 'order_lines', 'products', 'prospects', 'rate_limits', 'recipe_ingredients', 'recipes', 'recurring_orders', 'reorder_rules', 'restaurant_members', 'restaurants', 'shopping_lists', 'supplier_offers', 'users', 'vendor_customer_prices', 'vendor_offers', 'vendor_price_tiers', 'vendor_routes']
+  LOOP
+    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname = t) THEN
+      EXECUTE format('GRANT DELETE ON TABLE public.%I TO afrisupply_app', t);
+    END IF;
+  END LOOP;
+  -- Retirer explicitement DELETE de toutes les autres tables déjà présentes, y compris celles créées
+  -- avant cette version du script. Les 20 tables ci-dessus sont ensuite ré-autorisées.
+  FOR t IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+             AND c.relname <> ALL (ARRAY['forecast_events', 'group_buy_participations', 'inventory_items', 'order_lines', 'products', 'prospects', 'rate_limits', 'recipe_ingredients', 'recipes', 'recurring_orders', 'reorder_rules', 'restaurant_members', 'restaurants', 'shopping_lists', 'supplier_offers', 'users', 'vendor_customer_prices', 'vendor_offers', 'vendor_price_tiers', 'vendor_routes'])
+  LOOP
+    EXECUTE format('REVOKE DELETE ON TABLE public.%I FROM afrisupply_app', t);
+  END LOOP;
+END
+$;
 -- UPDATE sur une séquence = droit de la réaligner (setval) après la restauration d'une sauvegarde.
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO afrisupply_app;
 
@@ -82,7 +104,8 @@ END
 $$;
 
 -- Tables créées plus tard par une migration (jouée par le rôle propriétaire) : mêmes droits, d'office.
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO afrisupply_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO afrisupply_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE DELETE ON TABLES FROM afrisupply_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO afrisupply_app;
 -- Reprise P0-M : même règle pour le schéma du journal (une table future y reste lisible, jamais inscriptible).
 DO $$
