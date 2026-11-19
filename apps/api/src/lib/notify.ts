@@ -6,8 +6,8 @@
 //   • ventes non saisies depuis plusieurs jours (relance).
 // L'idempotence est portée par alerts.notified_at : une alerte n'est envoyée qu'une fois, même si
 // la fonction est appelée à la fois par la réception, par la route d'alertes et par le cron horaire.
-import { and, asc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { getDb, alerts, restaurants } from '@afrisupply/db';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { getDb, alerts, jobRuns, restaurants } from '@afrisupply/db';
 import { sendMail, maskEmail, MAIL_CONFIG_ERRORS, MAIL_ERROR_MESSAGES, type MailErrorCode } from './mailer.js';
 import { recordJobRun } from './job-runs.js';
 import { recipientsFor } from './recipients.js';
@@ -200,9 +200,68 @@ export const notifyBudgetMs = (env: NodeJS.ProcessEnv = process.env) => {
   return Number.isFinite(v) && v > 0 ? v : env.VERCEL ? 30_000 : 5 * 60_000;
 };
 
+/** Clé du verrou de transaction qui sérialise la prise du balayage (distincte de celle de la passe quotidienne). */
+const VERROU_BALAYAGE = 4_207_002;
+
+/**
+ * Durée du bail d'un balayage : tant qu'il court, aucun autre passage ne travaille. Toujours supérieure
+ * à la durée maximale d'une fonction (60 s, `vercel.json`) pour qu'un ouvrier vivant ne soit pas
+ * doublé, et assez courte pour qu'un ouvrier coupé net soit repris sans attendre.
+ */
+export const notifyLeaseMs = (env: NodeJS.ProcessEnv = process.env) => {
+  const v = Number(env.NOTIFY_LEASE_MS);
+  return Number.isFinite(v) && v > 0 ? v : env.VERCEL ? 75_000 : 10 * 60_000;
+};
+
+type PriseBalayage = { mode: 'occupee'; bailJusqua: string } | { mode: 'libre'; id: string; startedAt: Date };
+
+/**
+ * Prend le balayage, ou constate qu'un autre le tient.
+ *
+ * Sans ce bail, deux passages simultanés — le cron horaire et l'appel opportuniste de `reminders.ts`,
+ * ou deux crons qui se chevauchent — lisaient les MÊMES alertes en attente : les alertes ne sont
+ * marquées `notified_at` qu'APRÈS l'envoi, donc chacun envoyait son propre exemplaire. Le client
+ * recevait l'alerte deux fois. Même motif que la passe quotidienne (`jobs/daily.ts`) : un verrou de
+ * transaction pour que la prise soit sérialisée, puis un bail horodaté pour tenir l'exclusivité.
+ */
+async function prendreLeBalayage(): Promise<PriseBalayage> {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${VERROU_BALAYAGE})`);
+    const [row] = await tx.select({ id: jobRuns.id, status: jobRuns.status, summary: jobRuns.summary })
+      .from(jobRuns).where(and(eq(jobRuns.job, 'alerts-notify'), eq(jobRuns.status, 'running')))
+      .orderBy(desc(jobRuns.startedAt)).limit(1);
+    const bailJusqua = (row?.summary as { bailJusqua?: string } | null)?.bailJusqua;
+    if (row && bailJusqua && new Date(bailJusqua).getTime() > Date.now()) return { mode: 'occupee', bailJusqua };
+    const startedAt = new Date();
+    // Bail expiré (ouvrier coupé net) : on reprend sa ligne au lieu d'en ouvrir une seconde.
+    if (row) {
+      await tx.update(jobRuns).set({ startedAt, finishedAt: startedAt, summary: { bailJusqua: new Date(Date.now() + notifyLeaseMs()).toISOString(), reprise: true } }).where(eq(jobRuns.id, row.id));
+      return { mode: 'libre', id: row.id, startedAt };
+    }
+    const [cree] = await tx.insert(jobRuns).values({ job: 'alerts-notify', status: 'running', startedAt, finishedAt: startedAt, durationMs: 0, summary: { bailJusqua: new Date(Date.now() + notifyLeaseMs()).toISOString() } }).returning({ id: jobRuns.id });
+    return { mode: 'libre', id: cree.id, startedAt };
+  });
+}
+
+/** Clôt la ligne du balayage : le bail tombe, la ligne devient lisible par la supervision. */
+async function cloreLeBalayage(id: string, startedAt: Date, status: 'ok' | 'partial' | 'error', summary: Record<string, unknown>, error: string | null) {
+  const finishedAt = new Date();
+  try {
+    const db = await getDb();
+    await db.update(jobRuns).set({ status, finishedAt, durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()), summary, error }).where(eq(jobRuns.id, id));
+  } catch (e) { console.error('[job_runs] alerts-notify', (e as Error).message); }
+}
+
 /** Balayage des restaurants qui ont une alerte à recevoir : utilisé par le cron (et au plus toutes les 15 min en opportuniste). */
 export async function notifyAllRestaurants(opts: { now?: Date; limit?: number; budgetMs?: number } = {}) {
-  const startedAt = new Date(); const db = await getDb();
+  const db = await getDb();
+  // Un seul balayage à la fois : deux passages simultanés enverraient chacun les mêmes alertes.
+  const prise = await prendreLeBalayage();
+  if (prise.mode === 'occupee') {
+    return { ranAt: new Date().toISOString(), restaurants: 0, withAlerts: 0, emails: 0, failed: 0, skipped: 0, remaining: 0, reasons: {}, details: [], skippedBecause: 'another_sweep_running' as const, leaseUntil: prise.bailJusqua };
+  }
+  const startedAt = prise.startedAt;
   const now = opts.now ?? new Date();
   const cutoff = new Date(now.getTime() - IMMEDIATE_WINDOW_HOURS() * 3_600_000);
   const budget = opts.budgetMs ?? notifyBudgetMs();
@@ -238,10 +297,8 @@ export async function notifyAllRestaurants(opts: { now?: Date; limit?: number; b
   // passage suivant reprend le reste. « error » : rien n'a pu partir.
   const status = failed === 0 && remaining === 0 ? 'ok' : sent > 0 || (failed === 0 && remaining > 0) ? 'partial' : 'error';
   const message = [failed ? `${failed} restaurant(s) sans envoi${cause ? ` [${cause}]` : ''}${explain}` : '', remaining ? `${remaining} restaurant(s) reporté(s) au passage suivant (temps imparti atteint)` : ''].filter(Boolean).join(' ; ');
-  await recordJobRun({
-    job: 'alerts-notify', startedAt, status,
-    summary: { restaurants: Number(total), withAlerts: details.length, emails: sent, failed, skipped, remaining, reasons, ...(blocked ? { stoppedSendingFor: blocked } : {}) },
-    error: message || null,
-  });
+  await cloreLeBalayage(prise.id, startedAt, status as 'ok' | 'partial' | 'error',
+    { restaurants: Number(total), withAlerts: details.length, emails: sent, failed, skipped, remaining, reasons, ...(blocked ? { stoppedSendingFor: blocked } : {}) },
+    message || null);
   return { ranAt: now.toISOString(), restaurants: Number(total), withAlerts: details.length, emails: sent, failed, skipped, remaining, reasons, details };
 }

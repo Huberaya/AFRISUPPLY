@@ -76,5 +76,26 @@ L'état réel de la base se lit aussi sans console : `GET /api/status` → `chec
 - [ ] Mot de passe du compte démo changé si l'URL est publique
 - [ ] Neon : rétention PITR ≥ 7 jours
 
+## 6. E-mails et alertes — journal de livraison, reprises
+
+**Chaque envoi laisse une trace en base.** `sendMail()` écrit une ligne dans la table `notifications` avec `channel = 'email'` (la table déjà utilisée par les envois WhatsApp/SMS) : la ligne est créée **avant** l'appel au prestataire avec `error = 'tentative'`, puis close avec `ok = true` et l'identifiant du prestataire (`provider_id`) en cas de remise, ou `ok = false` et le motif typé. `kind` porte le type d'envoi (`vendor_order`, `alert_immediate`, `daily_digest`, `invoice`, `invite`, `claim`…). Un envoi simulé (aucun prestataire) n'est jamais noté remis. Le journal n'empêche jamais un envoi de partir : si la base est indisponible, l'e-mail part quand même et un avertissement est écrit dans les journaux de la fonction.
+
+Pourquoi ce journal : douze envois du produit sont écrits `void sendMail(…)` — résultat jeté — dont la notification de **nouvelle commande** au fournisseur. Sans journal, un envoi refusé par le prestataire ou coupé net par la plateforme ne laissait aucune trace durable : les compteurs visibles dans `/api/status` sont en mémoire et repartent à zéro à chaque instance de fonction.
+
+Lire l'état des envois (lecture seule) :
+
+```sql
+select kind, ok, error, count(*) as n
+from notifications
+where channel = 'email' and created_at > now() - interval '1 day'
+group by 1, 2, 3 order by n desc;
+```
+
+**Un seul balayage d'alertes à la fois.** Le cron horaire, la route `/api/jobs/notify` et l'appel opportuniste de `/api/jobs/reminders` peuvent se chevaucher. Le balayage tient désormais un bail dans `job_runs` (`job = 'alerts-notify'`, ligne `running` portant `summary.bailJusqua`) sous verrou advisory `4207002` — distinct de celui de la passe quotidienne (`4207001`). Un second passage dans la fenêtre répond `skippedBecause: "another_sweep_running"` sans rien envoyer. Durée du bail : `NOTIFY_LEASE_MS` (défaut **75 s** sur Vercel, la fonction étant arrêtée à 60 s, et **10 min** ailleurs). Un bail expiré n'arrête pas la reprise : le passage suivant le reprend et le referme.
+
+**Ce qui est repris tout seul, et ce qui ne l'est pas.** Les alertes de stock sont reprises par le cron horaire tant que `alerts.notified_at` est vide, et le récap quotidien tant que `restaurants.last_digest_at` n'est pas à jour : ces deux envois sont rejoués sans doublon. En revanche un e-mail transactionnel refusé (facture, commande, invitation) n'est pas renvoyé de lui-même : le journal dit qu'il a échoué et pourquoi, mais une reprise automatique exigerait une file d'attente conservant le contenu du message (migration à prévoir). Les motifs `mail_rate_limited`, `mail_provider_error` et `mail_network_error` sont passagers — l'envoi peut être rejoué. Les motifs de configuration (`mail_not_configured`, `mail_key_invalid`, `mail_domain_not_verified`, `mail_from_invalid`) frappent **tous** les messages : réessayer ne sert à rien tant que le domaine d'envoi n'est pas vérifié chez le prestataire (`docs/audits/RESEND_DIAGNOSTIC.md`).
+
+**Vérifier la remise côté prestataire.** Une ligne réussie porte l'identifiant renvoyé par le prestataire (`provider_id`) ; il se retrouve dans les journaux du compte d'envoi et permet de distinguer « accepté par le prestataire » de « remis dans la boîte du destinataire ». Aucun envoi réel n'est fait par les tests : le prestataire y est simulé par un serveur local, et un envoi réel de contrôle reste à faire sur une prévisualisation propre (`docs/audits/RESEND_VALIDATION_PREVIEW.md`).
+
 ## Vérifié depuis l'environnement de dev
 Handler `api/index.ts` appelé comme le ferait Vercel (Request → Response), connecté à Neon : `/api/health` → `db: neon`, login démo, dashboard, cron sans secret → 401, cron `Authorization: Bearer` → 200 en 8 s.
