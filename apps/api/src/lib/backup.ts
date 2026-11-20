@@ -21,7 +21,7 @@ import {
   inventoryItems, stockMovements, orders, orderLines, deliveries, deliveryDiscrepancies, recipes,
   recipeIngredients, sales, alerts, reorderRules, forecasts, forecastEvents, shoppingLists, feedback, usageEvents,
   notifications, orderEvents, recurringOrders, claims, subscriptionInvoices, billingEvents,
-  commissions, groupBuyParticipations, vendorCustomerPrices, vendorReviews,
+  commissions, groupBuyParticipations, vendorCustomerPrices, vendorReviews, vendorCreditTerms,
 } from '@afrisupply/db';
 
 export const BACKUP_FORMAT = 'afrisupply.backup';
@@ -97,6 +97,7 @@ export const BACKUP_TABLES: BackupTable[] = [
   { name: 'commissions', table: commissions, scope: 'external', column: 'orderId', parent: 'orders', note: 'commissions AFRISUPPLY liées aux commandes' },
   { name: 'vendor_reviews', table: vendorReviews, scope: 'external', column: 'restaurantId', note: 'avis déposés sur les grossistes' },
   { name: 'vendor_customer_prices', table: vendorCustomerPrices, scope: 'external', column: 'restaurantId', note: 'prix négociés avec les grossistes' },
+  { name: 'vendor_credit_terms', table: vendorCreditTerms, scope: 'external', column: 'restaurantId', note: 'conditions de crédit accordées par les grossistes (délai, plafond, blocage)' },
   { name: 'group_buy_participations', table: groupBuyParticipations, scope: 'external', column: 'restaurantId', note: 'participations aux achats groupés' },
 ];
 
@@ -405,8 +406,6 @@ export async function restoreDrill(backup: BackupFile) {
 
 // ---------------------------------------------------------------- fichiers
 
-const exists = async (p: string) => { try { await fs.access(p); return true; } catch { return false; } };
-
 /**
  * Dossier des sauvegardes locales.
  *
@@ -427,23 +426,58 @@ export const backupDir = () =>
 export const backupDiskEphemere = () => !process.env.BACKUP_DIR && Boolean(process.env.VERCEL);
 export const retentionDays = () => Math.max(1, Number(process.env.BACKUP_KEEP ?? 14));
 
-export interface BackupStored { name: string; sizeBytes: number; createdAt: string; restaurantId: string | null; restaurantName: string | null; rows: number; tables: number; checksum: string | null; version: number | null; mode: string | null }
+export interface BackupStored {
+  name: string; sizeBytes: number; createdAt: string; restaurantId: string | null; restaurantName: string | null;
+  rows: number; tables: number; checksum: string | null; version: number | null; mode: string | null;
+  /** État RÉEL du fichier sur disque, comparé à ce que la fiche annonce. Absent des fiches écrites avant ce contrôle. */
+  integre?: boolean;
+  probleme?: string | null;
+}
 
 /** Écrit le fichier sur disque (gzip) + une fiche lisible à côté : lister ne demande pas de décompresser. */
 export async function writeBackupFile(backup: BackupFile, dir = backupDir()) {
   await fs.mkdir(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15);   // AAAAMMJJTHHMMSS
   const base = `afs-${String(backup.restaurant.id).slice(0, 8)}-${stamp}-${backup.mode}`;
-  // Deux sauvegardes lancées dans la même seconde ne doivent JAMAIS s'écraser l'une l'autre :
-  // on suffixe plutôt que de perdre silencieusement un fichier.
-  let name = `${base}.json.gz`;
-  for (let i = 2; await exists(path.join(dir, name)); i++) name = `${base}-${i}.json.gz`;
   const body = gzipSync(Buffer.from(JSON.stringify(backup)));
-  await fs.writeFile(path.join(dir, name), body);
+
+  // Levée des blocages (chantier Sauvegardes) — deux sauvegardes lancées ensemble ne doivent JAMAIS
+  // s'écraser. « Tester si le nom existe, puis écrire » n'était pas atome : deux passages simultanés
+  // (cron et bouton admin, ou deux administrateurs) retenaient le même nom et le second écrasait le
+  // premier — une sauvegarde disparaissait sans trace. Le nom est désormais RÉSERVÉ par une création
+  // exclusive (`wx`, qui échoue si le fichier existe déjà), et le contenu est publié par un
+  // renommage : sous le nom définitif, il n'y a jamais de fichier à moitié écrit.
+  let name = `${base}.json.gz`;
+  for (let i = 2; ; i++) {
+    try { await fs.writeFile(path.join(dir, name), '', { flag: 'wx' }); break; }   // réservation du nom DÉFINITIF
+    catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      name = `${base}-${i}.json.gz`;          // nom déjà réservé par un autre passage : on prend le suivant
+    }
+  }
+  // Le contenu est écrit à part puis publié par-dessus la réservation : sous le nom définitif il n'y a
+  // jamais de fichier à moitié écrit pour un lecteur qui passe au mauvais moment.
+  const provisoire = path.join(dir, `.${name}.part-${process.pid}-${Date.now().toString(36)}`);
+  await fs.writeFile(provisoire, body);
+  await fs.rename(provisoire, path.join(dir, name));
+
+  // Vérification APRÈS écriture : on relit ce qui est réellement sur disque, on le décompresse et on
+  // contrôle l'empreinte. Un fichier qu'on ne sait pas relire n'est pas une sauvegarde : il est
+  // supprimé et l'échec est dit, plutôt que d'être annoncé comme réussi puis découvert des semaines
+  // plus tard, le jour où il faut restaurer.
+  const relu = await fs.readFile(path.join(dir, name));
+  let conforme = relu.length === body.length;
+  try { conforme = conforme && verifyBackup(JSON.parse(gunzipSync(relu).toString('utf8'))).checksumOk === true; }
+  catch { conforme = false; }
+  if (!conforme) {
+    await fs.rm(path.join(dir, name), { force: true });
+    throw new Error(`Sauvegarde refusée : le fichier écrit « ${name} » ne se relit pas à l'identique (${relu.length} octets contre ${body.length}) : il a été supprimé.`);
+  }
+
   const meta: BackupStored = {
     name, sizeBytes: body.length, createdAt: backup.createdAt, restaurantId: String(backup.restaurant.id),
     restaurantName: String(backup.restaurant.name ?? ''), rows: backup.totals.rows, tables: backup.totals.tables,
-    checksum: backup.checksum, version: backup.version, mode: backup.mode,
+    checksum: backup.checksum, version: backup.version, mode: backup.mode, integre: true, probleme: null,
   };
   await fs.writeFile(path.join(dir, `${name}.meta.json`), JSON.stringify(meta, null, 2));
   return meta;
@@ -454,10 +488,28 @@ export async function listBackups(dir = backupDir()): Promise<BackupStored[]> {
     const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.json.gz.meta.json'));
     const out: BackupStored[] = [];
     for (const f of files) {
-      try { out.push(JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as BackupStored); } catch { /* fiche illisible : ignorée */ }
+      try { out.push(await etatReel(JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as BackupStored, dir)); } catch { /* fiche illisible : ignorée */ }
     }
     return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch { return []; }
+}
+
+/**
+ * Compare l'état réel du fichier à ce que sa fiche annonce. Une écriture interrompue laisse un
+ * fichier tronqué que sa fiche décrit comme complet ; un nettoyage manuel laisse une fiche orpheline.
+ * Dans les deux cas la liste doit le DIRE : une sauvegarde dont on ne sait pas si elle est entière
+ * n'est pas une sauvegarde.
+ */
+async function etatReel(fiche: BackupStored, dir: string): Promise<BackupStored> {
+  try {
+    const reel = await fs.stat(path.join(dir, fiche.name));
+    if (typeof fiche.sizeBytes === 'number' && reel.size !== fiche.sizeBytes) {
+      return { ...fiche, integre: false, probleme: `Fichier incomplet : ${reel.size} octets sur le disque contre ${fiche.sizeBytes} annoncés (écriture interrompue ?).` };
+    }
+    return { ...fiche, integre: true, probleme: null };
+  } catch {
+    return { ...fiche, integre: false, probleme: 'Fichier absent du disque : la fiche est restée, la sauvegarde non.' };
+  }
 }
 
 export async function readBackupFile(name: string, dir = backupDir()): Promise<BackupFile> {
