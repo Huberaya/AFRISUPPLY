@@ -335,3 +335,74 @@ describe('numérotation des factures après RESTAURATION d’une sauvegarde (mê
     expect((doublons as unknown as { rows: unknown[] }).rows ?? []).toEqual([]);
   }, 30_000);
 });
+
+// Chantier Paiements — Stripe rejoue un événement non seulement après un échec, mais aussi en
+// parallèle : le réessai part pendant que la première livraison est encore en cours. Le rejeu
+// séquentiel était déjà couvert ci-dessus ; celui-ci ne l'était pas, et l'insertion en
+// `onConflictDoNothing` laissait alors passer les deux traitements. Sur `customer.subscription.*`,
+// les deux lisaient l'état « pas encore actif » et envoyaient chacun l'e-mail d'activation.
+describe('webhook : deux livraisons CONCURRENTES du même événement ne le traitent qu’une fois', () => {
+  const compteMailsActivation = async () => {
+    const fichiers = await readdir(OUTBOX).catch(() => [] as string[]);
+    const textes = await Promise.all(fichiers.filter((f) => f.endsWith('.txt')).map((f) => readFile(path.join(OUTBOX, f), 'utf8')));
+    return textes.filter((t) => /est actif/.test(t)).length;
+  };
+
+  it('un seul traitement, un seul e-mail d’activation, un seul événement en base', async () => {
+    const r2 = await reg(`concurrence-${Date.now()}@afrisupply.test`, 'Concurrence');
+    const avant = await compteMailsActivation();
+    const db = await getDb();
+    const [restoAvant] = await db.select({ etat: restaurants.subscriptionStatus }).from(restaurants).where(eq(restaurants.id, r2.rid));
+    expect(restoAvant.etat).not.toBe('active');   // la transition est réelle : l’e-mail est attendu une fois
+
+    const evenement = {
+      id: `evt_concurrent_${Date.now()}`, type: 'customer.subscription.updated',
+      data: { object: { id: 'sub_conc', object: 'subscription', customer: 'cus_fake_1', status: 'active', current_period_end: Math.floor(Date.now() / 1000) + 30 * 86_400, items: { data: [{ price: { id: 'price_pro' } }] }, metadata: { restaurantId: r2.rid, plan: 'pro' } } },
+    };
+
+    // Les deux livraisons partent ensemble : ni l’une ni l’autre ne peut se croire seule.
+    const [a, b] = await Promise.all([hook(evenement), hook(evenement)]);
+    expect(a.status).toBe(200); expect(b.status).toBe(200);
+
+    // Un seul des deux a traité ; l’autre a été reconnu comme doublon.
+    const doublons = [a.json, b.json].filter((j) => j.duplicate === true);
+    expect(doublons).toHaveLength(1);
+
+    // Un seul e-mail d’activation : c’est le doublon visible par le client.
+    expect(await compteMailsActivation()).toBe(avant + 1);
+
+    // Une seule ligne d’événement, menée à son terme.
+    const lignes = await db.select().from(billingEvents).where(eq(billingEvents.id, evenement.id));
+    expect(lignes).toHaveLength(1);
+    expect(lignes[0].status).toBe('traite');
+    expect(lignes[0].restaurantId).toBe(r2.rid);
+
+    // L’abonnement est bien appliqué, une seule fois.
+    const [resto] = await db.select().from(restaurants).where(eq(restaurants.id, r2.rid));
+    expect(resto.subscriptionStatus).toBe('active');
+    expect(resto.plan).toBe('pro');
+  }, 30_000);
+
+  it('une réclamation abandonnée reste reprenable : l’événement n’est pas perdu', async () => {
+    const db = await getDb();
+    const id = `evt_abandonne_${Date.now()}`;
+    // Une instance a pris l’événement puis a été interrompue : statut « en_cours », horodatage ancien.
+    await db.insert(billingEvents).values({ id, type: 'invoice.paid', status: 'en_cours', processedAt: new Date(Date.now() - 3_600_000) });
+    const r = await hook({ id, type: 'invoice.paid', data: { object: { id: `in_${id}`, customer: 'cus_fake_1', subscription: 'sub_fake_1', total: 10680, paid: true } } });
+    expect(r.status).toBe(200);
+    expect(r.json.duplicate).toBeUndefined();          // repris, pas ignoré
+    const [ligne] = await db.select().from(billingEvents).where(eq(billingEvents.id, id));
+    expect(ligne.status).toBe('traite');
+  }, 30_000);
+
+  it('une réclamation récente n’est pas volée : le second appelant attend son tour', async () => {
+    const db = await getDb();
+    const id = `evt_en_cours_${Date.now()}`;
+    await db.insert(billingEvents).values({ id, type: 'invoice.paid', status: 'en_cours', processedAt: new Date() });
+    const r = await hook({ id, type: 'invoice.paid', data: { object: { id: `in_${id}`, customer: 'cus_fake_1' } } });
+    expect(r.status).toBe(200);
+    expect(r.json.duplicate).toBe(true);               // une autre livraison le traite déjà
+    const [ligne] = await db.select().from(billingEvents).where(eq(billingEvents.id, id));
+    expect(ligne.status).toBe('en_cours');             // rien n’a été réécrit par-dessus
+  }, 30_000);
+});

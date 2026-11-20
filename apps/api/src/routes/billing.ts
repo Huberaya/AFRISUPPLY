@@ -1,7 +1,7 @@
 // Chantier 6 — Abonnements (Stripe Checkout / Portal / webhooks) + factures de commission fournisseurs.
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { and, eq, sql, desc } from 'drizzle-orm';
+import { and, eq, sql, desc, or, inArray, lt } from 'drizzle-orm';
 import { getDb, restaurants, billingEvents, subscriptionInvoices, commissions, commissionInvoices, vendors, orders, restaurantMembers, users } from '@afrisupply/db';
 import { requireAuth, requireRestaurant, requireMinRole, isPlatformAdmin, type Env } from '../lib/auth.js';
 import { applyOrderPayment, createOrderCheckout, paymentAvailability } from '../lib/payments.js';
@@ -96,6 +96,14 @@ async function mailInvoice(invoice: typeof subscriptionInvoices.$inferSelect, re
 
 export const billingPublicRoutes = new Hono<Env>();
 
+/**
+ * Ancienneté au-delà de laquelle une réclamation « en_cours » est considérée comme abandonnée :
+ * l'instance qui l'avait prise a été interrompue (redéploiement, dépassement de durée de fonction)
+ * et l'événement doit pouvoir être repris. Réglable pour les tests ; 10 minutes par défaut, soit
+ * bien au-delà de la durée maximale d'une fonction (60 s, `vercel.json`).
+ */
+export const CLAIM_STALE_MS = () => Math.max(1_000, Number(process.env.BILLING_CLAIM_STALE_MS ?? 600_000));
+
 /** Diagnostic public de l'état d'encaissement : aucune donnée client, aucun secret (supervision, page Statut). */
 billingPublicRoutes.get('/billing/health', async (c) => c.json(await billingHealth()));
 
@@ -106,9 +114,42 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
   try { evt = JSON.parse(raw); } catch { return c.json({ error: 'Charge utile illisible' }, 400); }
   if (!evt.id || !evt.type) return c.json({ error: 'Événement incomplet' }, 400);
   const db = await getDb();
-  const [known] = await db.select().from(billingEvents).where(eq(billingEvents.id, evt.id));
-  if (known?.status === 'traite') return c.json({ received: true, duplicate: true, type: known.type });
-  if (!known) await db.insert(billingEvents).values({ id: evt.id, type: evt.type, payload: { object: (evt.data?.object as { id?: string } | undefined)?.id } }).onConflictDoNothing();
+  // Réclamation atomique de l'événement, AVANT tout traitement.
+  //
+  // Stripe livre parfois le même événement plusieurs fois, y compris en parallèle : un réessai part
+  // pendant que la première livraison est encore en cours. Avant ce correctif, l'insertion en
+  // `onConflictDoNothing` n'arrêtait pas le perdant — les deux appels traitaient l'événement. Sur
+  // `customer.subscription.*`, les deux lisaient l'ancien état « pas encore actif » et envoyaient
+  // chacun l'e-mail d'activation : doublon réel, alors que le rejeu séquentiel, lui, était déjà couvert.
+  //
+  // Désormais un seul appelant obtient le droit de traiter :
+  //   • l'insertion rend une ligne → nous sommes le premier ;
+  //   • elle ne rend rien → l'événement existe déjà :
+  //       - « traite »           : doublon, on répond sans rien refaire ;
+  //       - « en_cours » récent  : une autre livraison le traite, on répond doublon ;
+  //       - « recu », « echec », ou « en_cours » plus ancien que le délai ci-dessous : réclamable.
+  //     La réclamation est un UPDATE conditionnel : PostgreSQL ne rend la ligne qu'à un seul
+  //     appelant, et une livraison interrompue ne perd donc pas l'événement.
+  const reclamations = await db.insert(billingEvents)
+    .values({ id: evt.id, type: evt.type, status: 'en_cours', payload: { object: (evt.data?.object as { id?: string } | undefined)?.id } })
+    .onConflictDoNothing()
+    .returning({ id: billingEvents.id });
+  if (reclamations.length === 0) {
+    const [known] = await db.select({ status: billingEvents.status, type: billingEvents.type }).from(billingEvents).where(eq(billingEvents.id, evt.id));
+    if (!known || known.status === 'traite') return c.json({ received: true, duplicate: true, type: known?.type ?? evt.type });
+    const reprise = await db.update(billingEvents)
+      .set({ status: 'en_cours', error: null, processedAt: new Date() })
+      .where(and(
+        eq(billingEvents.id, evt.id),
+        or(
+          inArray(billingEvents.status, ['recu', 'echec']),
+          and(eq(billingEvents.status, 'en_cours'), lt(billingEvents.processedAt, new Date(Date.now() - CLAIM_STALE_MS()))),
+        ),
+      ))
+      .returning({ id: billingEvents.id });
+    // Un autre appelant a gagné la réclamation : celui-ci ne traite rien.
+    if (reprise.length === 0) return c.json({ received: true, duplicate: true, type: known.type });
+  }
 
   const o = (evt.data?.object ?? {}) as Record<string, unknown>;
   let rid: string | undefined;
@@ -156,7 +197,7 @@ billingPublicRoutes.post('/billing/webhook', async (c) => {
     }
     // (les événements invoice.paid / invoice.payment_succeeded sont traités plus haut, en un seul
     // endroit : factures d'abonnement + factures de commission. Pas de doublon de traitement.)
-    await db.update(billingEvents).set({ status: 'traite', restaurantId: rid ?? null, error: null }).where(eq(billingEvents.id, evt.id));
+    await db.update(billingEvents).set({ status: 'traite', restaurantId: rid ?? null, error: null, processedAt: new Date() }).where(eq(billingEvents.id, evt.id));
     return c.json({ received: true, type: evt.type });
   } catch (e) {
     const message = (e as Error).message.slice(0, 400);
