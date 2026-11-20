@@ -6,6 +6,8 @@
 // (ok:false, code mail_not_configured) et une alerte admin est déposée : plus jamais de ok:true qui ne remet rien.
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { eq } from 'drizzle-orm';
+import { getDb, notifications as envois } from '@afrisupply/db';
 import { alertAdmin } from './ops.js';
 import { SUPPORT } from './ops-health.js';
 
@@ -137,7 +139,7 @@ export async function outboxCount(): Promise<number> {
   try { return (await readdir(mailerConfig().outbox)).length; } catch { return 0; }
 }
 
-export async function sendMail(m: Mail): Promise<MailResult> {
+async function envoyer(m: Mail): Promise<MailResult> {
   const cfg = mailerConfig();
   if (cfg.transport === 'resend') {
     try {
@@ -208,4 +210,66 @@ async function ecrireSansEcraser(dir: string, base: string, ext: string, contenu
     }
   }
   throw new Error(`Impossible de nommer le message dans ${dir} : trop de collisions sur « ${base} ».`);
+}
+
+/**
+ * Journal de livraison d'un e-mail, dans la table `notifications` (channel = « email »), la même
+ * que celle des envois WhatsApp/SMS. Une ligne par envoi : `error = 'tentative'` tant que le
+ * prestataire n'a pas répondu, puis `ok` vrai (remise réelle) ou `error` = motif typé.
+ *
+ * Levée des blocages (chantier E-mails) — pourquoi ce journal. Douze envois du produit sont écrits
+ * `void sendMail(…)`, résultat jeté (dont la notification de NOUVELLE COMMANDE au fournisseur,
+ * `routes/marketplace.ts`) : la commande était créée en base, l'e-mail pouvait échouer ou être
+ * coupé net par la plateforme serverless, et RIEN nulle part ne le disait. Les compteurs de
+ * `mailStats()` sont en mémoire et repartent à zéro à chaque instance. Un envoi laisse donc
+ * désormais une trace en base : créée avant l'appel au prestataire, close après.
+ *
+ * Le journal ne bloque jamais l'envoi : une base indisponible ne doit pas empêcher un e-mail de
+ * partir, et l'adresse du destinataire n'est écrite qu'en base — jamais dans les journaux texte.
+ */
+async function ouvrirLeJournal(m: Mail): Promise<string | null> {
+  try {
+    const db = await getDb();
+    const [row] = await db.insert(envois).values({
+      channel: 'email',
+      to: m.to,
+      kind: m.tags?.type ?? 'email',
+      restaurantId: uuidOuNull(m.tags?.restaurant),
+      vendorId: uuidOuNull(m.tags?.vendor),
+      body: m.subject,
+      ok: false,
+      error: 'tentative',
+    }).returning({ id: envois.id });
+    return row?.id ?? null;
+  } catch (e) { console.warn(`[mail] ouverture du journal impossible : ${(e as Error).message}`); return null; }
+}
+
+async function cloreLeJournal(id: string | null, res: MailResult): Promise<void> {
+  if (!id) return;
+  try {
+    const db = await getDb();
+    // Un envoi simulé (aucun prestataire en développement) n'est jamais noté réussi : seule une
+    // remise réelle compte, comme pour les envois WhatsApp/SMS déjà journalisés.
+    const remis = res.ok && res.delivered === true;
+    await db.update(envois)
+      .set({ ok: remis, error: remis ? null : (res.ok ? 'mail_simulated' : res.code), providerId: res.ok ? res.id : null })
+      .where(eq(envois.id, id));
+  } catch (e) { console.warn(`[mail] clôture du journal impossible : ${(e as Error).message}`); }
+}
+
+/** La colonne attend un uuid : toute autre valeur devient NULL plutôt que de faire échouer la ligne. */
+function uuidOuNull(v: unknown): string | null {
+  const s = String(v ?? '');
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) ? s : null;
+}
+
+/**
+ * Envoie un e-mail ET laisse sa trace de livraison. C'est le seul point d'envoi du produit : les
+ * 25 appels existants sont journalisés sans qu'aucun n'ait à changer.
+ */
+export async function sendMail(m: Mail): Promise<MailResult> {
+  const id = await ouvrirLeJournal(m);
+  const res = await envoyer(m);
+  await cloreLeJournal(id, res);
+  return res;
 }
