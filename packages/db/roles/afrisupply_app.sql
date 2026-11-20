@@ -16,6 +16,48 @@
 -- puis jouer ce fichier avec le rôle propriétaire. Le fichier est rejouable sans effet de bord.
 -- =============================================================
 
+-- =============================================================
+-- PRÉCONDITION BLOQUANTE — appartenances préexistantes à d'autres rôles
+--
+-- NOINHERIT ne suffit PAS. Il empêche seulement l'héritage AUTOMATIQUE des privilèges des rôles
+-- dont on est membre ; il n'empêche pas SET ROLE. Un rôle membre d'un autre peut exécuter
+-- « SET ROLE <cet autre> » et obtenir directement tous ses privilèges — s'il est membre du
+-- propriétaire de la base ou d'un rôle SUPERUSER, il contourne tout ce que ce fichier met en
+-- place, y compris le refus de DELETE.
+--
+-- Ce fichier ne retire pas ces appartenances lui-même : il ne peut pas savoir si elles sont
+-- volontaires (rôle de groupe propriétaire d'objets, délégation d'exploitation…) ni mesurer ce
+-- que leur retrait casserait. Il refuse donc l'installation, nomme chaque appartenance en cause
+-- avec ses attributs, et laisse la décision à l'opérateur :
+--     REVOKE <rôle> FROM afrisupply_app;
+-- puis rejouer ce fichier. Aucune instruction de ce fichier n'a été exécutée si l'on arrive ici.
+-- =============================================================
+DO $$
+DECLARE
+  r record;
+  liste text := '';
+BEGIN
+  FOR r IN
+    SELECT g.rolname AS nom, g.rolsuper AS super, g.rolbypassrls AS bypassrls,
+           g.rolcreatedb AS createdb, g.rolcreaterole AS createrole
+      FROM pg_auth_members m
+      JOIN pg_roles membre ON membre.oid = m.member
+      JOIN pg_roles g ON g.oid = m.roleid
+     WHERE membre.rolname = 'afrisupply_app'
+     ORDER BY g.rolname
+  LOOP
+    liste := liste || format('    - %s%s%s%s%s%s', r.nom,
+      CASE WHEN r.super THEN ' (SUPERUSER)' ELSE '' END,
+      CASE WHEN r.bypassrls THEN ' (BYPASSRLS)' ELSE '' END,
+      CASE WHEN r.createdb THEN ' (CREATEDB)' ELSE '' END,
+      CASE WHEN r.createrole THEN ' (CREATEROLE)' ELSE '' END, E'\n');
+  END LOOP;
+  IF liste <> '' THEN
+    RAISE EXCEPTION 'afrisupply_app est membre d''au moins un rôle : installation refusée.%Retirez chaque appartenance (REVOKE <rôle> FROM afrisupply_app;) après en avoir vérifié la portée, puis rejouez ce fichier.', liste;
+  END IF;
+END
+$$;
+
 -- Le rôle, s'il n'existe pas encore (sans connexion : les tests et un premier essai n'en ont pas besoin).
 DO $$
 BEGIN
@@ -55,6 +97,54 @@ BEGIN
   -- Le rôle doit pouvoir se connecter à la base (CONNECT est donné à PUBLIC par défaut, mais on
   -- l'accorde explicitement pour ne pas dépendre des réglages par défaut de la plateforme).
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO afrisupply_app', current_database());
+END
+$$;
+
+-- =============================================================
+-- PUBLIC sur les tables : aucun droit, existantes comme futures
+--
+-- Un droit accordé à PUBLIC vaut pour tout le monde — rôle applicatif compris — et NOINHERIT n'y
+-- change rien : PUBLIC n'est pas un rôle dont on hérite, c'est un droit donné à tous. PostgreSQL
+-- n'accorde rien à PUBLIC sur une table neuve, mais une console, un ancien script ou un
+-- « GRANT … TO PUBLIC » manuel suffisent à en laisser ; sur les 20 tables à DELETE, ce serait une
+-- porte d'effacement ouverte à n'importe quel rôle de la base.
+--
+-- Ce qui reste à PUBLIC, et pourquoi c'est le strict nécessaire :
+--   CONNECT sur la base — nécessaire pour s'y connecter. Le rôle applicatif le reçoit aussi
+--   explicitement ci-dessus, pour ne pas dépendre des réglages de la plateforme.
+-- C'est tout. USAGE sur les schémas, DML sur les tables, droits sur les séquences : rien n'est
+-- laissé à PUBLIC, parce que tout ce dont l'application a besoin lui est accordé NOMINATIVEMENT.
+-- =============================================================
+DO $$
+DECLARE
+  t text;
+BEGIN
+  -- Tables existantes : tout retirer à PUBLIC, y compris un éventuel TRUNCATE/REFERENCES/TRIGGER.
+  FOR t IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+  LOOP
+    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC', t);
+  END LOOP;
+  -- Même discipline pour le journal des migrations, s'il existe.
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
+    FOR t IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'drizzle' AND c.relkind IN ('r', 'p')
+    LOOP
+      EXECUTE format('REVOKE ALL ON TABLE drizzle.%I FROM PUBLIC', t);
+    END LOOP;
+  END IF;
+END
+$$;
+-- Tables et séquences créées plus tard : rien non plus pour PUBLIC. Ces règles s'ajoutent à celles
+-- du rôle applicatif et obéissent à la même contrainte de rôle (voir plus bas) : elles ne valent
+-- que pour les objets créés par le rôle qui joue ce fichier.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle REVOKE ALL ON TABLES FROM PUBLIC';
+  END IF;
 END
 $$;
 
