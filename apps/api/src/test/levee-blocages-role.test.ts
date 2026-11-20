@@ -111,17 +111,38 @@ describe('rôle applicatif : les privilèges nécessaires, et aucun autre', () =
     for (const d of droits) expect(d, String(d.t)).toMatchObject({ lire: true, ajouter: true, vider: false, referencer: false, declencher: false, proprietaire: false });
   });
 
-  // Répartition exacte : seules les 20 tables avec une suppression métier conservent DELETE.
-  // Les 6 journaux sont immuables ; les 2 tables UPSERT gardent UPDATE mais pas DELETE.
-  it('écriture : 40 tables en lecture/insertion/modification/suppression, 6 journaux sans modification ni suppression, 2 UPSERT sans suppression', async () => {
+  // Répartition exacte des 48 tables : 20 avec suppression (la liste nominative du script SQL) et
+  // 28 sans. Parmi ces 28, les 6 journaux n'ont pas non plus UPDATE, et les 2 tables UPSERT gardent
+  // UPDATE mais perdent DELETE. Le nom de cet essai donne ces quatre nombres : il ne dit plus « 40 ».
+  it('écriture : 20 tables avec suppression, 28 sans — dont 6 journaux sans modification ni suppression et 2 UPSERT sans suppression', async () => {
     const droits = await lignes(neuve, `
       select c.relname as t, has_table_privilege('${R}', c.oid, 'UPDATE') as modifier, has_table_privilege('${R}', c.oid, 'DELETE') as supprimer
       from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' order by 1`);
     const sans = (k: 'modifier' | 'supprimer') => droits.filter((d) => !d[k]).map((d) => String(d.t));
+    expect(droits).toHaveLength(48);
+    expect(TABLES_AVEC_SUPPRESSION).toHaveLength(20);
     expect(sans('modifier')).toEqual(JOURNAUX_IMMUABLES);
     expect(droits.filter((d) => d.supprimer).map((d) => String(d.t))).toEqual(TABLES_AVEC_SUPPRESSION);
     expect(sans('supprimer')).toEqual(TABLES_DU_CODE.filter((t) => !TABLES_AVEC_SUPPRESSION.includes(t)).sort());
-    expect(droits.filter((d) => d.modifier && d.supprimer)).toHaveLength(20);
+    expect(droits.filter((d) => d.modifier && d.supprimer).map((d) => String(d.t))).toEqual(TABLES_AVEC_SUPPRESSION);
+    expect(sans('supprimer')).toHaveLength(28);
+  });
+
+  // Aucune porte de derrière : NOINHERIT et l'absence d'appartenance à un rôle (vérifiés plus haut)
+  // ne suffisent pas — un droit accordé à PUBLIC vaut pour tout le monde, rôle minimal compris. Il
+  // est donc contrôlé sur les 48 tables, pas seulement sur les journaux comme plus bas.
+  it('aucune réintroduction par PUBLIC : les 48 tables ne lui donnent ni lecture, ni écriture, ni suppression', async () => {
+    const droits = await lignes(neuve, `
+      select c.relname as t,
+             has_table_privilege('public', c.oid, 'SELECT') as lire, has_table_privilege('public', c.oid, 'INSERT') as ajouter,
+             has_table_privilege('public', c.oid, 'UPDATE') as modifier, has_table_privilege('public', c.oid, 'DELETE') as supprimer
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' order by 1`);
+    expect(droits.map((d) => d.t)).toEqual(TABLES_DU_CODE);
+    for (const d of droits) expect(d, String(d.t)).toMatchObject({ lire: false, ajouter: false, modifier: false, supprimer: false });
+    const [g] = await lignes(neuve, `select has_schema_privilege('public', 'public', 'CREATE') as creer_schema,
+      has_database_privilege('public', current_database(), 'CREATE') as creer_base,
+      has_database_privilege('public', current_database(), 'TEMPORARY') as temporaire`);
+    expect(g).toEqual({ creer_schema: false, creer_base: false, temporaire: false });
   });
 
   it('journal des migrations : lecture seule', async () => {
