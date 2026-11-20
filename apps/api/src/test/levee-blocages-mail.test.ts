@@ -29,7 +29,7 @@ delete process.env.VERCEL; delete process.env.APP_URL;
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { and, eq, isNull } from 'drizzle-orm';
-import { getDb, runMigrations, alerts, jobRuns, restaurants, restaurantMembers, auditLog, emailVerifications } from '@afrisupply/db';
+import { getDb, runMigrations, alerts, jobRuns, restaurants, restaurantMembers, auditLog, emailVerifications, notifications } from '@afrisupply/db';
 
 // --- faux prestataire d'e-mails -----------------------------------------------------------------
 const TITULAIRE = 'titulaire.du.compte@prestataire-exemple.test';      // l'adresse que le vrai prestataire écrit dans son message de refus
@@ -71,7 +71,7 @@ beforeAll(async () => {
 afterAll(async () => { await new Promise<void>((ok) => { serveur.closeAllConnections(); serveur.close(() => ok()); }); });
 
 const { app } = await import('../app.js');
-const { sendMail, classifyProviderFailure, redact, maskEmail, mailStats, _resetMailStats, MAIL_ERROR_MESSAGES } = await import('../lib/mailer.js');
+const { sendMail, classifyProviderFailure, redact, maskEmail, mailStats, _resetMailStats, MAIL_ERROR_MESSAGES, MAIL_RETRYABLE_ERRORS } = await import('../lib/mailer.js');
 const { notifyAllRestaurants, notifyCriticalAlerts } = await import('../lib/notify.js');
 const { _resetRateLimits } = await import('../lib/ops.js');
 
@@ -402,3 +402,114 @@ describe('confirmation d’adresse : l’échec d’envoi est dit, et qualifié'
   });
 });
 
+
+// Levée des blocages (chantier E-mails) — deux passages simultanés du balayage.
+//
+// Le cron horaire, la route /api/jobs/notify et l'appel opportuniste de reminders.ts peuvent se
+// chevaucher. Les alertes ne sont marquées notified_at qu'APRÈS l'envoi : deux balayages lisaient donc
+// les mêmes alertes en attente et envoyaient chacun son exemplaire. Le client recevait l'alerte deux
+// fois. La passe quotidienne tenait déjà un bail ; le balayage d'alertes n'en avait aucun.
+describe('balayage d’alertes : deux passages simultanés n’envoient qu’une fois', () => {
+  it('un seul balayage travaille, l’autre se retire, chaque destinataire reçoit un seul e-mail', async () => {
+    const a = await restaurantAvecAlerte(); const b = await restaurantAvecAlerte();
+    delaiMs = 250;                       // le prestataire répond lentement : les deux passages se chevauchent vraiment
+
+    const [un, deux] = await Promise.all([notifyAllRestaurants(), notifyAllRestaurants()]);
+
+    // L'un des deux a travaillé ; l'autre a constaté le bail et s'est retiré sans rien envoyer.
+    const retires = [un, deux].filter((p) => (p as { skippedBecause?: string }).skippedBecause === 'another_sweep_running');
+    expect(retires).toHaveLength(1);
+    expect(retires[0]).toMatchObject({ withAlerts: 0, emails: 0 });
+
+    // Chaque responsable reçoit EXACTEMENT un e-mail — c'est le doublon que le client voyait.
+    const parDestinataire = (email: string) => recus.filter((r) => r === email).length;
+    expect(parDestinataire(a.email)).toBe(1);
+    expect(parDestinataire(b.email)).toBe(1);
+    expect(recus).toHaveLength(2);
+
+    // Les alertes sont annoncées une fois, et le passage suivant n'en renvoie rien.
+    expect(await enAttente(a.rid)).toBe(0);
+    expect(await enAttente(b.rid)).toBe(0);
+    delaiMs = 0; recus.length = 0;
+    const suivant = await notifyAllRestaurants();
+    expect(suivant).toMatchObject({ withAlerts: 0, emails: 0 });
+    expect(recus).toHaveLength(0);
+  }, 60_000);
+
+  it('un bail expiré ne bloque pas la reprise : le balayage suivant travaille', async () => {
+    const a = await restaurantAvecAlerte();
+    const db = await getDb();
+    // Un ouvrier a été coupé net : sa ligne est restée « running » avec un bail déjà passé.
+    await db.insert(jobRuns).values({ job: 'alerts-notify', status: 'running', startedAt: new Date(Date.now() - 3_600_000), finishedAt: new Date(Date.now() - 3_600_000), durationMs: 0, summary: { bailJusqua: new Date(Date.now() - 60_000).toISOString() } });
+    const passe = await notifyAllRestaurants();
+    expect((passe as { skippedBecause?: string }).skippedBecause).toBeUndefined();   // repris, pas ignoré
+    expect(passe.emails).toBe(1);
+    expect(await enAttente(a.rid)).toBe(0);
+    // Il ne reste aucune ligne « running » : le bail est bien tombé.
+    const enCours = await db.select().from(jobRuns).where(and(eq(jobRuns.job, 'alerts-notify'), eq(jobRuns.status, 'running')));
+    expect(enCours).toHaveLength(0);
+  }, 60_000);
+});
+
+// Levée des blocages (chantier E-mails) — journal de livraison.
+//
+// Douze envois du produit sont écrits `void sendMail(…)`, résultat jeté — dont la notification de
+// NOUVELLE COMMANDE au fournisseur (routes/marketplace.ts). La commande était créée en base, l'e-mail
+// pouvait échouer ou être coupé net par la plateforme serverless, et rien ne le disait : les compteurs
+// de mailStats() sont en mémoire et repartent à zéro à chaque instance. Chaque envoi laisse désormais
+// une ligne en base (notifications, channel = 'email') : tentative, puis succès ou motif d'échec.
+describe('journal de livraison : chaque e-mail laisse une trace en base', () => {
+  const lignes = async (to: string) => (await getDb()).select().from(notifications).where(and(eq(notifications.channel, 'email'), eq(notifications.to, to)));
+
+  it('un envoi remis ferme la ligne : ok, identifiant du prestataire, motif vidé', async () => {
+    const to = 'journal-ok@restaurant-exemple.test';
+    const res = await sendMail({ to, subject: 'Nouvelle commande CMD-42', text: 'Bonjour', html: '<p>Bonjour</p>', tags: { type: 'vendor_order' } });
+    expect(res.ok).toBe(true);
+    const [l] = await lignes(to);
+    expect(l).toMatchObject({ channel: 'email', kind: 'vendor_order', body: 'Nouvelle commande CMD-42', ok: true, error: null });
+    expect(l.providerId).toBeTruthy();          // de quoi retrouver l'envoi chez le prestataire
+  }, 60_000);
+
+  it('un échec passager est journalisé avec son motif — plus d’envoi silencieux', async () => {
+    const to = 'journal-panne@restaurant-exemple.test'; mode = 'panne';
+    const res = await sendMail({ to, subject: 'Nouvelle commande CMD-43', text: 'Bonjour', html: '<p>Bonjour</p>', tags: { type: 'vendor_order' } });
+    expect(res.ok).toBe(false);
+    const [l] = await lignes(to);
+    expect(l.ok).toBe(false);
+    expect(l.error).toBe('mail_provider_error');                    // motif typé, et reprisable
+    expect(MAIL_RETRYABLE_ERRORS).toContain(l.error);
+    expect(l.providerId).toBeNull();                                // rien n'est parti : pas d'identifiant inventé
+    // Le texte du prestataire ne sort pas dans la ligne.
+    expect(JSON.stringify(l)).not.toContain('An unexpected error occurred');
+  }, 60_000);
+
+  it('un envoi tiré-et-oublié (void) est journalisé quand même', async () => {
+    const to = 'journal-void@fournisseur-exemple.test';
+    void sendMail({ to, subject: 'Nouvelle commande CMD-44', text: 'Bonjour', html: '<p>Bonjour</p>', tags: { type: 'vendor_order' } });
+    await new Promise((r) => setTimeout(r, 400));                    // la promesse jetée a le temps d'aboutir
+    const [l] = await lignes(to);
+    expect(l.ok).toBe(true);
+  }, 60_000);
+
+  it('aucun prestataire en déploiement : l’envoi est refusé et le journal le dit', async () => {
+    const cle = process.env.RESEND_API_KEY; delete process.env.RESEND_API_KEY; process.env.VERCEL = '1';
+    try {
+      const to = 'journal-sans-cle@restaurant-exemple.test';
+      const res = await sendMail({ to, subject: 'Test des notifications', text: 'Bonjour', html: '<p>Bonjour</p>', tags: { type: 'mail_test' } });
+      expect(res.ok).toBe(false);
+      const [l] = await lignes(to);
+      expect(l.ok).toBe(false);
+      expect(l.error).toBe('mail_not_configured');
+    } finally { if (cle) process.env.RESEND_API_KEY = cle; delete process.env.VERCEL; }
+  }, 60_000);
+
+  it('le balayage d’alertes journalise ses envois, restaurant par restaurant', async () => {
+    const a = await restaurantAvecAlerte();                 // l'inscription a déjà écrit une ligne à cette adresse
+    await notifyAllRestaurants();
+    const db = await getDb();
+    const envoisAlerte = await db.select().from(notifications)
+      .where(and(eq(notifications.channel, 'email'), eq(notifications.to, a.email), eq(notifications.kind, 'alert_immediate')));
+    expect(envoisAlerte).toHaveLength(1);                   // une alerte, une ligne
+    expect(envoisAlerte[0]).toMatchObject({ ok: true });
+  }, 60_000);
+});
