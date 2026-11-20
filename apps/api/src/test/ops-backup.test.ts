@@ -537,9 +537,12 @@ describe('10. Séquences après restauration — la numérotation reprend au-des
 
     // Les trois séquences de numérotation sont remises à 1, comme dans une base neuve où l'on vient
     // de recharger les lignes : c'est l'état exact que produit une restauration.
+    // Aucune instruction de structure ici : le rôle applicatif minimal n'a pas le droit de créer une
+    // séquence (en production, packages/db/roles/afrisupply_app.sql les crée d'avance). Une séquence
+    // absente EST déjà l'état d'une base neuve restaurée ; présente, on remet son compteur à 1.
     for (const seq of SEQUENCES_NUMEROTATION) {
-      await db.execute(sql.raw(`create sequence if not exists ${seq}`));   // en production, le script de rôle les crée d'avance
-      await db.execute(sql.raw(`select setval('${seq}', 1, true)`));
+      const [presente] = (await db.execute(sql.raw(`select count(*)::int as n from pg_sequences where schemaname = current_schema() and sequencename = '${seq}'`))).rows as { n: string | number }[];
+      if (Number(presente?.n ?? 0)) await db.execute(sql.raw(`select setval('${seq}', 1, true)`));
     }
 
     const suivante = await nextOrderReference();
