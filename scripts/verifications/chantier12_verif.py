@@ -381,8 +381,19 @@ check("la restauration refuse explicitement une base non vide et le dit",
       "Restauration refusée" in backup_code and "allowNonEmpty" in backup_code, "message explicite")
 check("les comptes sans mot de passe sont restaurés inutilisables et signalés",
       "accountsToReset" in backup_code and "invalide-" in backup_code, "aucune empreinte de mot de passe dans le fichier")
+# Levée des blocages (chantier Sauvegardes) : l'unicité du nom ne repose plus sur « tester puis
+# écrire » (deux passages simultanés pouvaient retenir le même nom et s'écraser) mais sur une
+# création EXCLUSIVE : le nom est réservé, et un concurrent prend le suffixe suivant. Le contrôle
+# épingle donc ce mécanisme, plus exigeant que le précédent.
 check("les noms de fichiers sont uniques (deux sauvegardes ne s'écrasent jamais)",
-      "for (let i = 2; await exists(" in backup_code, "suffixe de collision")
+      "{ flag: 'wx' }" in backup_code and "EEXIST" in backup_code and "for (let i = 2;" in backup_code,
+      "réservation exclusive du nom, suffixe en cas de collision")
+check("le fichier écrit est relu et vérifié avant d'être annoncé",
+      "gunzipSync(relu)" in backup_code and "ne se relit pas à l'identique" in backup_code,
+      "relecture + empreinte après écriture")
+check("la liste compare l'état réel du disque à la fiche",
+      "integre" in backup_code and "probleme" in backup_code and "Fichier incomplet" in backup_code,
+      "un fichier tronqué ou absent est dit, jamais annoncé sain")
 check("les sauvegardes ne partent jamais dans le dépôt git", ".backups" in lire(".gitignore", ROOT), ".gitignore")
 check("le job quotidien trace la sauvegarde et la surveillance comme des tâches supervisées",
       "job: 'backup'" in lire("jobs/daily.ts", API_SRC) and "watchdog({ self: 'daily'" in lire("jobs/daily.ts", API_SRC),

@@ -5,7 +5,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getDb, jobRuns, runMigrations } from '@afrisupply/db';
+import { getDb, jobRuns, runMigrations, vendors, vendorCreditTerms, orders } from '@afrisupply/db';
+import { sql } from 'drizzle-orm';
 import { app } from '../app.js';
 import { _resetRateLimits, _resetAdminAlerts } from '../lib/ops.js';
 import {
@@ -13,6 +14,7 @@ import {
   listBackups, readBackupFile, pruneBackups, backupAllRestaurants, backupStorageStats, type BackupFile,
 } from '../lib/backup.js';
 import { jobHealth, watchdog, SUPPORT, jobsSurveilles } from '../lib/ops-health.js';
+import { nextOrderReference, SEQUENCES_NUMEROTATION } from '../lib/reference.js';
 import { confirmerAdresse } from './aide-comptes.js';
 
 process.env.NODE_ENV = 'test'; process.env.JWT_SECRET = 'test-secret'; process.env.CRON_SECRET = 'cron-test';
@@ -422,4 +424,133 @@ describe('7. Canal de support — une adresse, un délai, une seule source', () 
       expect({ f, durs: durs.length }).toEqual({ f, durs: 0 });
     }
   });
+});
+
+// Reprise P0-M, 17 novembre 2026 — `vendor_credit_terms` porte un `restaurant_id` réel (clé étrangère
+// vers `restaurants`) et n'était dans AUCUNE sauvegarde : une restauration perdait le délai de
+// paiement, le plafond et l'éventuel blocage accordés au restaurant, sans le dire.
+describe('8. Reprise P0-M — les conditions de crédit du restaurant ne sont plus perdues', () => {
+  it('vendor_credit_terms est exportée avec le restaurant, et son absence à la restauration est dite, pas silencieuse', async () => {
+    const db = await getDb();
+    const [v] = await db.insert(vendors).values({ name: 'Grossiste Crédit Banc', slug: `credit-banc-${Date.now()}` }).returning();
+    await db.insert(vendorCreditTerms).values({ vendorId: v.id, restaurantId: ridA, paymentDays: 30, creditLimitEur: '1500.00', blocked: false });
+
+    const file = await exportRestaurant(ridA, { mode: 'admin' });
+    expect(file.counts.vendor_credit_terms).toBe(1);
+    expect(file.tables.vendor_credit_terms[0]).toMatchObject({ restaurantId: ridA, paymentDays: 30, blocked: false });
+
+    // Le grossiste n'appartient pas au restaurant : dans une base neuve la ligne ne peut pas être
+    // recréée. Elle est alors listée nommément au lieu de disparaître en silence, et la restauration
+    // reste déclarée conforme — seules les données de tiers peuvent manquer.
+    const drill = await restoreDrill(file);
+    expect(drill.incomplets).toEqual([]);
+    expect(drill.skipped.some((s) => s.table === 'vendor_credit_terms')).toBe(true);
+    expect(drill.ok).toBe(true);
+  }, 90_000);
+});
+
+// Levée des blocages (chantier Sauvegardes) — l'écriture du fichier et son état réel sur disque.
+//
+// Constat : writeBackupFile() choisissait un nom en testant son existence puis écrivait directement
+// sous le nom définitif, sans jamais relire ce qu'elle venait d'écrire, et la fiche était écrite
+// ensuite. Trois conséquences : deux sauvegardes lancées ensemble pouvaient retenir le MÊME nom et
+// s'écraser (la seconde gagnait, la première disparaissait sans trace) ; une écriture interrompue
+// laissait un fichier tronqué sous son nom définitif, annoncé complet par sa fiche ; et rien ne
+// comparait jamais l'état réel du fichier à ce que la fiche annonçait.
+describe('9. Écriture du fichier : concurrence, intégrité après écriture, fichier altéré signalé', () => {
+  it('deux écritures lancées ensemble donnent DEUX fichiers distincts, chacun relisible', async () => {
+    const dir = await fs.mkdtemp(path.join(TMP, 'concurrent-'));
+    const backup = await exportRestaurant(ridA, { mode: 'admin' });
+    const [un, deux] = await Promise.all([writeBackupFile(backup, dir), writeBackupFile(backup, dir)]);
+    expect(un.name).not.toBe(deux.name);                       // avant le correctif : même nom, l'un écrasait l'autre
+    const gz = (await fs.readdir(dir)).filter((f) => f.endsWith('.json.gz'));
+    expect(gz).toHaveLength(2);
+    for (const fiche of [un, deux]) {
+      const relu = await readBackupFile(fiche.name, dir);
+      expect(relu.checksum).toBe(backup.checksum);
+      expect((await fs.stat(path.join(dir, fiche.name))).size).toBe(fiche.sizeBytes);
+    }
+  }, 90_000);
+
+  it('un fichier tronqué sur le disque est SIGNALÉ, jamais annoncé sain', async () => {
+    const dir = await fs.mkdtemp(path.join(TMP, 'tronque-'));
+    const fiche = await writeBackupFile(await exportRestaurant(ridA, { mode: 'admin' }), dir);
+    const chemin = path.join(dir, fiche.name);
+    const buf = await fs.readFile(chemin);
+    await fs.writeFile(chemin, buf.subarray(0, Math.floor(buf.length / 2)));    // coupure franche, comme une écriture interrompue
+    const [liste] = await listBackups(dir);
+    expect(liste.integre).toBe(false);
+    expect(liste.probleme).toMatch(/taille|tronqué|incomplet/i);
+    // Et la restauration continue de le refuser : le fichier ne se décompresse même pas.
+    await expect(readBackupFile(fiche.name, dir)).rejects.toThrow();
+  }, 90_000);
+
+  it('un fichier dont la sauvegarde a disparu du disque est dit manquant, pas listé comme présent', async () => {
+    const dir = await fs.mkdtemp(path.join(TMP, 'manquant-'));
+    const fiche = await writeBackupFile(await exportRestaurant(ridA, { mode: 'admin' }), dir);
+    await fs.rm(path.join(dir, fiche.name), { force: true });                    // la fiche reste, le fichier non
+    const [liste] = await listBackups(dir);
+    expect(liste.integre).toBe(false);
+    expect(liste.probleme).toMatch(/absent|manquant/i);
+  }, 90_000);
+
+  it('le fichier écrit sur disque se restaure réellement dans une base neuve, comptes et données comparés', async () => {
+    const dir = await fs.mkdtemp(path.join(TMP, 'restaure-'));
+    const fiche = await writeBackupFile(await exportRestaurant(ridA, { mode: 'admin' }), dir);
+    const backup = await readBackupFile(fiche.name, dir);
+    const rapport = await restoreDrill(backup);                                  // base neuve, jetable, PostgreSQL réel (PGlite)
+    expect(rapport.ok).toBe(true);
+    expect(rapport.incomplets).toEqual([]);
+    expect(rapport.relu.restaurants).toBe(1);
+    // Comparaison des comptes : même adresse, et le mot de passe « admin » reste utilisable.
+    const comptesFichier = (backup.tables.users ?? []).map((u) => String(u.email)).sort();
+    expect(comptesFichier.length).toBeGreaterThan(0);
+    expect(rapport.relu.tables.users).toBe(comptesFichier.length);
+    expect(rapport.accountsToReset).toEqual([]);                                 // fichier admin : empreintes présentes
+    // Comparaison des données métier : le stock et les commandes sont revenus à l'identique.
+    expect(rapport.relu.tables.inventory_items).toBe(backup.counts.inventory_items);
+    expect(rapport.relu.tables.orders).toBe(backup.counts.orders);
+    // Les conditions de crédit dépendent d'un grossiste absent d'une base neuve : la ligne ne peut
+    // pas être recréée, elle est donc écartée et NOMMÉMENT listée (comportement verrouillé en §8).
+    if (backup.counts.vendor_credit_terms) expect(rapport.skipped.some((x) => x.table === 'vendor_credit_terms')).toBe(true);
+    // Rien d'autre ne manque : tout ce qui est écarté appartient à des tiers.
+    const externes = ['commissions', 'vendor_reviews', 'vendor_customer_prices', 'vendor_credit_terms', 'group_buy_participations'];
+    for (const x of rapport.skipped) expect(externes).toContain(x.table);
+  }, 120_000);
+});
+
+// Levée des blocages (chantier Sauvegardes) — l'autre moitié d'une restauration : les NUMÉROS.
+//
+// Les références de commande (AFS-…), de facture (AFR-…) et de litige (LIT-…) viennent de séquences
+// PostgreSQL autonomes, qui ne font partie d'aucune table et ne sont donc dans AUCUN fichier de
+// sauvegarde. Dans une base neuve restaurée, les lignes reviennent avec leurs numéros tandis que le
+// compteur repart de 1 : la première commande créée entrerait en collision avec l'existant (index
+// unique global orders_ref), et le restaurant ne pourrait plus commander du tout. Le rattrapage est
+// codé (lib/reference.ts) ; cet essai le prouve au lieu de le supposer.
+describe('10. Séquences après restauration — la numérotation reprend au-dessus de l’existant', () => {
+  it('une séquence remise à 1 (état d’une base neuve restaurée) ne fait collisionner aucun numéro', async () => {
+    const db = await getDb();
+    const refs = (await db.select({ reference: orders.reference }).from(orders)).map((r) => String(r.reference));
+    expect(refs.length).toBeGreaterThan(0);
+    const plusGrand = Math.max(...refs.map((r) => Number(r.slice(9))).filter((n) => Number.isFinite(n)));
+    expect(plusGrand).toBeGreaterThan(0);
+
+    // Les trois séquences de numérotation sont remises à 1, comme dans une base neuve où l'on vient
+    // de recharger les lignes : c'est l'état exact que produit une restauration.
+    // Aucune instruction de structure ici : le rôle applicatif minimal n'a pas le droit de créer une
+    // séquence (en production, packages/db/roles/afrisupply_app.sql les crée d'avance). Une séquence
+    // absente EST déjà l'état d'une base neuve restaurée ; présente, on remet son compteur à 1.
+    for (const seq of SEQUENCES_NUMEROTATION) {
+      const [presente] = (await db.execute(sql.raw(`select count(*)::int as n from pg_sequences where schemaname = current_schema() and sequencename = '${seq}'`))).rows as { n: string | number }[];
+      if (Number(presente?.n ?? 0)) await db.execute(sql.raw(`select setval('${seq}', 1, true)`));
+    }
+
+    const suivante = await nextOrderReference();
+    const numero = Number(suivante.slice(9));
+    expect(numero).toBeGreaterThan(plusGrand);        // au-dessus de TOUT l'existant, jamais dedans
+    expect(refs).not.toContain(suivante);
+    // La séquence est bien réalignée en base, pas seulement dans la valeur renvoyée.
+    const [etat] = (await db.execute(sql.raw("select last_value from pg_sequences where sequencename = 'order_ref_seq'"))).rows as { last_value: string | number }[];
+    expect(Number(etat.last_value)).toBeGreaterThanOrEqual(plusGrand);
+  }, 90_000);
 });
