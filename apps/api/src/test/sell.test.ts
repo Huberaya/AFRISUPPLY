@@ -6,7 +6,6 @@ import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHmac } from 'node:crypto';
-import { eq } from 'drizzle-orm';
 import { feedback, getDb, restaurantMembers, restaurants, runMigrations, users } from '@afrisupply/db';
 import { app } from '../app.js';
 import { hashPassword, planRequired, signToken } from '../lib/auth';
@@ -247,7 +246,7 @@ describe('GET /public/proof — preuve honnête', () => {
     expect(d.testimonials[0].quote).toContain('comparateur');
     expect(d.metrics.npsResponses).toBe(2);
     expect(d.metrics.nps).toBe(9.5);
-    // nettoyage pour l'idempotence des runs
-    await db.delete(feedback).where(eq(feedback.restaurantId, rid));
+    // Pas de DELETE de fixture ici : cette suite possède sa base PGlite dédiée (memory://sell),
+    // détruite à la fin du processus de test. Le rôle applicatif minimal n'a donc rien à nettoyer.
   });
 });

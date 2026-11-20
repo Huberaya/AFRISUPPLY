@@ -16,6 +16,48 @@
 -- puis jouer ce fichier avec le rôle propriétaire. Le fichier est rejouable sans effet de bord.
 -- =============================================================
 
+-- =============================================================
+-- PRÉCONDITION BLOQUANTE — appartenances préexistantes à d'autres rôles
+--
+-- NOINHERIT ne suffit PAS. Il empêche seulement l'héritage AUTOMATIQUE des privilèges des rôles
+-- dont on est membre ; il n'empêche pas SET ROLE. Un rôle membre d'un autre peut exécuter
+-- « SET ROLE <cet autre> » et obtenir directement tous ses privilèges — s'il est membre du
+-- propriétaire de la base ou d'un rôle SUPERUSER, il contourne tout ce que ce fichier met en
+-- place, y compris le refus de DELETE.
+--
+-- Ce fichier ne retire pas ces appartenances lui-même : il ne peut pas savoir si elles sont
+-- volontaires (rôle de groupe propriétaire d'objets, délégation d'exploitation…) ni mesurer ce
+-- que leur retrait casserait. Il refuse donc l'installation, nomme chaque appartenance en cause
+-- avec ses attributs, et laisse la décision à l'opérateur :
+--     REVOKE <rôle> FROM afrisupply_app;
+-- puis rejouer ce fichier. Aucune instruction de ce fichier n'a été exécutée si l'on arrive ici.
+-- =============================================================
+DO $$
+DECLARE
+  r record;
+  liste text := '';
+BEGIN
+  FOR r IN
+    SELECT g.rolname AS nom, g.rolsuper AS super, g.rolbypassrls AS bypassrls,
+           g.rolcreatedb AS createdb, g.rolcreaterole AS createrole
+      FROM pg_auth_members m
+      JOIN pg_roles membre ON membre.oid = m.member
+      JOIN pg_roles g ON g.oid = m.roleid
+     WHERE membre.rolname = 'afrisupply_app'
+     ORDER BY g.rolname
+  LOOP
+    liste := liste || format('    - %s%s%s%s%s%s', r.nom,
+      CASE WHEN r.super THEN ' (SUPERUSER)' ELSE '' END,
+      CASE WHEN r.bypassrls THEN ' (BYPASSRLS)' ELSE '' END,
+      CASE WHEN r.createdb THEN ' (CREATEDB)' ELSE '' END,
+      CASE WHEN r.createrole THEN ' (CREATEROLE)' ELSE '' END, E'\n');
+  END LOOP;
+  IF liste <> '' THEN
+    RAISE EXCEPTION 'afrisupply_app est membre d''au moins un rôle : installation refusée.%Retirez chaque appartenance (REVOKE <rôle> FROM afrisupply_app;) après en avoir vérifié la portée, puis rejouez ce fichier.', liste;
+  END IF;
+END
+$$;
+
 -- Le rôle, s'il n'existe pas encore (sans connexion : les tests et un premier essai n'en ont pas besoin).
 DO $$
 BEGIN
@@ -58,6 +100,54 @@ BEGIN
 END
 $$;
 
+-- =============================================================
+-- PUBLIC sur les tables : aucun droit, existantes comme futures
+--
+-- Un droit accordé à PUBLIC vaut pour tout le monde — rôle applicatif compris — et NOINHERIT n'y
+-- change rien : PUBLIC n'est pas un rôle dont on hérite, c'est un droit donné à tous. PostgreSQL
+-- n'accorde rien à PUBLIC sur une table neuve, mais une console, un ancien script ou un
+-- « GRANT … TO PUBLIC » manuel suffisent à en laisser ; sur les 20 tables à DELETE, ce serait une
+-- porte d'effacement ouverte à n'importe quel rôle de la base.
+--
+-- Ce qui reste à PUBLIC, et pourquoi c'est le strict nécessaire :
+--   CONNECT sur la base — nécessaire pour s'y connecter. Le rôle applicatif le reçoit aussi
+--   explicitement ci-dessus, pour ne pas dépendre des réglages de la plateforme.
+-- C'est tout. USAGE sur les schémas, DML sur les tables, droits sur les séquences : rien n'est
+-- laissé à PUBLIC, parce que tout ce dont l'application a besoin lui est accordé NOMINATIVEMENT.
+-- =============================================================
+DO $$
+DECLARE
+  t text;
+BEGIN
+  -- Tables existantes : tout retirer à PUBLIC, y compris un éventuel TRUNCATE/REFERENCES/TRIGGER.
+  FOR t IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+  LOOP
+    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC', t);
+  END LOOP;
+  -- Même discipline pour le journal des migrations, s'il existe.
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
+    FOR t IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'drizzle' AND c.relkind IN ('r', 'p')
+    LOOP
+      EXECUTE format('REVOKE ALL ON TABLE drizzle.%I FROM PUBLIC', t);
+    END LOOP;
+  END IF;
+END
+$$;
+-- Tables et séquences créées plus tard : rien non plus pour PUBLIC. Ces règles s'ajoutent à celles
+-- du rôle applicatif et obéissent à la même contrainte de rôle (voir plus bas) : elles ne valent
+-- que pour les objets créés par le rôle qui joue ce fichier.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle REVOKE ALL ON TABLES FROM PUBLIC';
+  END IF;
+END
+$$;
+
 -- Séquences de numérotation (commandes AFS-…, factures AFR-…, litiges LIT-…). L'application les créait
 -- elle-même à la première utilisation ; ce rôle ne peut rien créer, elles doivent donc exister d'avance.
 -- Sans effet si elles existent déjà : leur compteur n'est pas touché.
@@ -66,8 +156,72 @@ CREATE SEQUENCE IF NOT EXISTS subscription_invoice_seq;
 CREATE SEQUENCE IF NOT EXISTS claim_ref_seq;
 
 -- Lire et écrire des lignes dans les tables de l'application, rien d'autre.
+-- SELECT / INSERT / UPDATE sont donnés en bloc : l'application lit et écrit des lignes partout.
+-- DELETE ne l'est PAS : il est retiré partout puis rendu table par table, sur liste nominative.
 GRANT USAGE ON SCHEMA public TO afrisupply_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO afrisupply_app;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO afrisupply_app;
+-- =============================================================
+-- DELETE : refusé partout, rendu sur liste nominative de 20 tables
+--
+-- La suppression physique est irréversible ; elle ne se justifie que là où le code l'exige. Les
+-- 20 tables ci-dessous sont les seules où une route applicative exécute un DELETE. Le relevé est
+-- fait sur toutes les sources hors tests, et il est exact dans les deux sens : aucune table
+-- supprimée par le code ne manque à la liste, et aucune table de la liste n'est supprimée ailleurs
+-- que là. Chaque ligne donne le callsite qui la justifie — une entrée sans callsite doit sortir.
+--
+--   forecast_events          suppression d'un événement de prévision — routes/intelligence.ts:151
+--   group_buy_participations commande groupée ramenée à 0 colis — routes/marketplace.ts:356
+--   inventory_items          article de stock supprimé — routes/manage.ts:283 ;
+--                            référence absorbée par une fusion — routes/reference-admin.ts:57
+--   order_lines              ligne de commande ramenée à 0 colis — routes/manage.ts:376 et :439
+--   products                 référence absorbée par une fusion — routes/reference-admin.ts:60
+--   prospects                fiche de prospection supprimée — routes/prospects.ts:71
+--   rate_limits              purge du limiteur de requêtes — lib/ops.ts:53 et :96
+--   recipe_ingredients       ingrédients réécrits à l'enregistrement — routes/manage.ts:221
+--   recipes                  recette supprimée — routes/manage.ts:230
+--   recurring_orders         commande récurrente annulée — routes/marketplace.ts:303
+--   reorder_rules            règle de réapprovisionnement retirée — routes/intelligence.ts:254
+--   restaurant_members       membre retiré de l'équipe — routes/members.ts:150
+--   restaurants              restaurant du seul titulaire, à la fermeture du compte — routes/account.ts:57
+--   shopping_lists           liste de courses supprimée — routes/shopping.ts:116
+--   supplier_offers          offre fournisseur retirée — routes/manage.ts:156
+--   users                    compte supprimé — routes/account.ts:59 ; dernier membre d'un
+--                            restaurant fermé — routes/members.ts:154
+--   vendor_customer_prices   prix client spécifique retiré — routes/vendor.ts:341
+--   vendor_offers            offre grossiste retirée — routes/vendor.ts:168 ;
+--                            référence absorbée par une fusion — routes/reference-admin.ts:55
+--   vendor_price_tiers       paliers réécrits à l'enregistrement — routes/vendor.ts:320
+--   vendor_routes            tournée supprimée — routes/vendor.ts:623
+--
+-- Les 28 autres tables n'ont pas de DELETE : les 6 journaux immuables (audit_log, price_history,
+-- stock_movements, order_events, usage_events, forecasts — voir plus bas), les 2 tables écrites en
+-- UPSERT (sales, vendor_credit_terms), et les tables dont le code ne supprime jamais une ligne
+-- (commandes, factures, abonnements, événements de facturation, notifications, journal des tâches…).
+-- =============================================================
+DO $$
+DECLARE
+  -- Liste nominative : chaque entrée doit pointer vers un callsite réel du code.
+  -- Ne rien ajouter « au cas où » — un DELETE non utilisé est une surface d'effacement offerte.
+  AUTORISEES CONSTANT text[] := ARRAY['forecast_events', 'group_buy_participations', 'inventory_items', 'order_lines', 'products', 'prospects', 'rate_limits', 'recipe_ingredients', 'recipes', 'recurring_orders', 'reorder_rules', 'restaurant_members', 'restaurants', 'shopping_lists', 'supplier_offers', 'users', 'vendor_customer_prices', 'vendor_offers', 'vendor_price_tiers', 'vendor_routes'];
+  t text;
+BEGIN
+  -- 1) État par défaut : DELETE retiré de TOUTES les tables présentes, sans exception. C'est aussi
+  --    ce qui nettoie une base installée par une version antérieure de ce fichier.
+  FOR t IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+  LOOP
+    EXECUTE format('REVOKE DELETE ON TABLE public.%I FROM afrisupply_app', t);
+  END LOOP;
+  -- 2) Puis DELETE rendu aux seules tables de la liste nominative qui existent.
+  FOREACH t IN ARRAY AUTORISEES
+  LOOP
+    IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname = t) THEN
+      EXECUTE format('GRANT DELETE ON TABLE public.%I TO afrisupply_app', t);
+    END IF;
+  END LOOP;
+END
+$$;
 -- UPDATE sur une séquence = droit de la réaligner (setval) après la restauration d'une sauvegarde.
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO afrisupply_app;
 
@@ -81,8 +235,18 @@ BEGIN
 END
 $$;
 
--- Tables créées plus tard par une migration (jouée par le rôle propriétaire) : mêmes droits, d'office.
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO afrisupply_app;
+-- Tables créées plus tard par une migration : mêmes droits, d'office — et jamais DELETE.
+--
+-- ATTENTION au rôle qui joue ce fichier : ALTER DEFAULT PRIVILEGES sans « FOR ROLE » ne règle que
+-- les objets créés par le rôle COURANT. Ce fichier doit donc être joué par le rôle PROPRIÉTAIRE qui
+-- exécute ensuite les migrations et crée les tables (sur Neon, le propriétaire de la base). Joué
+-- par un autre administrateur, les règles ci-dessous ne s'appliqueraient pas aux tables futures et
+-- une nouvelle table serait invisible au rôle applicatif. L'essai « privilèges par défaut » du
+-- dépôt vérifie le résultat obtenu, pas l'intention.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO afrisupply_app;
+-- Redite volontaire : même sans DELETE dans le GRANT ci-dessus, on retire explicitement un DELETE
+-- qui viendrait d'une règle par défaut posée par une version antérieure de ce fichier.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE DELETE ON TABLES FROM afrisupply_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO afrisupply_app;
 -- Reprise P0-M : même règle pour le schéma du journal (une table future y reste lisible, jamais inscriptible).
 DO $$

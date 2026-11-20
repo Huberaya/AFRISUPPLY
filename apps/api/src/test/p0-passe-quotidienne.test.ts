@@ -400,7 +400,21 @@ describe('enchaînement réel : l’API se rappelle elle-même par HTTP', () => 
 });
 
 describe('supervision : en cours, interrompue, incomplète, achevée', () => {
-  const vider = async () => { await (await getDb()).delete(jobRuns).where(eq(jobRuns.job, 'daily')); };
+  // Le job CI AFS_DB_MINIMAL_ROLE exécute toute l'API sous afrisupply_app.
+  // Le nettoyage est une opération de fixture, pas un comportement applicatif : on revient
+  // brièvement au rôle propriétaire de la base embarquée, puis on réarme immédiatement le rôle.
+  const vider = async () => {
+    const db = await getDb();
+    const client = (db as unknown as { $client?: { exec: (query: string) => Promise<unknown> } }).$client;
+    const roleMinimal = process.env.AFS_DB_MINIMAL_ROLE === 'true';
+    if (roleMinimal && !client) throw new Error('Nettoyage de test impossible : client PostgreSQL propriétaire indisponible.');
+    if (roleMinimal) await client!.exec('RESET ROLE');
+    try {
+      await db.delete(jobRuns).where(eq(jobRuns.job, 'daily'));
+    } finally {
+      if (roleMinimal) await client!.exec('SET ROLE afrisupply_app');
+    }
+  };
   const ancien = () => new Date(Date.now() - RUNNING_GRACE_MS - 60_000);
 
   it('une passe COUPÉE en plein travail (bail jamais relâché) est signalée « interrompue », avec l’étape et l’unité en cours', async () => {
